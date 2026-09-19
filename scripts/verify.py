@@ -251,8 +251,9 @@ def main():
     # kanji flush against the right edge of its 1200 did too). One
     # radical (氵) is drawn 278u off centre by design, so no single glyph
     # is held to a bound; the MEAN over all of them is, and it sits
-    # within 2u of the advance centre for kanji and 6u for kana. A pass
-    # that shifts the layer moves the mean with it
+    # within 2u of the advance centre for kanji and 8u for kana (spacing
+    # glyphs; +5.6 Bold to +7.3 Light). A pass that shifts the layer
+    # moves the mean with it
     def mean_off_centre(lo, hi):
         # spacing glyphs only: a combining mark (゛゜ U+3099/309A) has no
         # advance to be centred in, and its −360u would pull the mean
@@ -599,18 +600,32 @@ def main():
     # is drawn inside its 1000 em, so in Term, where the advance is 1200,
     # any of them outside the tiling blocks with more than 1000 of ink
     # was stretched — which is how Ⅷ, ㌄ and a Bold 孰 shipped 20% wide
-    # for two rounds while the ten tiling probes above stayed green. Only
-    # Source Han Sans's own glyphs (a CID below build.CID_ALLOC_START):
-    # the Latin donor's two-cell ligatures are 1200 wide in both families
+    # for two rounds while the ten tiling probes above stayed green. The
+    # glyphs examined are the ones a reader can reach: the cmap, and one
+    # fwid substitution on. That takes in every full-width character and
+    # its two-cell form and leaves out the Latin donor's two-cell
+    # ligatures, which are 1200 wide in both families and reached only
+    # through liga/calt. (A CID threshold cannot do this: Source Han
+    # Sans's own CIDs are sparse and run to 65497, and a first cut that
+    # used one never looked at 60% of the kanji.)
     if exp_full > 1000:
-        from build import CID_ALLOC_START, tiling_glyphs
+        from build import _subst_pairs, _unwrap, tiling_glyphs
         tiling = tiling_glyphs(tf)
+        reach = set(cmap.values())
+        gsub_t = tf["GSUB"].table
+        for fr in gsub_t.FeatureList.FeatureRecord:
+            if fr.FeatureTag != "fwid":
+                continue
+            for li in fr.Feature.LookupListIndex:
+                kind, subtables = _unwrap(gsub_t.LookupList.Lookup[li])
+                reach.update(dst for src, dst in _subst_pairs(kind, subtables, "fwid")
+                             if src in cmap.values())
         grown = [(name, round(box[2] - box[0])) for name, box in bounds.items()
-                 if hmtx[name][0] == exp_full and name not in tiling
-                 and name.startswith("cid") and int(name[3:]) < CID_ALLOC_START
-                 and box[2] - box[0] > 1000 + 10]
+                 if name in reach and hmtx[name][0] == exp_full
+                 and name not in tiling and box[2] - box[0] > 1000 + 10]
         check(not grown, f"no ordinary full-width glyph grew with the Term "
-                         f"advance ({len(grown)} did, e.g. {grown[:4]})")
+                         f"advance ({len(reach)} reachable glyphs examined; "
+                         f"{len(grown)} did, e.g. {grown[:4]})")
 
     # stroke weight: the Latin is Source Code Pro's named instance for
     # this weight, so its '=' bar must measure the VF's at that wght

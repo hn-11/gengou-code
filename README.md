@@ -325,7 +325,7 @@ Source Code Pro VF / Monaspace VF の Releases から取得する。
 `SUMI_SKIP_AUTOHINT=1` を立てるとスキップできる。Term の全角グリフ約1.7万個
 は描き直さず charstring の中で 100 ユニット右へ動かす（`shift_charstring`）
 ので、Source Han Sans 自身のヒントがそのまま残り、ヒント付けは各面で
-描き直した 2,100〜2,500 グリフ（欧文レイヤー、`fwid` の全角形、グリッドに
+描き直したおよそ 2,050〜2,550 グリフ（欧文レイヤー、`fwid` の全角形、グリッドに
 乗せ直した比例幅の残り、Term で伸ばした罫線など）だけで済む。ヒント付与後は cffsubr（AFDKO の
 `tx`、`requirements.txt` に同梱）で CFF をサブルーチン化している。
 
