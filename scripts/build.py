@@ -1489,27 +1489,57 @@ def shift_charstring(cs, dx, width, private):
     return True
 
 
-def extend_edges(path, gap):
-    """Lengthen an outline that reaches both edges of its advance by
-    `gap` units at each side, by extruding the 2-unit cross-section it
-    has THERE. Not at its midpoint, which is where stretch_path cuts and
-    where a box-drawing cross has its vertical stem: scaling that slab
-    would smear the stem into a bar. At the edges a rule, a cross and a
-    tee all present the same thing — the horizontal arm — so all three
-    come out longer and no stroke changes weight."""
+def _slab(path, a, b):
+    """The part of `path` between x = a and x = b."""
     big = 1e5
+    return pathops.op(path, _rect_path(a, -big, b, big), pathops.PathOp.INTERSECTION)
+
+
+def edge_is_rule(path, side):
+    """Whether the ink at one edge of `path` is a horizontal rule: the
+    2-unit slab at the edge is the same SHAPE as the slab 10 units in,
+    slid onto it. True of a rule, a tee, a cross, a block; false of a
+    diagonal (╱), a wave (〰), a shaded pattern (▒) or a triangle (◢),
+    whose cross-section changes as it goes in. Compared by exclusive-or
+    area rather than by extents: ╳'s two diagonals and ▓'s dot columns
+    keep the same extents and piece count 10 units in, and only the
+    overlay tells them from a rule."""
+    x0, _, x1, _ = path.bounds
+    if side == "left":
+        edge, inner, back = _slab(path, x0, x0 + 2), _slab(path, x0 + 10, x0 + 12), -10
+    else:
+        edge, inner, back = _slab(path, x1 - 2, x1), _slab(path, x1 - 12, x1 - 10), 10
+    if edge.bounds is None:
+        return False
+    moved = _xform_path(inner, (1, 0, 0, 1, back, 0))
+    diff = pathops.op(edge, moved, pathops.PathOp.XOR)
+    # a rule overlays itself exactly; the tolerance is for float edges,
+    # and tight enough that a wave starting flat at a crest (〰: 1u of
+    # drift in 10, a 2% difference) still counts as a curve
+    return abs(diff.area) <= 0.005 * abs(edge.area)
+
+
+def extend_edges(path, gap, left=True, right=True):
+    """Lengthen an outline by `gap` units at the side(s) named, by
+    extruding the 2-unit cross-section it has THERE. Not at its
+    midpoint, which is where stretch_path cuts and where a box-drawing
+    cross has its vertical stem: scaling that slab would smear the stem
+    into a bar. At the edge a rule, a cross and a tee all present the
+    same thing — the horizontal arm — so all three come out longer and
+    no stroke changes weight. A corner or a side tee reaches one
+    neighbour only, and is lengthened on that side only, so its stem
+    stays where the centring put it: on the cell's centre line."""
     x0, y0, x1, y1 = path.bounds
 
     def edge(a, b, anchor, width):
-        slab = pathops.op(path, _rect_path(a, -big, b, big),
-                          pathops.PathOp.INTERSECTION)
         scale = width / (b - a)
-        return _xform_path(slab, (scale, 0, 0, 1, anchor * (1 - scale), 0))
+        return _xform_path(_slab(path, a, b), (scale, 0, 0, 1, anchor * (1 - scale), 0))
 
-    out = pathops.op(path, edge(x0, x0 + 2, x0 + 2, gap + 2),
-                     pathops.PathOp.UNION)
-    out = pathops.op(out, edge(x1 - 2, x1, x1 - 2, gap + 2),
-                     pathops.PathOp.UNION)
+    out = path
+    if left:
+        out = pathops.op(out, edge(x0, x0 + 2, x0 + 2, gap + 2), pathops.PathOp.UNION)
+    if right:
+        out = pathops.op(out, edge(x1 - 2, x1, x1 - 2, gap + 2), pathops.PathOp.UNION)
     out.simplify()
     return out
 
@@ -1527,10 +1557,12 @@ def widen_fullwidth(font, cell, skip=()):
     (stretch_arrows' arrows, fullwidth_forms' Source Han Sans glyphs)
     are full-width and widen with the rest.
 
-    A glyph whose ink reaches both edges of its own advance is drawn to
-    tile — ＿ ￣ 〰 ◢ and, under fwid, most of the box drawing and block
-    elements. Centring one of those would leave white at every cell
-    join, so it is lengthened at its edges instead (extend_edges).
+    A glyph whose ink reaches an edge of its own advance is drawn to
+    tile with a neighbour there — ＿ ￣ 〰 ◢ and, under fwid, most of
+    the box drawing and block elements. Centring one of those would
+    leave white at that join, so it is lengthened on that side instead:
+    extruded where the edge is a rule (extend_edges), stretched whole
+    where it is a diagonal, a wave or a pattern (edge_is_rule).
 
     The other outlines are moved inside their charstrings (shift_charstring),
     so Source Han Sans's own hints survive on the 17,000 glyphs this
@@ -1552,16 +1584,34 @@ def widen_fullwidth(font, cell, skip=()):
         shift = (full - adv) // 2
         private = glyph_private(font, td, name)
         box = _bounds(gs, name)
-        if box is not None and box[0] <= 2 and box[2] >= adv - 2:
-            # a glyph drawn edge to edge is drawn to TILE: ＿ ￣ 〰 ◢ and,
-            # under fwid, most of U+2500-U+259F. Centring it in the wider
-            # advance leaves `shift` units of white at every cell join, so
-            # a rule of ＿ or ─ comes out dashed and █ striped. Lengthen
-            # it instead
-            pen = T2CharStringPen(pen_width(private, full), gs)
+        left = box is not None and box[0] <= 2
+        right = box is not None and box[2] >= adv - 2
+        if left or right:
+            # a glyph drawn to an edge is drawn to TILE with a neighbour
+            # there: ＿ ￣ 〰 ◢ and, under fwid, most of U+2500-U+259F —
+            # the rules and crosses at both edges, the corners and side
+            # tees at one. Centring it in the wider advance leaves `shift`
+            # units of white at that join, so a rule of ＿ or ─ came out
+            # dashed, █ striped, and every corner of a box stood 100u
+            # clear of the rule it should meet
             path = pathops.Path()
-            gs[name].draw(TransformPen(path.getPen(), (1, 0, 0, 1, shift, 0)))
-            extend_edges(path, shift).draw(pen)
+            gs[name].draw(path.getPen())
+            if all(edge_is_rule(path, side) for side, on in
+                   (("left", left), ("right", right)) if on):
+                # a rule, a tee, a cross, a block: extrude the edge, so
+                # nothing changes weight and the stem stays centred
+                path = extend_edges(_xform_path(path, (1, 0, 0, 1, shift, 0)),
+                                    shift, left, right)
+            else:
+                # a diagonal, a wave, a shaded pattern, a triangle: the
+                # edge is not a rule, and extruding it would put a flat
+                # bar at every join (╳╳╳ grew a 200u tick top and bottom,
+                # ▓▓▓ a ladder of bars, 〰〰〰 a plateau). Stretch the
+                # whole outline instead: a pattern stays continuous, and
+                # the centre still lands on the cell's centre
+                path = _xform_path(path, (full / adv, 0, 0, 1, 0, 0))
+            pen = T2CharStringPen(pen_width(private, full), gs)
+            path.draw(pen)
             cs = redrawn[name] = pen.getCharString(private=private)
             tiled += 1
             # the ink grew as well as moved, so the bearing is the new

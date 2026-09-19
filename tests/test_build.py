@@ -4,6 +4,7 @@ import io
 import sys
 from pathlib import Path
 
+import pathops
 import pytest
 import uharfbuzz as hb
 from fontTools.fontBuilder import FontBuilder
@@ -816,23 +817,25 @@ def _cff_font():
     return fb.font
 
 
-def _cff_font_with_widths(widths):
+def _cff_font_with_widths(widths, x0=0):
     """A CID-less CFF font whose glyphs are 100-unit squares at the given
-    advances: what fit_to_grid moves."""
+    advances, drawn from x0: what fit_to_grid moves. A square at x0=0
+    touches its left edge, which widen_fullwidth reads as "drawn to tile
+    there"; tests of that pass give their glyphs a bearing."""
     glyph_order = [".notdef", *widths]
     charstrings = {}
     for g in glyph_order:
         pen = T2CharStringPen(0, None)
-        pen.moveTo((0, 0))
-        pen.lineTo((100, 0))
-        pen.lineTo((100, 100))
+        pen.moveTo((x0, 0))
+        pen.lineTo((x0 + 100, 0))
+        pen.lineTo((x0 + 100, 100))
         pen.closePath()
         charstrings[g] = pen.getCharString()
     fb = FontBuilder(1000, isTTF=False)
     fb.setupGlyphOrder(glyph_order)
     fb.setupCharacterMap({0xE000 + i: g for i, g in enumerate(widths)})
     fb.setupCFF("T", {}, charstrings, {})
-    fb.setupHorizontalMetrics({".notdef": (0, 0), **{g: (w, 0) for g, w in widths.items()}})
+    fb.setupHorizontalMetrics({".notdef": (0, 0), **{g: (w, x0) for g, w in widths.items()}})
     fb.setupHorizontalHeader(ascent=800, descent=-200)
     fb.setupNameTable({"familyName": "T", "styleName": "R"})
     fb.setupOS2()
@@ -909,12 +912,81 @@ def test_fit_to_grid_centres_proportional_advances_on_the_grid():
     assert font._redrawn == {"kana", "jamo", "dash"}
 
 
+def _path(points):
+    path = pathops.Path()
+    pen = path.getPen()
+    pen.moveTo(points[0])
+    for pt in points[1:]:
+        pen.lineTo(pt)
+    pen.closePath()
+    return path
+
+
+def test_edge_is_rule_tells_a_rule_from_a_diagonal_and_a_pattern():
+    """A rule, a cross and a tee present the same cross-section at the
+    edge as 10 units in; a diagonal, a wave and a dot pattern do not.
+    Extruding the edge of the latter puts a flat bar at every join."""
+    rule = _path([(0, 360), (1000, 360), (1000, 400), (0, 400)])
+    assert build.edge_is_rule(rule, "left") and build.edge_is_rule(rule, "right")
+    cross = pathops.op(rule, _path([(480, -120), (520, -120), (520, 880), (480, 880)]),
+                       pathops.PathOp.UNION)
+    assert build.edge_is_rule(cross, "left") and build.edge_is_rule(cross, "right")
+    corner = pathops.op(_path([(480, 360), (1000, 360), (1000, 400), (480, 400)]),
+                        _path([(480, -120), (520, -120), (520, 400), (480, 400)]),
+                        pathops.PathOp.UNION)
+    assert build.edge_is_rule(corner, "right")          # the arm reaches it
+    diagonal = _path([(0, 0), (40, 0), (1000, 960), (960, 1000), (0, 40)])
+    assert not build.edge_is_rule(diagonal, "left")
+    assert not build.edge_is_rule(diagonal, "right")
+    saltire = pathops.op(diagonal, _path([(0, 1000), (0, 960), (960, 0), (1000, 0), (40, 1000)]),
+                         pathops.PathOp.UNION)
+    assert not build.edge_is_rule(saltire, "left")      # same extents, not a rule
+    dots = pathops.Path()              # 8u dots on a 20u grid, like ▒
+    pen = dots.getPen()
+    for x in range(0, 1000, 20):
+        for y in range(0, 1000, 20):
+            pen.moveTo((x, y))
+            pen.lineTo((x + 8, y))
+            pen.lineTo((x + 8, y + 8))
+            pen.lineTo((x, y + 8))
+            pen.closePath()
+    assert not build.edge_is_rule(dots, "left")
+
+
+def test_widen_fullwidth_stretches_a_pattern_and_extrudes_a_rule():
+    """A diagonal drawn edge to edge is stretched whole, so the ends of a
+    run of ╳ keep their slope instead of growing a flat tick."""
+    font = _cff_font_with_widths({"diag": 1000, "rule": 1000}, x0=20)
+    cff = font["CFF "].cff
+    td = cff[cff.fontNames[0]]
+    for name, pts in (("diag", [(0, 0), (40, 0), (1000, 960), (960, 1000), (0, 40)]),
+                      ("rule", [(0, 360), (1000, 360), (1000, 400), (0, 400)])):
+        pen = T2CharStringPen(1000, None)
+        pen.moveTo(pts[0])
+        for pt in pts[1:]:
+            pen.lineTo(pt)
+        pen.closePath()
+        td.CharStrings[name] = pen.getCharString(private=td.Private)
+    build.widen_fullwidth(font, 600)
+    gs = font.getGlyphSet()
+    diag = pathops.Path()
+    gs["diag"].draw(diag.getPen())
+    # stretched: still a single slanted band, 1200 wide, no flat piece at
+    # either end (the strip 0..100 is a parallelogram, ~80u tall, not 40)
+    assert (round(diag.bounds[0]), round(diag.bounds[2])) == (0, 1200)
+    strip = build._slab(diag, 0, 100).bounds
+    assert strip[3] - strip[1] > 100
+    rule = pathops.Path()
+    gs["rule"].draw(rule.getPen())
+    assert (round(rule.bounds[1]), round(rule.bounds[3])) == (360, 400)   # extruded, same thickness
+
+
 def test_widen_fullwidth_lengthens_a_glyph_drawn_to_tile():
     """A glyph whose ink reaches both edges of its advance is drawn to
     tile (＿ ￣ 〰 ◢, and under fwid most of the box drawing). Centring it
     in the wider Term advance leaves white at every cell join, so a rule
     of ＿ comes out dashed and █ striped."""
-    font = _cff_font_with_widths({"rule": 1000, "kanji": 1000})
+    font = _cff_font_with_widths({"rule": 1000, "kanji": 1000}, x0=20)
     cff = font["CFF "].cff
     td = cff[cff.fontNames[0]]
     pen = T2CharStringPen(1000, None)          # a bar spanning the advance
@@ -943,13 +1015,13 @@ def test_widen_fullwidth_spares_the_ligatures_it_is_given():
     but a named 5-cell ligature — 3000 too — stays on the cell grid; a
     cell and a mark are never touched."""
     font = _cff_font_with_widths({"full": 1000, "dash": 3000, "lig5": 3000,
-                                  "cell": 600, "mark": 0})
+                                  "cell": 600, "mark": 0}, x0=20)
     build.widen_fullwidth(font, 600, skip={"lig5"})
     hmtx = font["hmtx"].metrics
     assert {g: hmtx[g][0] for g in ("full", "dash", "lig5", "cell", "mark")} == \
         {"full": 1200, "dash": 3600, "lig5": 3000, "cell": 600, "mark": 0}
     gs = font.getGlyphSet()
-    for g, want_lsb in (("full", 100), ("dash", 300), ("lig5", 0)):
+    for g, want_lsb in (("full", 120), ("dash", 320), ("lig5", 20)):
         pen = BoundsPen(gs)
         gs[g].draw(pen)
         assert pen.bounds[0] == want_lsb == hmtx[g][1]
@@ -1182,14 +1254,14 @@ def test_restore_cid_count_leaves_a_plain_cff_alone():
 def test_widen_fullwidth_redraws_a_charstring_shift_declines(monkeypatch):
     """shift_charstring declines a program it does not understand and the
     glyph is redrawn instead — on a plain CFF as well as a CID-keyed one."""
-    font = _cff_font_with_widths({"full": 1000})
+    font = _cff_font_with_widths({"full": 1000}, x0=20)
     monkeypatch.setattr(build, "shift_charstring", lambda *a, **k: False)
     build.widen_fullwidth(font, 600)
     assert font["hmtx"].metrics["full"][0] == 1200
     assert font._redrawn == {"full"}
     pen = BoundsPen(font.getGlyphSet())
     font.getGlyphSet()["full"].draw(pen)
-    assert pen.bounds[0] == 100                      # centred in the new advance
+    assert pen.bounds[0] == 120                      # centred in the new advance
 
 
 def test_fit_to_grid_follows_the_reference_steps_over_this_face():

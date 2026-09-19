@@ -78,6 +78,17 @@ def main():
                      f"{lean}u of lean ({len(spill)} are not, e.g. {spill[:3]})")
     inked = sum(1 for g in cmap.values() if g in bounds)
     check(inked >= 700, f"{inked} of {len(cmap)} mapped codepoints draw ink")
+    # and where inside the advance: half a cell of lean lets a quarter-
+    # cell mistranslation through, so the MEAN ink-centre offset over the
+    # letters and digits is held near zero as well (it measures +3..+4u
+    # on every weight and style; a pass that shifts the layer moves it)
+    offs = [(bounds[g][0] + bounds[g][2]) / 2 - hmtx[g][0] / 2
+            for cp, g in cmap.items() if g in bounds
+            and (0x30 <= cp <= 0x39 or 0x41 <= cp <= 0x5A or 0x61 <= cp <= 0x7A)]
+    mean = sum(offs) / len(offs) if offs else 0.0
+    check(offs and abs(mean) <= 25,
+          f"the letters sit centred in the cell (mean ink-centre offset "
+          f"{mean:+.1f}u over {len(offs)}; bound 25u)")
 
     cff = tf["CFF "].cff
     td = cff[cff.fontNames[0]]

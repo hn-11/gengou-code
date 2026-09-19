@@ -245,6 +245,27 @@ def main():
                      f"take {lean}u of lean ({len(spill)} are not, "
                      f"e.g. {spill[:3]})")
 
+    # and, for the glyphs that fill their advance, WHERE inside it: the
+    # bound above is half a cell, which a quarter-cell mistranslation
+    # slips under (every kanji moved 250u right passed it, and in Term a
+    # kanji flush against the right edge of its 1200 did too). One
+    # radical (氵) is drawn 278u off centre by design, so no single glyph
+    # is held to a bound; the MEAN over all of them is, and it sits
+    # within 2u of the advance centre for kanji and 6u for kana. A pass
+    # that shifts the layer moves the mean with it
+    def mean_off_centre(lo, hi):
+        offs = [(box[0] + box[2]) / 2 - hmtx[name][0] / 2
+                for cp, name in cmap.items() if lo <= cp <= hi
+                for box in (bounds.get(name),) if box is not None]
+        return sum(offs) / len(offs) if offs else 0.0
+
+    centred = {"kanji": mean_off_centre(0x4E00, 0x9FFF),
+               "kana": mean_off_centre(0x3041, 0x30FF)}
+    check(all(abs(v) <= 25 for v in centred.values()),
+          f"the Japanese layer is centred in its advance (mean ink-centre "
+          f"offset {', '.join(f'{k} {v:+.1f}u' for k, v in centred.items())}; "
+          f"bound 25u)")
+
     # the repertoire, and DRAWN, not merely mapped: nothing here counted
     # what the face covers, so one that lost 25,000 cmap entries — or
     # kept every one of them and emptied the outlines — was a
