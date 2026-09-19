@@ -1544,6 +1544,52 @@ def extend_edges(path, gap, left=True, right=True):
     return out
 
 
+# The characters drawn to tile with a neighbour, by block, and how the
+# Term family lengthens them from 1000 to 1200. Anything else that
+# happens to touch its own advance (Ⅷ, ㌄, 孰 in Bold, a bracket) is an
+# ordinary glyph and is centred like the rest: an edge test alone
+# stretched those 20% wide.
+#   stretch — the whole outline, by 1200/1000: block elements and
+#   shades (▏ is an eighth of the cell and must stay one; ▓'s dots must
+#   stay a pattern), the quadrant triangles, the wave and dashed lines,
+#   the full-width low line and overline
+#   rule — the box-drawing block, the dentistry symbols and √'s
+#   vinculum: extruded at the edge(s) the ink reaches, so a corner's
+#   stem stays on the cell centre and no stroke changes weight — unless
+#   edge_is_rule says the reaching edge is a diagonal or an arc (╱ ╳ ╭),
+#   which is stretched whole like the first group
+TILING_STRETCH = ((0x2580, 0x259F), (0x25E2, 0x25E5), (0x3030, 0x3030),
+                  (0xFE49, 0xFE4F), (0xFF3F, 0xFF3F), (0xFFE3, 0xFFE3))
+TILING_RULE = ((0x221A, 0x221A), (0x23BE, 0x23CC), (0x2500, 0x257F))
+
+
+def tiling_glyphs(font):
+    """{glyph: 'stretch' | 'rule'} for every glyph a tiling character
+    reaches — through the cmap, and one fwid substitution on from
+    there, which is where the two-cell forms of the box drawing live.
+    Not through vert: a rotated rule tiles vertically, and in Term its
+    width is centred like any other glyph's."""
+    cmap = font.getBestCmap()
+    out = {}
+    for blocks, how in ((TILING_STRETCH, "stretch"), (TILING_RULE, "rule")):
+        for lo, hi in blocks:
+            for cp in range(lo, hi + 1):
+                name = cmap.get(cp)
+                if name is not None:
+                    out[name] = how
+    if "GSUB" in font:
+        gsub = font["GSUB"].table
+        for fr in gsub.FeatureList.FeatureRecord:
+            if fr.FeatureTag != "fwid":
+                continue
+            for li in fr.Feature.LookupListIndex:
+                kind, subtables = _unwrap(gsub.LookupList.Lookup[li])
+                for src, dst in _subst_pairs(kind, subtables, "fwid"):
+                    if src in out and dst not in out:
+                        out[dst] = out[src]
+    return out
+
+
 def widen_fullwidth(font, cell, skip=()):
     """Term variant: widen every full-width glyph's advance to two cells
     (2 x cell; an n-full-width glyph such as ⸻ to 2n cells) and center
@@ -1557,12 +1603,13 @@ def widen_fullwidth(font, cell, skip=()):
     (stretch_arrows' arrows, fullwidth_forms' Source Han Sans glyphs)
     are full-width and widen with the rest.
 
-    A glyph whose ink reaches an edge of its own advance is drawn to
-    tile with a neighbour there — ＿ ￣ 〰 ◢ and, under fwid, most of
-    the box drawing and block elements. Centring one of those would
-    leave white at that join, so it is lengthened on that side instead:
-    extruded where the edge is a rule (extend_edges), stretched whole
-    where it is a diagonal, a wave or a pattern (edge_is_rule).
+    A tiling character (TILING_STRETCH / TILING_RULE, tiling_glyphs)
+    whose ink reaches an edge of its own advance is drawn to meet a
+    neighbour there — ＿ ￣ 〰 ◢ and, under fwid, the box drawing and
+    block elements. Centring one of those would leave white at that
+    join, so it is lengthened on that side instead: extruded where the
+    edge is a rule (extend_edges), stretched whole where it is a block,
+    a pattern, a diagonal or a wave.
 
     The other outlines are moved inside their charstrings (shift_charstring),
     so Source Han Sans's own hints survive on the 17,000 glyphs this
@@ -1575,6 +1622,7 @@ def widen_fullwidth(font, cell, skip=()):
     hmtx = font["hmtx"]
     redrawn, moved_by = {}, {}
     shifted = tiled = 0
+    tiling = tiling_glyphs(font)
     skip = set(skip)
     for name in font.getGlyphOrder():
         adv, lsb = hmtx.metrics[name]
@@ -1583,32 +1631,23 @@ def widen_fullwidth(font, cell, skip=()):
         full = (adv // FULLWIDTH) * 2 * cell
         shift = (full - adv) // 2
         private = glyph_private(font, td, name)
-        box = _bounds(gs, name)
+        how = tiling.get(name)
+        box = _bounds(gs, name) if how else None
         left = box is not None and box[0] <= 2
         right = box is not None and box[2] >= adv - 2
-        if left or right:
-            # a glyph drawn to an edge is drawn to TILE with a neighbour
-            # there: ＿ ￣ 〰 ◢ and, under fwid, most of U+2500-U+259F —
-            # the rules and crosses at both edges, the corners and side
-            # tees at one. Centring it in the wider advance leaves `shift`
-            # units of white at that join, so a rule of ＿ or ─ came out
-            # dashed, █ striped, and every corner of a box stood 100u
-            # clear of the rule it should meet
+        if how and (left or right):
+            # drawn to TILE with a neighbour at the edge its ink reaches:
+            # centring it in the wider advance leaves `shift` units of
+            # white at that join, so a rule of ＿ or ─ came out dashed, █
+            # striped, and every corner of a box stood 100u clear of the
+            # rule it should meet
             path = pathops.Path()
             gs[name].draw(path.getPen())
-            if all(edge_is_rule(path, side) for side, on in
-                   (("left", left), ("right", right)) if on):
-                # a rule, a tee, a cross, a block: extrude the edge, so
-                # nothing changes weight and the stem stays centred
+            if how == "rule" and all(edge_is_rule(path, side) for side, on in
+                                     (("left", left), ("right", right)) if on):
                 path = extend_edges(_xform_path(path, (1, 0, 0, 1, shift, 0)),
                                     shift, left, right)
             else:
-                # a diagonal, a wave, a shaded pattern, a triangle: the
-                # edge is not a rule, and extruding it would put a flat
-                # bar at every join (╳╳╳ grew a 200u tick top and bottom,
-                # ▓▓▓ a ladder of bars, 〰〰〰 a plateau). Stretch the
-                # whole outline instead: a pattern stays continuous, and
-                # the centre still lands on the cell's centre
                 path = _xform_path(path, (full / adv, 0, 0, 1, 0, 0))
             pen = T2CharStringPen(pen_width(private, full), gs)
             path.draw(pen)

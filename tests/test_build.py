@@ -957,6 +957,7 @@ def test_widen_fullwidth_stretches_a_pattern_and_extrudes_a_rule():
     """A diagonal drawn edge to edge is stretched whole, so the ends of a
     run of ╳ keep their slope instead of growing a flat tick."""
     font = _cff_font_with_widths({"diag": 1000, "rule": 1000}, x0=20)
+    font["cmap"].tables[0].cmap = {0x2571: "diag", 0x2500: "rule"}   # ╱ ─
     cff = font["CFF "].cff
     td = cff[cff.fontNames[0]]
     for name, pts in (("diag", [(0, 0), (40, 0), (1000, 960), (960, 1000), (0, 40)]),
@@ -987,6 +988,7 @@ def test_widen_fullwidth_lengthens_a_glyph_drawn_to_tile():
     in the wider Term advance leaves white at every cell join, so a rule
     of ＿ comes out dashed and █ striped."""
     font = _cff_font_with_widths({"rule": 1000, "kanji": 1000}, x0=20)
+    font["cmap"].tables[0].cmap = {0xFF3F: "rule", 0x4E00: "kanji"}    # ＿ 一
     cff = font["CFF "].cff
     td = cff[cff.fontNames[0]]
     pen = T2CharStringPen(1000, None)          # a bar spanning the advance
@@ -1008,6 +1010,39 @@ def test_widen_fullwidth_lengthens_a_glyph_drawn_to_tile():
     pen = BoundsPen(font.getGlyphSet())
     font.getGlyphSet()["kanji"].draw(pen)
     assert round(pen.bounds[2] - pen.bounds[0]) == 100
+
+
+def test_widen_fullwidth_centres_an_ordinary_glyph_that_touches_its_edge():
+    """Ⅷ, ㌄ and 孰 in Bold have ink at their advance's edge and are not
+    drawn to tile: an edge test alone stretched them 20% wide. Only a
+    character in the tiling blocks is lengthened."""
+    font = _cff_font_with_widths({"eight": 1000})
+    font["cmap"].tables[0].cmap = {0x2167: "eight"}                    # Ⅷ, ink from x=0
+    build.widen_fullwidth(font, 600)
+    pen = BoundsPen(font.getGlyphSet())
+    font.getGlyphSet()["eight"].draw(pen)
+    assert (round(pen.bounds[0]), round(pen.bounds[2])) == (100, 200)  # moved, not stretched
+
+
+def test_widen_fullwidth_stretches_a_block_element_to_its_fraction():
+    """▏ is an eighth of the cell; extruding its left edge as a rule made
+    it 225 of 1200 where ▎ is 350, so the ▏▎▍▌▋▊▉█ series stepped
+    unevenly. A block element is stretched whole."""
+    font = _cff_font_with_widths({"eighth": 1000})
+    font["cmap"].tables[0].cmap = {0x258F: "eighth"}
+    cff = font["CFF "].cff
+    td = cff[cff.fontNames[0]]
+    pen = T2CharStringPen(1000, None)
+    pen.moveTo((0, -120))
+    pen.lineTo((125, -120))
+    pen.lineTo((125, 880))
+    pen.lineTo((0, 880))
+    pen.closePath()
+    td.CharStrings["eighth"] = pen.getCharString(private=td.Private)
+    build.widen_fullwidth(font, 600)
+    pen = BoundsPen(font.getGlyphSet())
+    font.getGlyphSet()["eighth"].draw(pen)
+    assert (round(pen.bounds[0]), round(pen.bounds[2])) == (0, 150)
 
 
 def test_widen_fullwidth_spares_the_ligatures_it_is_given():
