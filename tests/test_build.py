@@ -1045,6 +1045,28 @@ def test_widen_fullwidth_stretches_a_block_element_to_its_fraction():
     assert (round(pen.bounds[0]), round(pen.bounds[2])) == (0, 150)
 
 
+def test_widen_fullwidth_stretches_a_dashed_rule_whose_ink_stops_short():
+    """┄'s end dashes are inset by half a gap so that cells continue the
+    pattern; its ink never reaches the edge, and centring it in 1200
+    made the gap at every cell boundary three times the gap inside."""
+    font = _cff_font_with_widths({"dashed": 1000})
+    font["cmap"].tables[0].cmap = {0x2504: "dashed"}
+    cff = font["CFF "].cff
+    td = cff[cff.fontNames[0]]
+    pen = T2CharStringPen(1000, None)          # three dashes, 55u in from each edge
+    for x in (55, 385, 715):
+        pen.moveTo((x, 360))
+        pen.lineTo((x + 230, 360))
+        pen.lineTo((x + 230, 400))
+        pen.lineTo((x, 400))
+        pen.closePath()
+    td.CharStrings["dashed"] = pen.getCharString(private=td.Private)
+    build.widen_fullwidth(font, 600)
+    pen = BoundsPen(font.getGlyphSet())
+    font.getGlyphSet()["dashed"].draw(pen)
+    assert (round(pen.bounds[0]), round(pen.bounds[2])) == (66, 1134)   # 55*1.2 .. 945*1.2
+
+
 def test_widen_fullwidth_spares_the_ligatures_it_is_given():
     """Term: a full width goes to two cells, three full widths to six,
     but a named 5-cell ligature — 3000 too — stays on the cell grid; a

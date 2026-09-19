@@ -254,8 +254,10 @@ def main():
     # within 2u of the advance centre for kanji and 6u for kana. A pass
     # that shifts the layer moves the mean with it
     def mean_off_centre(lo, hi):
+        # spacing glyphs only: a combining mark (゛゜ U+3099/309A) has no
+        # advance to be centred in, and its −360u would pull the mean
         offs = [(box[0] + box[2]) / 2 - hmtx[name][0] / 2
-                for cp, name in cmap.items() if lo <= cp <= hi
+                for cp, name in cmap.items() if lo <= cp <= hi and hmtx[name][0] > 0
                 for box in (bounds.get(name),) if box is not None]
         return sum(offs) / len(offs) if offs else 0.0
 
@@ -592,6 +594,23 @@ def main():
                     round(box[0]), round(box[2]), adv)
     check(not seam, f"every tiling character spans its whole advance "
                     f"({2 * len(TILING)} probes; off: {seam})")
+
+    # ... and nothing ELSE grew with the advance. A Source Han Sans glyph
+    # is drawn inside its 1000 em, so in Term, where the advance is 1200,
+    # any of them outside the tiling blocks with more than 1000 of ink
+    # was stretched — which is how Ⅷ, ㌄ and a Bold 孰 shipped 20% wide
+    # for two rounds while the ten tiling probes above stayed green. Only
+    # Source Han Sans's own glyphs (a CID below build.CID_ALLOC_START):
+    # the Latin donor's two-cell ligatures are 1200 wide in both families
+    if exp_full > 1000:
+        from build import CID_ALLOC_START, tiling_glyphs
+        tiling = tiling_glyphs(tf)
+        grown = [(name, round(box[2] - box[0])) for name, box in bounds.items()
+                 if hmtx[name][0] == exp_full and name not in tiling
+                 and name.startswith("cid") and int(name[3:]) < CID_ALLOC_START
+                 and box[2] - box[0] > 1000 + 10]
+        check(not grown, f"no ordinary full-width glyph grew with the Term "
+                         f"advance ({len(grown)} did, e.g. {grown[:4]})")
 
     # stroke weight: the Latin is Source Code Pro's named instance for
     # this weight, so its '=' bar must measure the VF's at that wght

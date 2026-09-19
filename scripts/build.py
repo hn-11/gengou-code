@@ -1558,7 +1558,14 @@ def extend_edges(path, gap, left=True, right=True):
 #   stem stays on the cell centre and no stroke changes weight — unless
 #   edge_is_rule says the reaching edge is a diagonal or an arc (╱ ╳ ╭),
 #   which is stretched whole like the first group
-TILING_STRETCH = ((0x2580, 0x259F), (0x25E2, 0x25E5), (0x3030, 0x3030),
+# The dashed rules ┄ ┅ ┈ ┉ ╌ ╍ sit inside the box-drawing block but are
+# stretched, and stretched whether or not their ink reaches the edge:
+# Source Han Sans insets their end dashes by half a gap so that cells
+# continue the pattern, which is exactly what the edge test cannot see
+# — centred in 1200, the gap at every cell boundary was 312u against
+# 111u inside the cell.
+TILING_STRETCH = ((0x2504, 0x2505), (0x2508, 0x2509), (0x254C, 0x254D),
+                  (0x2580, 0x259F), (0x25E2, 0x25E5), (0x3030, 0x3030),
                   (0xFE49, 0xFE4F), (0xFF3F, 0xFF3F), (0xFFE3, 0xFFE3))
 TILING_RULE = ((0x221A, 0x221A), (0x23BE, 0x23CC), (0x2500, 0x257F))
 
@@ -1571,7 +1578,9 @@ def tiling_glyphs(font):
     width is centred like any other glyph's."""
     cmap = font.getBestCmap()
     out = {}
-    for blocks, how in ((TILING_STRETCH, "stretch"), (TILING_RULE, "rule")):
+    # the stretch blocks last, so the dashed rules inside the box-drawing
+    # block take that treatment
+    for blocks, how in ((TILING_RULE, "rule"), (TILING_STRETCH, "stretch")):
         for lo, hi in blocks:
             for cp in range(lo, hi + 1):
                 name = cmap.get(cp)
@@ -1635,7 +1644,7 @@ def widen_fullwidth(font, cell, skip=()):
         box = _bounds(gs, name) if how else None
         left = box is not None and box[0] <= 2
         right = box is not None and box[2] >= adv - 2
-        if how and (left or right):
+        if how == "stretch" or (how == "rule" and (left or right)):
             # drawn to TILE with a neighbour at the edge its ink reaches:
             # centring it in the wider advance leaves `shift` units of
             # white at that join, so a rule of ＿ or ─ came out dashed, █
