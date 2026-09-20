@@ -16,6 +16,7 @@ from build import FULLWIDTH, _unwrap, _unwrap_pos  # noqa: E402
 from verifylib import (  # noqa: E402
     Checker,
     check_coverage_order,
+    check_features_work,
     check_mark_class_closure,
     check_private,
     check_stat,
@@ -483,33 +484,7 @@ def main():
         ok = got == nglyphs
         check(ok, f"{text!r}: {got} glyphs (want {nglyphs})")
 
-    # feature toggles: ss groups are selective, cv01 swaps the design
-    off = {"calt": False, "liga": False}
-    toggles = [
-        ("a != b", dict(off), 6),
-        ("a == b", dict(off, liga=True), 5),   # liga alone, calt off
-        ("a != b", dict(off, ss01=True), 5),
-        ("a -> b", dict(off, ss01=True), 6),
-        ("a -> b", dict(off, ss02=True), 5),
-    ]
-    for text, feats, want in toggles:
-        got = shape_len(text, feats)
-        ok = got == want
-        check(ok, f"{text!r} {sorted(k for k,v in feats.items() if v)}: {got} (want {want})")
-
-    # SCP character variants and Monaspace alt designs must swap glyphs
-    def first_gid(text, feats, i=0):
-        return shape_infos(text, feats)[0][i].codepoint
-
-    variant_checks = [
-        ("0", "zero"), ("a", "cv01"), ("g", "cv02"), ("a", "salt"),
-    ]
-    for ch, tag in variant_checks:
-        ok = first_gid(ch, {}) != first_gid(ch, {tag: True})
-        check(ok, f"{tag} swaps {ch!r}")
-    ok = first_gid("a != b", {"calt": True}, 2) != first_gid(
-        "a != b", {"calt": True, "cv99": True}, 2)
-    check(ok, "cv99 swaps ligature design")
+    check_features_work(shape_infos, check, cmap)
     # a combining mark's variant (cv11: the Cyrillic breve for U+0306, in
     # the upright faces) must stay a 0-advance mark, not become a spacing
     # glyph that takes a cell when selected

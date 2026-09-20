@@ -206,7 +206,8 @@ Sumi Moji JP の欧文層（Source Code Pro の文字 + Monaspace の記号・�
   整合のため維持）
 - GPOS は SCP 自身のもの（結合文字の `mark` / `mkmk`、`frac`、`size`）を保持。`kern` は無い（等幅）
 
-> **注記（v5）**: 以下 3.3・3.4 と 4 は v4 までの設計。v5 で基準を
+> **注記（v5）**: 以下 3.3・3.4 は v4 までの設計（4 は v5 の構成に
+> 書き直してある）。v5 で基準を
 > Source Code Pro に移した結果、行間は SCP の 984 / −273、ウェイトは
 > SCP の名前付きインスタンス 5 つ、`dist/latin/term/` と拡大処理
 > （`rescale` / `narrow_ambiguous` / `latin_onecell`）は無くなっている。
@@ -241,23 +242,32 @@ Sumi Moji JP の欧文層（Source Code Pro の文字 + Monaspace の記号・�
 
 ## 4. ビルド構成
 
-実装済み（段階 1a・1b とも）。実際のパイプライン:
+実装済み（段階 1a・1b・2 とも）。v5 時点の実際のパイプライン:
 
 ```
-scripts/build_latin.py   # SCP VF + Monaspace VF
-                          #   -> dist/latin/SumiMoji-*.otf（配布物、35と同じ太さ）
-                          #   -> dist/latin/term/SumiMojiTerm-*.otf（内部専用、Term用の太さ）
-scripts/build.py         # SHS + SHCJ + dist/latin{,/term}
-                          #   -> dist/SumiMojiJP*.otf（JP/35/Term）
-scripts/verify_latin.py  # 欧文単体の回帰テスト（dist/latin/SumiMoji-*.otf）
-scripts/verify.py        # JP（現行）
-scripts/golden.py        # 2つの dist ディレクトリを比較（cmap・送り幅・
-                          #   シェーピング・アウトライン・メタデータ・ヒント）
+scripts/build_latin.py     # SCP VF + Monaspace VF
+                            #   -> dist/latin/SumiMoji-*.otf（配布物であり、
+                            #      JP 面のドナーでもある 10 面）
+scripts/build_latin_vf.py  # 同じマスターを varLib で合成
+                            #   -> dist/latin/SumiMoji[wght].otf
+                            #      dist/latin/SumiMoji-Italic[wght].otf
+scripts/build.py           # SHS + dist/latin
+                            #   -> dist/SumiMojiJP*.otf（JP / JP Term の 20 面）
+scripts/nerdpatch.py       # Nerd Fonts の記号フォントを接ぎ木
+                            #   -> dist/nerd{,/latin}/*NFM-*.otf
+scripts/harmonize_latin.py # 欧文ファミリーの win メトリクスを面をまたいで揃える
+scripts/verify.py          # JP 面の回帰テスト
+scripts/verify_latin.py    # 欧文静的面の回帰テスト
+scripts/verify_latin_vf.py # 可変フォントの回帰テスト
+scripts/verify_many.py     # 上の 3 つを glob で振り分けてまとめて走らせる
+scripts/golden.py          # 2つの dist ディレクトリを比較（cmap・送り幅・
+                            #   シェーピング・アウトライン・メタデータ・ヒント）
 ```
 
 `build.py` は SCP VF・Monaspace VF に直接触れなくなり、`scripts/build_latin.py`
-が先に走って `dist/latin`（および `dist/latin/term`）を作っていることを
-前提にする（`LATIN_DIR` 環境変数、既定 `dist/latin`）。VF のインスタンス化・
+が先に走って `dist/latin` を作っていることを前提にする（`LATIN_DIR`
+環境変数、既定 `dist/latin`）。Source Han Sans CJK（SHCJ）は v5 で上流から
+外れたので、このパイプラインには出てこない。VF のインスタンス化・
 太さ二分探索・合字/記号の合成・グラフト用ヘルパー（`VFSource.matched`、
 `draw_clean` / `erode_path`、`replace_from_mona`、`add_glyphs`、`add_gsub` /
 `_guard_subtables`、`import_scp_variants`、`latin_blue_zones` /

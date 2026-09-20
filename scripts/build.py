@@ -1999,11 +1999,13 @@ def grid_step(adv, ink, cell):
     """The grid advance for a proportional glyph: the cell, or a whole
     number of full widths — whichever its own advance is nearest, since
     that is what the donor says the character's width class is. Source
-    Han Sans's Greek sits at 602-795 and its Ю at 1005-1064: narrow
-    letters a little over the cell and a full width a little over one,
-    so rounding up would cost each of them a whole terminal column, and
-    would make the same letter one cell in one weight and two in the
-    next (its advance grows with the weight).
+    Han Sans's Greek letters run 285-804 at the Regular donor and
+    329-853 at the Bold one, its Cyrillic 454-1005 and 483-1064: most
+    of them sit a little over the cell, so rounding up would cost every
+    one a whole terminal column, and would make the same letter one
+    cell in one weight and two in the next (its advance grows with the
+    weight). The widest still land on a full width here, which is why
+    narrow_letters runs first and puts the lot on the cell.
 
     The ink may overhang the step by up to a third of a cell — an italic
     always overhangs — but no further: a three-em dash (⸻, 2452 wide)

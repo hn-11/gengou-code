@@ -19,6 +19,7 @@ from verifylib import (  # noqa: E402
     Checker,
     check_accents_clear,
     check_coverage_order,
+    check_features_work,
     check_gdef_marks,
     check_heights,
     check_mark_class_closure,
@@ -182,6 +183,7 @@ def main():
     check_zones(tf, check, cmap)
     check_mark_features(tf, check, shape, gs, order, cmap)
     check_stray_marks(shape, gs, order, cmap, check, italic)
+    check_features_work(shape, check, cmap)
     on = {"calt": True, "liga": True}
     for text, want in CASES:
         if any(ord(c) > 0x2FFF for c in text):

@@ -704,3 +704,51 @@ def check_stray_marks(shape, gs, order, cmap, check, italic):
           f"no combining mark falls into the next cell but the ones "
           f"Source Code Pro anchors only to their own letters "
           f"({stray}; known {sorted(want)})")
+
+
+# one ligature from each stylistic-set group (build.LIGATURES' `group`),
+# and the glyph-swapping features README documents. Every one is
+# advertised, and until now only the JP faces were asked whether any of
+# it still WORKS: the Latin faces and the variable fonts checked that
+# the tag was in the FeatureList, which a feature whose lookup list is
+# empty passes. The two variable fonts are the whole of SumiMoji.zip,
+# and their GSUB is a varLib merge of the masters' — a failure mode no
+# other face shares
+SS_PROBES = (("ss01", "=="), ("ss02", "->"), ("ss03", "<>"), ("ss04", "|>"),
+             ("ss05", "::"), ("ss06", ".."), ("ss07", "//"), ("ss08", "||"))
+VARIANT_PROBES = (("0", "zero"), ("a", "cv01"), ("g", "cv02"), ("a", "salt"))
+
+
+def check_features_work(shape, check, cmap):
+    """Each advertised feature still changes what is drawn."""
+    off = {"calt": False, "liga": False}
+
+    def count(text, feats):
+        return len(shape(text, feats)[0])
+
+    check(count("a != b", dict(off)) == 6, "calt/liga off leaves '!=' plain")
+    check(count("a == b", dict(off, liga=True)) == 5,
+          "liga alone ligates '==' with calt off")
+    # each ss group fires for its OWN ligatures and not the others'
+    dead = []
+    for tag, seq in SS_PROBES:
+        if any(ord(c) not in cmap for c in seq):
+            continue
+        if count(f"a {seq} b", dict(off, **{tag: True})) != 5:
+            dead.append(tag)
+    check(not dead, f"every stylistic set still ligates its own group "
+                    f"({len(SS_PROBES)} probes; dead: {dead})")
+    check(count("a -> b", dict(off, ss01=True)) == 6,
+          "ss01 leaves another group's '->' plain")
+
+    def first(text, feats):
+        return shape(text, feats)[0][0].codepoint
+
+    inert = [tag for ch, tag in VARIANT_PROBES
+             if ord(ch) in cmap and first(ch, {}) == first(ch, {tag: True})]
+    check(not inert, f"every variant feature swaps its glyph "
+                     f"({len(VARIANT_PROBES)} probes; inert: {inert})")
+    on = {"calt": True}
+    check(shape("a != b", on)[0][2].codepoint
+          != shape("a != b", dict(on, cv99=True))[0][2].codepoint,
+          "cv99 swaps the ligature design")

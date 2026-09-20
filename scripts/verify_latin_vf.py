@@ -26,6 +26,7 @@ from verifylib import (  # noqa: E402
     Checker,
     check_accents_clear,
     check_coverage_order,
+    check_features_work,
     check_gdef_marks,
     check_heights,
     check_mark_class_closure,
@@ -288,6 +289,7 @@ def main():
                         tf.getGlyphOrder(), vf_cmap)
     check_stray_marks(shape_default, default_gs, tf.getGlyphOrder(), vf_cmap,
                       check, is_italic)
+    check_features_work(shape_default, check, vf_cmap)
     # the nameIDs verify_latin.py requires of the statics; 13 and 14 are
     # the licence and its URL, and dropping all seven passed this file
     for nid in (3, 4, 8, 9, 11, 13, 14):
