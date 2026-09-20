@@ -994,6 +994,195 @@ def import_scp_variants(base, scp, default_map, marks):
     return tag_maps, tag_names
 
 
+def _ccmp_lookups(gsub):
+    """The lookup indices SCP's 'ccmp' uses, its chain contexts' callees
+    folded in and the whole sorted: a chain context substitutes nothing
+    itself, it names the lookup that does, and a shaper applies lookups
+    in LookupList order, so the order is what has to survive the copy."""
+    order = set()
+
+    def add(i):
+        if i in order:
+            return
+        order.add(i)
+        kind, subtables = _unwrap(gsub.LookupList.Lookup[i])
+        if kind == 6:
+            for st in subtables:
+                for rec in getattr(st, "SubstLookupRecord", None) or ():
+                    add(rec.LookupListIndex)
+
+    for fr in gsub.FeatureList.FeatureRecord:
+        if fr.FeatureTag == "ccmp":
+            for li in fr.Feature.LookupListIndex:
+                add(li)
+    return sorted(order)
+
+
+def _ccmp_remap(lookup, gmap, shift, gid):
+    """Rewrite one deep-copied SCP lookup in our glyph names: every
+    mapping, ligature and coverage through `gmap`, every nested lookup
+    index through `shift`. A rule naming a glyph we did not graft is
+    dropped, and a subtable that loses a whole coverage with it; returns
+    False when nothing is left of the lookup.
+
+    A coverage keeps SCP's glyph order until `gid` (our glyph ids) puts
+    it back in ours — the order a coverage table is searched in, and the
+    one thing about it that is not a set."""
+    if lookup.LookupFlag & 0x0010:   # UseMarkFilteringSet: SCP's own GDEF
+        raise ValueError("ccmp: a mark filtering set cannot be carried over")
+    kind, subtables = _unwrap(lookup)
+    keep = []
+    for entry, st in zip(lookup.SubTable, subtables):
+        if kind == 1:
+            st.mapping = {gmap[s]: gmap[d] for s, d in st.mapping.items()
+                          if s in gmap and d in gmap}
+            alive = bool(st.mapping)
+        elif kind == 2:
+            st.mapping = {gmap[s]: [gmap[d] for d in seq]
+                          for s, seq in st.mapping.items()
+                          if s in gmap and all(d in gmap for d in seq)}
+            alive = bool(st.mapping)
+        elif kind == 3:
+            alts = {gmap[s]: [gmap[d] for d in a if d in gmap]
+                    for s, a in st.alternates.items() if s in gmap}
+            st.alternates = {s: a for s, a in alts.items() if a}
+            alive = bool(st.alternates)
+        elif kind == 4:
+            ligs = {}
+            for src, rules in st.ligatures.items():
+                if src not in gmap:
+                    continue
+                kept = []
+                for lig in rules:
+                    if (lig.LigGlyph in gmap
+                            and all(c in gmap for c in lig.Component)):
+                        lig.Component = [gmap[c] for c in lig.Component]
+                        lig.LigGlyph = gmap[lig.LigGlyph]
+                        kept.append(lig)
+                if kept:
+                    ligs[gmap[src]] = kept
+            st.ligatures = ligs
+            alive = bool(ligs)
+        elif kind == 6:
+            # the glyph counts are the coverage lists' own lengths, so
+            # only a coverage that empties changes the subtable's shape
+            # — and an empty one would match everywhere
+            alive = True
+            for attr in ("BacktrackCoverage", "InputCoverage",
+                         "LookAheadCoverage"):
+                for cov in getattr(st, attr, None) or ():
+                    cov.glyphs = sorted((gmap[g] for g in cov.glyphs
+                                         if g in gmap), key=gid)
+                    alive = alive and bool(cov.glyphs)
+            for rec in getattr(st, "SubstLookupRecord", None) or ():
+                rec.LookupListIndex = shift[rec.LookupListIndex]
+        else:
+            raise ValueError(f"ccmp: unsupported GSUB LookupType {kind}")
+        if alive:
+            keep.append(entry)
+    lookup.SubTable = keep
+    lookup.SubTableCount = len(keep)
+    return bool(keep)
+
+
+def import_scp_ccmp(base, scp, default_map, marks):
+    """Carry the Latin donor's 'ccmp' — composition and decomposition —
+    across the graft, the way import_scp_variants carries its variant
+    features. Returns the number of glyphs grafted for it.
+
+    ccmp is not a variant feature nobody asks for: it is on by default
+    in every shaper, and without it the grafted Latin keeps Source Han
+    Sans's ccmp alone, which knows nothing about Source Code Pro's
+    glyphs. What that costs is visible in one line of a terminal: 'i'
+    followed by U+0307 kept its own dot and drew a second one 84 units
+    away — a smeared double dot where the donor substitutes the dotless
+    ı and sets the accent over it. 'j' under any of ten accents, ĩ/g̃,
+    the Vietnamese ê̆ ô̆, and Ї́ ї́ went the same way: 20 sequences the
+    Latin-only faces composed and the JP faces did not.
+
+    The feature's glyphs are SCP's own and mostly unencoded — the
+    composed marks (circumflex + acute as one), the dotted-i forms, the
+    accents' flattened shapes for stacking — so each one is grafted the
+    way graft_halfwidth grafts the glyph it comes from: a mark (its
+    source is one) at 0 advance with the ink a cell left, anything else
+    at SCP's own advance. The lookups are then copied with every glyph
+    name and every nested lookup index rewritten, appended to our
+    LookupList in SCP's own order, and added to every 'ccmp' feature
+    record — Source Han Sans has one per script, and the Latin, Greek
+    and Cyrillic this touches are three of them."""
+    gsub = scp["GSUB"].table
+    order = _ccmp_lookups(gsub)
+    ours = base["GSUB"].table
+    records = [fr for fr in ours.FeatureList.FeatureRecord
+               if fr.FeatureTag == "ccmp"]
+    if not order or not records:
+        return 0
+    td, _, fd_index, private, vdon = append_context(base)
+    scp_gs = scp.getGlyphSet()
+    gmap = dict(default_map)
+    grafted = 0
+
+    def graft(src, is_mark):
+        nonlocal grafted
+        if src in gmap:
+            return
+        width, dx = (0, -CELL) if is_mark else (scp["hmtx"][src][0], 0)
+        pen = T2CharStringPen(pen_width(private, width), scp_gs)
+        draw_clean([(scp_gs, src, (1, 0, 0, 1, dx, 0))], pen)
+        name = alloc_glyph_name(base)
+        append_glyph(base, td, name, pen.getCharString(private=private),
+                     fd_index, width, None, vdon)
+        gmap[src] = name
+        grafted += 1
+        if is_mark:
+            marks.add(name)
+
+    # what the feature draws that the graft has not: in SCP's own lookup
+    # order, so a composed mark is grafted before the lookup that
+    # restyles it needs to know it is a mark. A substitution's output is
+    # a mark when its input is one (a decomposition's first output is
+    # the base, the rest are the accents it carries)
+    for i in order:
+        kind, subtables = _unwrap(gsub.LookupList.Lookup[i])
+        for st in subtables:
+            if kind == 1:
+                pairs = list(st.mapping.items())
+            elif kind == 3:
+                pairs = [(s, a[0]) for s, a in st.alternates.items() if a]
+            elif kind == 2:
+                for src, seq in st.mapping.items():
+                    if src not in gmap:
+                        continue
+                    for k, dst in enumerate(seq):
+                        graft(dst, k > 0 or gmap[src] in marks)
+                continue
+            elif kind == 4:
+                for src, rules in st.ligatures.items():
+                    if src not in gmap:
+                        continue
+                    for lig in rules:
+                        graft(lig.LigGlyph, gmap[src] in marks)
+                continue
+            else:
+                continue        # a chain context draws nothing itself
+            for src, dst in pairs:
+                if src in gmap:
+                    graft(dst, gmap[src] in marks)
+
+    first = len(ours.LookupList.Lookup)
+    shift = {old: first + k for k, old in enumerate(order)}
+    for old in order:
+        lookup = copy.deepcopy(gsub.LookupList.Lookup[old])
+        if not _ccmp_remap(lookup, gmap, shift, base.getGlyphID):
+            raise ValueError(f"ccmp: lookup {old} came over empty")
+        ours.LookupList.Lookup.append(lookup)
+    ours.LookupList.LookupCount = len(ours.LookupList.Lookup)
+    for fr in records:
+        fr.Feature.LookupListIndex.extend(sorted(shift.values()))
+        fr.Feature.LookupCount = len(fr.Feature.LookupListIndex)
+    return grafted
+
+
 def copy_line_metrics(base, latin):
     """The line pitch of an English terminal font: hhea and typo ascender
     / descender / line gap from the Latin donor (Source Code Pro's 984 /
@@ -1367,6 +1556,13 @@ def fit_to_grid(font, cell, steps=None):
     being asked (Source Han Sans's locl form of ⋯ is 1052 units wide),
     as do hwid's own 500-advance alternates.
 
+    A tiling character is stretched into its step instead of centred
+    in it (tiling_glyphs; the two that get here are the two-em and
+    three-em dashes ⸺ ⸻, which exist to butt together). Source Han
+    Sans draws ⸺ 1626 units of ink wide in a 1672 advance, so the step
+    rounds it to 2000 — and centred there, a run of them broke every
+    420 units where the design leaves 92.
+
     `steps` (when given) is reference_steps()' {glyph name: step}, so
     every weight of the family agrees on a glyph's width; a name it does
     not have falls back to this face's own advance. Returns the number
@@ -1375,6 +1571,7 @@ def fit_to_grid(font, cell, steps=None):
     td = cff[cff.fontNames[0]]
     gs = font.getGlyphSet()
     hmtx = font["hmtx"]
+    tiling = tiling_glyphs(font)
     drawn, shifted = {}, {}
     moved = 0
     # a glyph this build made carries a name alloc_glyph_name took from
@@ -1407,10 +1604,18 @@ def fit_to_grid(font, cell, steps=None):
         shift = (new - adv) // 2
         private = glyph_private(font, td, name)
         pen = T2CharStringPen(pen_width(private, new), gs)
-        gs[name].draw(TransformPen(pen, (1, 0, 0, 1, shift, 0)))
-        drawn[name] = pen.getCharString(private=private)
-        hmtx.metrics[name] = (new, lsb + shift)
-        shifted[name] = shift
+        stretch = tiling.get(name) == "stretch"
+        gs[name].draw(TransformPen(
+            pen, (new / adv, 0, 0, 1, 0, 0) if stretch
+            else (1, 0, 0, 1, shift, 0)))
+        cs = drawn[name] = pen.getCharString(private=private)
+        # a stretched outline's bearing is its own new xMin, and it did
+        # not move by `shift`, so no anchor on it did either
+        if stretch:
+            hmtx.metrics[name] = (new, charstring_lsb(cs))
+        else:
+            hmtx.metrics[name] = (new, lsb + shift)
+            shifted[name] = shift
         note_redrawn(font, [name])
         moved += 1
     # swap after drawing everything: the glyph set draws through the same
@@ -1565,8 +1770,9 @@ def extend_edges(path, gap, left=True, right=True):
 # — centred in 1200, the gap at every cell boundary was 312u against
 # 111u inside the cell.
 TILING_STRETCH = ((0x2504, 0x2505), (0x2508, 0x2509), (0x254C, 0x254D),
-                  (0x2580, 0x259F), (0x25E2, 0x25E5), (0x3030, 0x3030),
-                  (0xFE49, 0xFE4F), (0xFF3F, 0xFF3F), (0xFFE3, 0xFFE3))
+                  (0x2580, 0x259F), (0x25E2, 0x25E5), (0x2E3A, 0x2E3B),
+                  (0x3030, 0x3030), (0xFE49, 0xFE4F), (0xFF3F, 0xFF3F),
+                  (0xFFE3, 0xFFE3))
 TILING_RULE = ((0x221A, 0x221A), (0x23BE, 0x23CC), (0x2500, 0x257F))
 
 
@@ -1681,6 +1887,72 @@ def widen_fullwidth(font, cell, skip=()):
     note_redrawn(font, redrawn)
     print(f"  full-width widened to {2 * cell}: {shifted} shifted with their hints, "
           f"{len(redrawn)} redrawn ({tiled} of them lengthened to keep tiling)")
+
+
+def tile_vertically(font):
+    """Make the full-width box drawing and block elements as tall as a
+    line, so a column of them joins.
+
+    Under fwid those are Source Han Sans's own glyphs, drawn to its
+    1000-unit em, and the line is 1257 (copy_line_metrics gives the face
+    Source Code Pro's 984 / -273): a column of fwid │ broke at every
+    line and a run of fwid █ came out striped, 257 units of white in
+    every 1257. The one-cell defaults never had it — the Latin donor
+    draws its box drawing -400..1000, tall enough to overlap the line —
+    and that band is the target here.
+
+    A glyph is lengthened only where its ink reaches the edge of the em
+    it is drawn in (█'s own extent, which is the full cell by
+    definition) AND presents a rule there: the same two tests
+    widen_fullwidth makes sideways, made on the outline transposed. A
+    shade (░ ▒ ▓), a diagonal or a wave presents a pattern instead and
+    is left alone — sideways such a glyph is stretched whole, but a 26%
+    vertical stretch would draw its dots as ovals against the one-cell
+    default's round ones. Returns the number lengthened."""
+    cmap = font.getBestCmap()
+    gs = font.getGlyphSet()
+    band = _bounds(gs, cmap[0x2502]) if 0x2502 in cmap else None
+    block = cmap.get(0x2588)
+    em = _bounds(gs, feature_map(font, "fwid").get(block, block)) if block else None
+    if band is None or em is None:
+        return 0
+    cff = font["CFF "].cff
+    td = cff[cff.fontNames[0]]
+    hmtx = font["hmtx"]
+    redrawn = {}
+    for name in sorted(tiling_glyphs(font)):
+        adv = hmtx.metrics[name][0]
+        if adv != FULLWIDTH:
+            continue
+        path = pathops.Path()
+        gs[name].draw(path.getPen())
+        if path.bounds is None:
+            continue
+        _, y0, _, y1 = path.bounds
+        down = y0 - band[1] if y0 <= em[1] + 2 else 0
+        up = band[3] - y1 if y1 >= em[3] - 2 else 0
+        # (x, y) -> (y, x): the top and bottom edges become the right
+        # and left ones, and the sideways machinery reads them as they
+        # are. Transposing back undoes the mirrored winding with it
+        flip = (0, 1, 1, 0, 0, 0)
+        tp = _xform_path(path, flip)
+        out = tp
+        if down > 0 and edge_is_rule(tp, "left"):
+            out = extend_edges(out, down, left=True, right=False)
+        if up > 0 and edge_is_rule(tp, "right"):
+            out = extend_edges(out, up, left=False, right=True)
+        if out is tp:
+            continue
+        private = glyph_private(font, td, name)
+        pen = T2CharStringPen(pen_width(private, adv), gs)
+        _xform_path(out, flip).draw(pen)
+        cs = redrawn[name] = pen.getCharString(private=private)
+        hmtx.metrics[name] = (adv, charstring_lsb(cs))
+    for name, cs in redrawn.items():
+        td.CharStrings[name] = cs
+    note_redrawn(font, redrawn)
+    print(f"  full-width tiling glyphs lengthened to the line: {len(redrawn)}")
+    return len(redrawn)
 
 
 # name IDs we drop before writing our own (every platform/encoding, so no
@@ -3032,13 +3304,18 @@ def build_face(job):
     base = TTFont(Path(env["SHS_DIR"]) / shs_file)
     n_scp, replaced, default_map, marks = graft_halfwidth(base, latin)
     variant_maps, variant_names = import_scp_variants(base, latin, default_map, marks)
-    classify_marks(base, marks)   # the grafted marks and their variants
     copy_line_metrics(base, latin)
     # the outlines' real slant lives in the Latin donor (SCP Italic's)
     ref_angle = (latin["post"].italicAngle or -12.0) if italic else None
     alts = {}
     added = latin_ligatures(base, latin, latin_path, alts, LIGATURES)
     add_gsub(base, added, alts, LIGATURES, variant_maps, variant_names)
+    # after add_gsub, which appends to the same LookupList: the copied
+    # ccmp lookups' nested lookup indices are absolute, so nothing may
+    # renumber the list once they are in (drop_features below touches
+    # the FeatureList only)
+    n_ccmp = import_scp_ccmp(base, latin, default_map, marks)
+    classify_marks(base, marks)   # the grafted marks, the variants, ccmp's
     # the Halfwidth block into one cell first, so its copies are
     # condensed from Source Han Sans's own advance and not from the one
     # the grid pass would give it
@@ -3081,6 +3358,9 @@ def build_face(job):
                 f"another codepoint and already maps to {fwid_map[src]}, not "
                 f"{want}. The two need separate glyphs (see graft_halfwidth)")
     add_width_alternates(base, fwid_map)
+    # and the full-width box drawing as tall as a line, before the Term
+    # pass lengthens the same glyphs sideways
+    n_tall = tile_vertically(base)
     if term:
         # the ligatures are the Latin layer's only multi-cell glyphs, so
         # the only ones an advance test cannot tell from a full width
@@ -3103,7 +3383,7 @@ def build_face(job):
     return (f"{face_label}{f' [{suffix}]' if suffix else ''}: "
             f"latin={n_scp} fwid={len(fullwidth)} vert={n_vert} "
             f"fitted={n_fit} half={n_half} letters={n_letters} "
-            f"ligs={len(added)} -> {out.name}")
+            f"ligs={len(added)} ccmp={n_ccmp} tall={n_tall} -> {out.name}")
 
 
 # VFSource / _vf_source are build_latin.py's and build_latin_vf.py's
