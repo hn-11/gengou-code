@@ -316,6 +316,10 @@ def graft_symbols(font, symbols):
             f"TEXT_OVER_ICON (keep the character) or add the codepoint to "
             f"LINE_BOX's treatment (take the icon)")
     build.set_cmap(font, new, add_new=True)
+    # the Term faces carry a contextual rule whose backtrack is every
+    # glyph the widening did not move; these icons are one cell and were
+    # appended after it ran, so they have to join it (build.py)
+    build.extend_realign_bases(font, new.values())
     return len(new) + len(replaced), list(replaced)
 
 

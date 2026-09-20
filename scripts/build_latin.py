@@ -90,11 +90,31 @@ def round_outlines(font):
     build.sync_lsb(font)
 
 
+# the Private-dict entries the CFF spec stores as integer deltas or
+# integer numbers. BlueScale is the one real number in the group, so it
+# is not here
+_INT_PRIVATE = ("BlueValues", "OtherBlues", "FamilyBlues", "FamilyOtherBlues",
+                "StemSnapH", "StemSnapV", "StdHW", "StdVW",
+                "BlueShift", "BlueFuzz")
+
+
 def fix_zone_order(font):
-    """Instancing a CFF2 blends each alignment-zone edge separately, and
-    at some weights a pair comes out inverted (SCP Regular: OtherBlues
-    [-217, -222]); otfautohint refuses a zone with the wrong sign. Sort
-    every pair, and the pairs, on every FontDict."""
+    """Sort and round the alignment zones and stem widths on every
+    FontDict.
+
+    Instancing a CFF2 blends each zone edge separately, and at some
+    weights a pair comes out inverted (SCP Regular: OtherBlues [-217,
+    -222]); otfautohint refuses a zone with the wrong sign.
+
+    The blend also leaves them fractional, and the spec stores them as
+    integer deltas: eight of the ten static faces shipped values like
+    733.9999999 and 671.9999999 (SumiMoji-BoldItalic had nine, and
+    StdHW 115.33964), which a reader that truncates rather than rounds
+    reads a unit low — the zone then sits under the overshoot it is
+    there to suppress. Only Regular and Regular Italic were integral,
+    because they sit on Source Code Pro's own default master. The JP
+    faces never saw this: build.latin_blue_zones re-measures and rounds
+    what it writes."""
     cff = font["CFF "].cff
     td = cff[cff.fontNames[0]]
     for fd in td.FDArray:
@@ -106,6 +126,12 @@ def fix_zone_order(font):
             pairs = sorted(tuple(sorted(values[i:i + 2]))
                            for i in range(0, len(values) - 1, 2))
             setattr(private, key, [v for pair in pairs for v in pair])
+        for key in _INT_PRIVATE:
+            value = getattr(private, key, None)
+            if isinstance(value, (list, tuple)):
+                setattr(private, key, [int(round(v)) for v in value])
+            elif isinstance(value, float):
+                setattr(private, key, int(round(value)))
 
 
 def add_missing_from_mona(font, mona, chars, dy, k):

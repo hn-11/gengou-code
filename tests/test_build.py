@@ -2262,3 +2262,68 @@ def test_shift_mark_placements_moves_only_the_marks_in_a_shared_subtable():
     flat.Coverage.glyphs = ["mark"]
     assert build.shift_mark_placements(font, {"mark": -100}) == 1
     assert flat.Value.XPlacement == 600
+
+
+def test_rehome_replaced_marks_puts_the_grafted_accent_in_the_donor_s_lookup():
+    """Source Han Sans attaches the Bopomofo tone marks with lookups
+    whose MarkCoverage names its OWN U+0300/U+0301/U+0307/U+030C. The
+    graft re-points those codepoints at the Latin donor's accents, so
+    the coverage named glyphs no codepoint reaches and nothing
+    attached: the accent drew through the letter's strokes. The anchor
+    comes over shifted by the difference between the two inks' centres,
+    because the two outlines are not the same shape."""
+    font, names = _mark_font({0x0301: (100, 300)})     # ours, ink centre 200
+    # their glyph: same font, a wider ink centred at 400
+    cff = font["CFF "].cff
+    td = cff[cff.fontNames[0]]
+    pen = T2CharStringPen(0, None)
+    pen.moveTo((300, 0))
+    pen.lineTo((500, 0))
+    pen.lineTo((500, 100))
+    pen.closePath()
+    build.append_glyph(font, td, "theirs", pen.getCharString(private=td.Private),
+                       None, 0, None, None)
+    sub = otTables.MarkBasePos()
+    sub.Format = 1
+    sub.MarkCoverage = otTables.Coverage()
+    sub.MarkCoverage.glyphs = ["theirs"]
+    rec = otTables.MarkRecord()
+    rec.Class = 0
+    rec.MarkAnchor = otTables.Anchor()
+    rec.MarkAnchor.Format = 1
+    rec.MarkAnchor.XCoordinate, rec.MarkAnchor.YCoordinate = 10, 20
+    sub.MarkArray = otTables.MarkArray()
+    sub.MarkArray.MarkRecord = [rec]
+    lookup = otTables.Lookup()
+    lookup.LookupType, lookup.SubTable = 4, [sub]
+    font["GPOS"] = _gpos_skeleton()
+    font["GPOS"].table.LookupList.Lookup = [lookup]
+
+    assert build.rehome_replaced_marks(font, {0x0301: "theirs"}) == 1
+    assert set(sub.MarkCoverage.glyphs) == {"theirs", names[0x0301]}
+    gid = font.getGlyphID
+    assert sub.MarkCoverage.glyphs == sorted(sub.MarkCoverage.glyphs, key=gid)
+    ours = sub.MarkArray.MarkRecord[sub.MarkCoverage.glyphs.index(names[0x0301])]
+    assert ours.Class == 0
+    # 10 + (200 - 400): the donor's accent sits 200 units further left
+    assert (ours.MarkAnchor.XCoordinate, ours.MarkAnchor.YCoordinate) == (-190, 20)
+    # idempotent: a second pass adds nothing
+    assert build.rehome_replaced_marks(font, {0x0301: "theirs"}) == 0
+
+
+def test_extend_realign_bases_adds_glyphs_appended_after_the_widening():
+    """nerdpatch.py appends 10,402 one-cell icons to a finished Term
+    face, and realign_halfwidth_marks froze its backtrack at widening
+    time — so a full-width mark after an icon kept the widening's
+    -100."""
+    font = _cff_font_with_widths({"half": 600, "cjk": 1200, "mark": 0})
+    font["GPOS"] = _gpos_skeleton()
+    assert build.realign_halfwidth_marks(font, {"mark": -100}, {"cjk": 100}) == 1
+    chain = font["GPOS"].table.LookupList.Lookup[-1]
+    assert chain.SubTable[0].BacktrackCoverage[-1].glyphs == ["half"]
+    assert build.extend_realign_bases(font, ["cjk", "half"]) == 4
+    gid = font.getGlyphID
+    for sub in chain.SubTable:
+        names = sub.BacktrackCoverage[-1].glyphs
+        assert names == sorted(set(names), key=gid) == sorted(["half", "cjk"], key=gid)
+    assert build.extend_realign_bases(font, []) == 0

@@ -15,6 +15,8 @@ import build  # noqa: E402
 from build import FULLWIDTH, _unwrap, _unwrap_pos  # noqa: E402
 from verifylib import (  # noqa: E402
     Checker,
+    check_coverage_order,
+    check_private,
     check_stat,
     check_style_bits,
     check_tables,
@@ -271,42 +273,8 @@ def main():
               f"OS/2 usWeightClass {tf['OS/2'].usWeightClass} "
               f"(want {build.WEIGHT_CLASS[weight]} for {weight})")
 
-    # a coverage table is searched by glyph id, so its list has to be
-    # in that order — and the mark coverages are parallel to their
-    # anchor arrays, so a copy that sorts one without the other puts
-    # every accent on the wrong letter (build._remap_mark_subtable)
-    unsorted, covs = [], 0
-    for tag in ("GSUB", "GPOS"):
-        if tag not in tf:
-            continue
-
-        def walk(obj, seen=None, tag=tag):
-            nonlocal covs
-            if seen is None:
-                seen = set()
-            if id(obj) in seen:
-                return
-            seen.add(id(obj))
-            if isinstance(obj, (list, tuple)):
-                for item in obj:
-                    walk(item, seen)
-                return
-            if not hasattr(obj, "__dict__"):
-                return
-            for attr, value in vars(obj).items():
-                if attr.endswith("Coverage") or attr == "Coverage":
-                    for cov in (value if isinstance(value, list) else [value]):
-                        names = getattr(cov, "glyphs", None) or []
-                        covs += 1
-                        ids = [tf.getGlyphID(n) for n in names]
-                        if ids != sorted(ids):
-                            unsorted.append((tag, attr, len(names)))
-                elif isinstance(value, (list, tuple)) or hasattr(value, "__dict__"):
-                    walk(value, seen)
-
-        walk(tf[tag].table.LookupList.Lookup)
-    check(not unsorted, f"every coverage is in glyph-id order "
-                        f"({covs} coverages; off: {unsorted[:4]})")
+    check_coverage_order(tf, check)
+    check_private(tf, check)
 
     # line metrics: Source Code Pro's, hhea and typo alike, USE_TYPO_METRICS
     hhea, os2 = tf["hhea"], tf["OS/2"]
@@ -336,6 +304,10 @@ def main():
     # behind an `if`: deleting vhea, vmtx and VORG dropped five checks
     # and passed, and the STAT table the grafts are built to preserve
     # was read by nothing at all
+    for tag in ("DSIG",):
+        # Source Han Sans ships one; a signature no longer
+        # matches the file the build rewrote
+        check(tag not in tf, f"no {tag} table")
     for tag in ("vhea", "vmtx", "VORG", "STAT", "GDEF"):
         check(tag in tf, f"the face carries {tag}")
     ivs = [t for t in tf["cmap"].tables if t.format == 14]
@@ -1232,7 +1204,12 @@ def main():
         if ord(mark[0]) not in cmap:
             continue
         want = mark_offset("A" + mark)     # one cell, the settled case
-        for seq in ("==", "===", "!==", "::", "=>", "..."):
+        # U+F120 is a Nerd Fonts icon: one cell, and appended to the
+        # face AFTER the widening, so it was in no backtrack coverage
+        # and every one of the 10,402 icons kept the -100 in the Term
+        # NFM faces (U+F120 + U+20DD drew the ring at -465..465 where
+        # the same one-cell base gives -365..565)
+        for seq in ("==", "===", "!==", "::", "=>", "...", "\uf120"):
             if any(ord(c) not in cmap for c in seq):
                 continue
             got = mark_offset(seq + mark)
@@ -1370,6 +1347,33 @@ def main():
             tone[base + mark] = gap if gap is None else round(gap)
     check(not tone, f"a Bopomofo tone mark hangs off its letter's ink, "
                     f"not its cell (off: {tone})")
+
+    # ... and the four Source Han Sans attaches that the Latin graft
+    # REPLACED hang off it too. Their mark lookups name Source Han Sans's
+    # own U+0300/U+0301/U+0307/U+030C, which no codepoint reaches once
+    # the graft has re-pointed the cmap, so nothing attached and the
+    # accent drew through the letter's strokes: 164 of the 188 pairs
+    # shared ink where Source Han Sans shares none. The two the graft
+    # left alone (U+02EA, U+02EB, above) always worked, which is why
+    # this went unseen — they are the only two this file probed
+    grafted, attaches = {}, 0
+    for mark in "\u0300\u0301\u0307\u030c":
+        base = "\u3113"      # the letter Source Han Sans anchors all four on
+        if ord(base) not in cmap or ord(mark) not in cmap:
+            continue
+        infos, positions = shape_infos(base + mark, {})
+        if len(infos) != 2:
+            continue
+        attaches += positions[1].x_offset != 0
+        # Source Han Sans shares no ink here; unattached, the accent
+        # drew straight through the letter's strokes
+        area = ink_overlap(base + mark)
+        if area > 1:
+            grafted[base + mark] = (positions[1].x_offset, round(area))
+    check(not grafted, f"an attached Bopomofo tone mark clears the letter "
+                       f"(shared ink: {grafted})")
+    check(attaches == 4, f"the grafted accents reach Source Han Sans's own "
+                         f"Bopomofo mark lookups ({attaches} of 4 attach)")
 
     # the two imports need each other: SCP's variant features have rules
     # on what ccmp composes (cv02's single-storey g̃) and ccmp has rules

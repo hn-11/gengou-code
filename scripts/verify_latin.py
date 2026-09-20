@@ -17,7 +17,9 @@ import build_latin  # noqa: E402
 from verify import CASES  # noqa: E402
 from verifylib import (  # noqa: E402
     Checker,
+    check_coverage_order,
     check_gdef_marks,
+    check_private,
     check_stat,
     check_style_bits,
     check_tables,
@@ -92,7 +94,7 @@ def main():
     check(hmtx[tf.getGlyphOrder()[0]][0] == CELL, ".notdef is one cell")
     widths, bearings, bounds = hmtx_mismatches(tf)
     check(not widths, f"CFF charstring widths agree with hmtx ({widths[:3]})")
-    check_tables(tf, check, bounds, tf["hmtx"].metrics, cmap)
+    check_tables(tf, check, bounds, tf["hmtx"].metrics, cmap, codepages=True)
     check(not bearings, f"hmtx bearings are the outlines' xMin ({len(bearings)} off, "
                         f"e.g. {bearings[:3]})")
 
@@ -142,6 +144,8 @@ def main():
     for tbl in ("vhea", "vmtx", "VORG", "DSIG"):
         check(tbl not in tf, f"no {tbl} table")
     check_gdef_marks(tf, check, cmap)
+    check_coverage_order(tf, check)
+    check_private(tf, check)
     gpos = {fr.FeatureTag for fr in tf["GPOS"].table.FeatureList.FeatureRecord} \
         if "GPOS" in tf else set()
     check("mark" in gpos and "kern" not in gpos,

@@ -366,3 +366,103 @@ def check_gdef_marks(tf, check, cmap):
                        and classes.get(g) != 3)
     check(not unclassed, f"every combining mark is GDEF class 3 "
                          f"({len(unclassed)} are not: {unclassed[:5]})")
+
+
+def check_coverage_order(tf, check):
+    """Every GSUB/GPOS coverage is in glyph-id order.
+
+    A coverage table is searched by glyph id, so its list has to be in
+    that order — and a mark coverage is parallel to its anchor array,
+    so a copy that sorts one without the other puts every accent on the
+    wrong letter (build._remap_mark_subtable). Only the JP faces asked:
+    reversing the seven MarkCoverage lists in a Latin face draws the
+    ring of ẘ through the letter (k + U+0308 falls from y=229 to y=60)
+    and both Latin verifiers said "all checks passed"."""
+    unsorted, covs = [], 0
+
+    def walk(obj, tag, seen):
+        nonlocal covs
+        if id(obj) in seen:
+            return
+        seen.add(id(obj))
+        if isinstance(obj, (list, tuple)):
+            for item in obj:
+                walk(item, tag, seen)
+            return
+        if not hasattr(obj, "__dict__"):
+            return
+        for attr, value in vars(obj).items():
+            if attr.endswith("Coverage") or attr == "Coverage":
+                for cov in (value if isinstance(value, list) else [value]):
+                    names = getattr(cov, "glyphs", None) or []
+                    covs += 1
+                    ids = [tf.getGlyphID(n) for n in names]
+                    if ids != sorted(ids):
+                        unsorted.append((tag, attr, len(names)))
+            elif isinstance(value, (list, tuple)) or hasattr(value, "__dict__"):
+                walk(value, tag, seen)
+
+    for tag in ("GSUB", "GPOS"):
+        if tag in tf:
+            walk(tf[tag].table.LookupList.Lookup, tag, set())
+    check(not unsorted, f"every coverage is in glyph-id order "
+                        f"({covs} coverages; off: {unsorted[:4]})")
+
+
+# the Private-dict entries the CFF spec stores as integer deltas (an
+# array) or as an integer number (a scalar); BlueScale is the one real
+# number in the group and is not here
+_ZONE_KEYS = ("BlueValues", "OtherBlues", "FamilyBlues", "FamilyOtherBlues")
+_ARRAY_PRIVATE = _ZONE_KEYS + ("StemSnapH", "StemSnapV")
+_SCALAR_PRIVATE = ("StdHW", "StdVW", "BlueShift", "BlueFuzz")
+
+
+def _private_values(private, key):
+    """A Private entry's values at the DEFAULT location. A CFF2 entry is
+    blended — [default, delta per region] for a scalar, a list of those
+    for an array — and only the default has to be a whole unit: varLib
+    works the deltas out from the masters with the region scalars, so
+    they come out fractional for a master at an intermediate weight and
+    are meant to."""
+    value = getattr(private, key, None)
+    if value is None:
+        return []
+    if key in _SCALAR_PRIVATE:
+        return [value[0] if isinstance(value, (list, tuple)) else value]
+    return [v[0] if isinstance(v, (list, tuple)) else v for v in value]
+
+
+def check_private(tf, check):
+    """The CFF Private dicts: alignment zones in pairs and in order, and
+    every entry the spec stores as an integer delta stored as one.
+
+    Instancing Source Code Pro's CFF2 blends each zone edge on its own,
+    which leaves both: an inverted pair at some weights (otfautohint
+    refuses those, so the build has always sorted them) and fractional
+    values at every weight off the donor's default master. Eight of the
+    ten static faces shipped blues like 733.9999999, which a reader
+    that truncates takes a unit low — and nothing anywhere read a
+    Private dict but verify.py, on the JP faces' Latin FontDict, and
+    only for how near a zone sits to sxHeight."""
+    tag = "CFF " if "CFF " in tf else "CFF2"
+    cff = tf[tag].cff
+    td = cff[cff.fontNames[0]]
+    fds = getattr(td, "FDArray", None) or [td]
+    bad_order, bad_int = [], []
+    for i, fd in enumerate(fds):
+        private = getattr(fd, "Private", None)
+        if private is None:
+            continue
+        for key in _ZONE_KEYS:
+            values = _private_values(private, key)
+            if values != sorted(values) or len(values) % 2:
+                bad_order.append((i, key, values[:4]))
+        for key in _ARRAY_PRIVATE + _SCALAR_PRIVATE:
+            for v in _private_values(private, key):
+                if v != int(v):
+                    bad_int.append((i, key, v))
+    check(not bad_order, f"CFF alignment zones are in pairs, in order "
+                         f"({len(fds)} FontDicts; off: {bad_order[:3]})")
+    check(not bad_int, f"CFF zone and stem values are whole units at the "
+                       f"default location ({len(bad_int)} are not, e.g. "
+                       f"{bad_int[:3]})")

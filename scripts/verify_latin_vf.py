@@ -16,6 +16,7 @@ from pathlib import Path
 
 from fontTools.pens.boundsPen import BoundsPen
 from fontTools.ttLib import TTFont
+from fontTools.varLib.models import piecewiseLinearMap
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -23,7 +24,9 @@ import build  # noqa: E402
 import build_latin_vf  # noqa: E402
 from verifylib import (  # noqa: E402
     Checker,
+    check_coverage_order,
     check_gdef_marks,
+    check_private,
     check_style_bits,
     check_tables,
     make_shaper,
@@ -68,6 +71,38 @@ def scp_reference(italic):
     _, _, _, _, to_scp = build_latin_vf.user_axis(weight_pos, design, breaks,
                                                    axis.minValue)
     return scp, to_scp
+
+
+def master_locations(tf, axis):
+    """The user wght of every master in the file, read back from the
+    CFF2 VarStore's region peaks through avar and fvar.
+
+    The file has FOUR masters, not three: 200, the Monaspace floor
+    (build_latin_vf.mona_floor_wght — 364.75 upright, 381.15 italic,
+    at no named instance), 400 and 700. A piecewise-linear blend can
+    only turn at a master, so a master is exactly where a corruption
+    hides: a build that moved the 61 Monaspace ligatures 600u right at
+    the floor master ONLY put '->' 535 units past its own advance
+    there, and 219 past it at the Light instance, while the three
+    locations this used to probe measured clean."""
+    tag = "CFF2" if "CFF2" in tf else "CFF "
+    store = getattr(tf[tag].cff[tf[tag].cff.fontNames[0]], "VarStore", None)
+    store = getattr(store, "otVarStore", None)
+    peaks = {0.0}
+    for region in (store.VarRegionList.Region if store else []):
+        for i, a in enumerate(region.VarRegionAxis):
+            if tf["fvar"].axes[i].axisTag == "wght":
+                peaks.add(a.PeakCoord)
+    # avar maps normalized -> normalized; invert it, then denormalize
+    segments = (tf["avar"].segments.get("wght") if "avar" in tf else None) or {}
+    back = {v: k for k, v in segments.items()}
+    out = set()
+    for peak in peaks:
+        n = piecewiseLinearMap(peak, back) if back else peak
+        out.add(axis.defaultValue + n * ((axis.defaultValue - axis.minValue)
+                                         if n < 0 else
+                                         (axis.maxValue - axis.defaultValue)))
+    return sorted(out)
 
 
 def main():
@@ -220,6 +255,8 @@ def main():
     check("mark" in vf_gpos and "kern" not in vf_gpos,
           f"GPOS keeps SCP's mark positioning, no kern ({sorted(vf_gpos)})")
     check_gdef_marks(tf, check, vf_cmap)
+    check_coverage_order(tf, check)
+    check_private(tf, check)
     letters = {g for cp, g in vf_cmap.items()
                if 0x30 <= cp <= 0x39 or 0x41 <= cp <= 0x5A or 0x61 <= cp <= 0x7A}
     # ... and they DRAW: the count is a cmap count, so a VF with 1,626
@@ -276,7 +313,14 @@ def main():
     # rendering `!=` into the next column at Bold
     lean = build.CELL // 2
     spill, centres = {}, {}
-    for w in (axis.minValue, axis.defaultValue, axis.maxValue):
+    probes = sorted({axis.minValue, axis.defaultValue, axis.maxValue}
+                    | set(master_locations(tf, axis))
+                    | {i.coordinates["wght"] for i in instances
+                       if "wght" in i.coordinates})
+    check(len(probes) >= len(WEIGHTS) + 2,
+          f"every master and every named instance is probed "
+          f"({[round(w, 2) for w in probes]})")
+    for w in probes:
         gs = tf.getGlyphSet(location={"wght": w})
         offs = []
         for g in tf.getGlyphOrder():

@@ -83,10 +83,6 @@ jobs:
           fi
           echo "next=$next" >> "$GITHUB_OUTPUT"
           echo "last tag $latest, changelog ${pending:-none}, patch bump $bumped -> $next"
-          if ! grep -qx "## $next" CHANGELOG.md; then
-            echo "::error::CHANGELOG.md has no '## $next' section for the release this sync would cut"
-            exit 1
-          fi
 
       # --- repo-specific ---
       - name: Refresh upstream
@@ -96,6 +92,26 @@ jobs:
         run: |
           python scripts/bump_pins.py > /tmp/summary.md
           cat /tmp/summary.md
+
+      # ... and it has release notes to publish. Only on a run that has
+      # something to sync: the fallback is a patch bump off the last tag,
+      # and nobody writes that section until the release is being
+      # prepared - demanding one on every weekly run would fail the sync
+      # before bump_pins.py had looked at an upstream at all.
+      - name: CHANGELOG.md has a section for the release this sync cuts
+        if: steps.refresh.outputs.changed == 'true'
+        run: |
+          next="${{ steps.version.outputs.next }}"
+          body=$(awk -v tag="## $next" '
+            $0 == tag {flag=1; next}
+            flag && /^## / {flag=0}
+            flag
+          ' CHANGELOG.md | tr -d '[:space:]')
+          if [ -z "$body" ]; then
+            echo "::error::CHANGELOG.md has no '## $next' section (with notes under it) for the release this sync would cut"
+            exit 1
+          fi
+          echo "release notes for $next found"
 
       - name: Compose PR body
         if: steps.refresh.outputs.changed == 'true'

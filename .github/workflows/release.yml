@@ -59,10 +59,18 @@ jobs:
             echo "dry run: publishing nothing, no section needed"
             exit 0
           fi
-          grep -qx "## ${SUMI_VERSION_TAG}" CHANGELOG.md || {
-            echo "::error::CHANGELOG.md has no '## ${SUMI_VERSION_TAG}' section"
+          # the body, not just the heading: the package job fails on an
+          # empty release_notes.md, and a heading with nothing under it
+          # would still burn six jobs before it got there
+          body=$(awk -v tag="## ${SUMI_VERSION_TAG}" '
+            $0 == tag {flag=1; next}
+            flag && /^## / {flag=0}
+            flag
+          ' CHANGELOG.md | tr -d '[:space:]')
+          if [ -z "$body" ]; then
+            echo "::error::CHANGELOG.md has no '## ${SUMI_VERSION_TAG}' section (with notes under it)"
             exit 1
-          }
+          fi
           echo "release notes for ${SUMI_VERSION_TAG} found"
 
   # a family's weights, both styles, per job (six jobs): its Latin donors,

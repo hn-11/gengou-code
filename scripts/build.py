@@ -2499,6 +2499,114 @@ def realign_halfwidth_marks(font, moved, widened):
     return len(halves)
 
 
+def rehome_replaced_marks(base, replaced):
+    """Put the grafted accents into the mark lookups Source Han Sans
+    keeps for its OWN copies of them. Returns the number of entries
+    added.
+
+    Source Han Sans attaches the Bopomofo tone marks to the Bopomofo
+    letters with three MarkBasePos lookups, and their MarkCoverage names
+    Source Han Sans's own U+0300, U+0301, U+0307 and U+030C. The graft
+    re-points those four codepoints at the Latin donor's accents and
+    leaves the coverage naming glyphs no codepoint reaches any more, so
+    nothing attaches: 164 of the 188 Bopomofo-and-tone pairs drew the
+    mark straight through the letter's strokes (ㄓ + U+0301 at 636..836
+    against a letter at 66..934, where Source Han Sans hangs it off the
+    right shoulder at 760..1120, 284 units further right and 226 up).
+    U+02EA and U+02EB kept Source Han Sans's own glyphs and still
+    attach, which is how the rest of the machinery is known to be
+    sound.
+
+    The two outlines are not the same shape, so the anchor comes over
+    shifted by the difference between the two inks' centres: the donor's
+    accent then lands where Source Han Sans puts its own."""
+    if "GPOS" not in base or not replaced:
+        return 0
+    cmap = base.getBestCmap()
+    gs = base.getGlyphSet()
+    gid = base.getGlyphID
+    swap = {}
+    for cp, theirs in replaced.items():
+        ours = cmap.get(cp)
+        if ours and ours != theirs:
+            swap.setdefault(theirs, ours)
+
+    def centre(name):
+        box = _bounds(gs, name)
+        return None if box is None else ((box[0] + box[2]) / 2,
+                                         (box[1] + box[3]) / 2)
+
+    added = 0
+    for lookup in base["GPOS"].table.LookupList.Lookup:
+        kind, subtables = _unwrap_pos(lookup)
+        if kind not in (4, 5, 6):
+            continue
+        for sub in subtables:
+            cov = getattr(sub, "MarkCoverage", None) or \
+                getattr(sub, "Mark1Coverage", None)
+            array = getattr(sub, "MarkArray", None) or \
+                getattr(sub, "Mark1Array", None)
+            if cov is None or array is None:
+                continue
+            pairs = list(zip(cov.glyphs, array.MarkRecord))
+            for name, rec in list(pairs):
+                ours = swap.get(name)
+                if not ours or ours in cov.glyphs:
+                    continue
+                theirs_c, ours_c = centre(name), centre(ours)
+                if theirs_c is None or ours_c is None:
+                    continue
+                anchor = otTables.Anchor()
+                anchor.Format = 1
+                anchor.XCoordinate = round(rec.MarkAnchor.XCoordinate
+                                           + ours_c[0] - theirs_c[0])
+                anchor.YCoordinate = round(rec.MarkAnchor.YCoordinate
+                                           + ours_c[1] - theirs_c[1])
+                copy = otTables.MarkRecord()
+                copy.Class, copy.MarkAnchor = rec.Class, anchor
+                pairs.append((ours, copy))
+                added += 1
+            pairs.sort(key=lambda pair: gid(pair[0]))
+            cov.glyphs = [name for name, _rec in pairs]
+            array.MarkRecord = [rec for _name, rec in pairs]
+            array.MarkCount = len(pairs)
+    return added
+
+
+def extend_realign_bases(font, names):
+    """Add `names` to the backtrack of the Term mark correction, for
+    glyphs appended after widen_fullwidth ran. Returns the number of
+    subtables extended.
+
+    realign_halfwidth_marks freezes its backtrack at widening time — the
+    glyphs the widening did not move — and nerdpatch.py then appends
+    10,402 one-cell icons to the finished face. None of them were in it,
+    so in SumiMojiJPTermNFM-* a full-width mark after an icon kept the
+    widening's -100: U+F120 + U+20DD drew the ring at -465..465 where
+    the same one-cell base two rows up puts it at -365..565."""
+    gpos = getattr(font.get("GPOS"), "table", None)
+    if gpos is None or not names:
+        return 0
+    gid = font.getGlyphID
+    ours = set()
+    for fr in gpos.FeatureList.FeatureRecord:
+        if fr.FeatureTag == "dist":
+            ours.update(fr.Feature.LookupListIndex)
+    done = 0
+    for index in sorted(ours):
+        kind, subtables = _unwrap_pos(gpos.LookupList.Lookup[index])
+        if kind != 8:
+            continue
+        for sub in subtables:
+            covs = getattr(sub, "BacktrackCoverage", None)
+            if not covs:
+                continue
+            cov = covs[-1]      # the base, behind the run of marks
+            cov.glyphs = sorted(set(cov.glyphs) | set(names), key=gid)
+            done += 1
+    return done
+
+
 def base_gdef(font):
     """The font's GDEF table, or None."""
     return getattr(font.get("GDEF"), "table", None)
@@ -4183,6 +4291,9 @@ def build_face(job):
     # tells a shaper they are marks at all, and after the ccmp import,
     # whose composed accents the donor positions too
     n_mark = import_scp_marks(base, latin, default_map, marks)
+    # and into the lookups Source Han Sans keeps for the accents
+    # the graft replaced (the Bopomofo tone marks)
+    n_mark += rehome_replaced_marks(base, replaced)
     # the Halfwidth block into one cell first, so its copies are
     # condensed from Source Han Sans's own advance and not from the one
     # the grid pass would give it
