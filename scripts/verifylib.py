@@ -474,6 +474,9 @@ def check_private(tf, check):
                        f"{bad_int[:3]})")
 
 
+# how far an accent's ink centre may sit from its letter's: half
+# a cell, where the regression this catches is a whole one
+_LEAN = build.CELL // 2
 ACCENT_BASES = "bdfhklt"
 ACCENTS = "̀́̂̃̄̆̇̈̌̊"
 
@@ -488,7 +491,7 @@ def check_accents_clear(shape, gs, order, cmap, check, label=""):
     IMPORT that GPOS, since the graft first drew 58 of 84 pairs through
     the stem. The Latin faces and the variable fonts, where the donor's
     mark positioning lives natively and the two variable fonts are the
-    whole of SumiMoji.zip, asked nothing: zeroing all 414 base anchors
+    whole of SumiMoji.zip, asked nothing: zeroing all 502 base anchors
     dropped every accent into the letter and both said "all checks
     passed"."""
     through, pairs = {}, 0
@@ -499,17 +502,29 @@ def check_accents_clear(shape, gs, order, cmap, check, label=""):
             infos, positions = shape(base + mark, {})
             if len(infos) != 2:
                 continue        # composed into one glyph: nothing to clear
-            boxes = []
+            boxes, across = [], []
+            pen_x = 0
             for info, pos in zip(infos, positions):
                 pen = BoundsPen(gs)
                 gs[order[info.codepoint]].draw(pen)
                 boxes.append(None if pen.bounds is None else
                              (pen.bounds[1] + pos.y_offset,
                               pen.bounds[3] + pos.y_offset))
+                across.append(None if pen.bounds is None else
+                              ((pen.bounds[0] + pen.bounds[2]) / 2
+                               + pen_x + pos.x_offset))
+                pen_x += pos.x_advance
             pairs += 1
-            if None in boxes or boxes[1][0] < boxes[0][1]:
+            # sideways as well as up: an accent parked a whole cell
+            # right sits above nothing and cleared the letter by this
+            # test alone (+600 on every base anchor passed both Latin
+            # verifiers, with b's acute drawing in the next column)
+            off = None if None in across else across[1] - across[0]
+            if (None in boxes or boxes[1][0] < boxes[0][1]
+                    or off is None or abs(off) > _LEAN):
                 through[base + mark] = (None if None in boxes else
-                                        (round(boxes[0][1]), round(boxes[1][0])))
+                                        (round(boxes[0][1]), round(boxes[1][0]),
+                                         None if off is None else round(off)))
     check(not through, f"an accent clears the letter it sits on{label} "
                        f"({pairs} pairs; through: {through})")
 
@@ -591,15 +606,101 @@ def check_mark_class_closure(tf, check):
         for sub in subtables:
             pairs = []
             if kind in (1, 2):
-                pairs = [(src, dst if isinstance(dst, (list, tuple)) else [dst])
+                pairs = [([src], dst if isinstance(dst, (list, tuple)) else [dst])
                          for src, dst in (getattr(sub, "mapping", None) or {}).items()]
             elif kind == 3:
-                pairs = [(src, list(dsts)) for src, dsts in
+                pairs = [([src], list(dsts)) for src, dsts in
                          (getattr(sub, "alternates", None) or {}).items()]
-            for src, dsts in pairs:
-                if defs.get(src) != 3:
+            elif kind == 4:
+                # a ligature of marks is a mark: Source Code Pro's ccmp
+                # stacks 30 pairs of combining marks into one glyph, 21
+                # of which no codepoint reaches — so nothing else here
+                # can see them, and declassing them turns a stacked
+                # accent into a 600-unit spacing glyph of its own
+                pairs = [([first, *lig.Component], [lig.LigGlyph])
+                         for first, ligs in
+                         (getattr(sub, "ligatures", None) or {}).items()
+                         for lig in ligs]
+            for srcs, dsts in pairs:
+                if any(defs.get(src) != 3 for src in srcs):
                     continue
-                adrift += [(src, dst, defs.get(dst)) for dst in dsts
+                adrift += [(srcs[0], dst, defs.get(dst)) for dst in dsts
                            if defs.get(dst) != 3]
     check(not adrift, f"a mark's substitute is a mark in GDEF too "
                       f"({len(adrift)} are not, e.g. {sorted(set(adrift))[:3]})")
+
+
+def check_mark_features(tf, check, shape, gs, order, cmap):
+    """The three GPOS features that put a mark where it belongs, the
+    GDEF classes their lookups filter on, and that a second accent is
+    actually lifted off the first.
+
+    The Latin faces inherit Source Code Pro's GPOS whole and the
+    variable fonts get theirs from a varLib merge, and both asked only
+    that 'mark' was there and 'kern' was not. Dropping 'mkmk' — or
+    clearing GDEF's MarkAttachClassDef, which is what its lookups
+    filter on — draws the two accents of x + U+0300 + U+0301 on top of
+    one another, and dropping GPOS 'ccmp' drops the tie bar's lift over
+    an ascender back to 0. All three passed both verifiers."""
+    gpos = {fr.FeatureTag for fr in tf["GPOS"].table.FeatureList.FeatureRecord} \
+        if "GPOS" in tf else set()
+    for tag in ("mark", "mkmk", "ccmp"):
+        check(tag in gpos, f"GPOS has {tag} ({sorted(gpos)})")
+    gdef = getattr(tf.get("GDEF"), "table", None)
+    named = set((getattr(getattr(gdef, "MarkAttachClassDef", None),
+                         "classDefs", None) or {}).values())
+    filtered = {lookup.LookupFlag >> 8
+                for lookup in (tf["GPOS"].table.LookupList.Lookup
+                               if "GPOS" in tf else [])} - {0}
+    check(filtered <= named,
+          f"GDEF names the mark classes GPOS filters on "
+          f"({sorted(filtered)}; GDEF has {sorted(named)})")
+    lifted = probes = 0
+    for base in "xz":
+        for first, second in zip(ACCENTS, ACCENTS[1:] + ACCENTS[:1]):
+            text = base + first + second
+            if any(ord(c) not in cmap for c in text):
+                continue
+            infos, positions = shape(text, {})
+            if len(infos) != 3:
+                continue          # composed: nothing left to stack
+            probes += 1
+            lifted += positions[2].y_offset > 0
+    check(probes and lifted, f"a second accent is lifted off the first "
+                             f"({lifted} of {probes} probes; 'mkmk')")
+
+
+# the combining marks Source Code Pro anchors only to the letters they
+# belong on (U+25CC, and L l for the overlay, O U o for the horn), so
+# over any other base the shaper leaves them at the pen — and SCP draws
+# its marks to the RIGHT of the origin, which puts them in the next
+# character's cell. The JP faces do not have this: graft_halfwidth
+# draws every mark one cell left, so an unanchored one lands over the
+# base instead. The donor's own faces measure identically, so this is
+# Source Code Pro's design and not the graft's — what the check below
+# holds is that the set does not GROW
+STRAY_MARKS = {"U+031A", "U+031B", "U+0334", "U+0344"}
+STRAY_MARKS_ITALIC = STRAY_MARKS | {"U+0310"}
+
+
+def check_stray_marks(shape, gs, order, cmap, check, italic):
+    """The combining marks that land in the next character's cell."""
+    stray = []
+    for cp in sorted(cmap):
+        if unicodedata.category(chr(cp)) not in ("Mn", "Me", "Mc"):
+            continue
+        infos, positions = shape("E" + chr(cp), {})
+        if len(infos) != 2:
+            continue                 # composed: nothing loose to place
+        pen = BoundsPen(gs)
+        gs[order[infos[1].codepoint]].draw(pen)
+        if pen.bounds is None:
+            continue
+        left = pen.bounds[0] + build.CELL + positions[1].x_offset
+        if left > build.CELL * 0.9:
+            stray.append(f"U+{cp:04X}")
+    want = STRAY_MARKS_ITALIC if italic else STRAY_MARKS
+    check(set(stray) <= want,
+          f"no combining mark falls into the next cell but the ones "
+          f"Source Code Pro anchors only to their own letters "
+          f"({stray}; known {sorted(want)})")

@@ -3878,27 +3878,36 @@ def classify_unicode_marks(font):
         if unicodedata.category(chr(cp)) == "Mn" and defs.get(g) != 3:
             defs[g] = 3
             fixed.append(g)
-    # the closure: a variant of a variant of a mark is a mark too. A
-    # ligature is left alone — its components need not all be marks
+    # the closure: a variant of a variant of a mark is a mark too, and
+    # so is a ligature of marks — Source Code Pro's ccmp stacks
+    # U+0308+U+0301 and 29 other pairs into one glyph, 21 of which no
+    # codepoint reaches, so neither the cmap sweep above nor the edges
+    # below could see them. A ligature is read only when EVERY component
+    # is a mark: Ą is A plus an ogonek, and calling that a mark zeroes
+    # its advance
     edges = []
     for lookup in (font["GSUB"].table.LookupList.Lookup
                    if "GSUB" in font else []):
         kind, subtables = _unwrap(lookup)
         for sub in subtables:
             if kind == 1:
-                edges += [(src, [dst])
+                edges += [([src], [dst])
                           for src, dst in (getattr(sub, "mapping", None) or {}).items()]
             elif kind == 2:
-                edges += [(src, list(dsts))
+                edges += [([src], list(dsts))
                           for src, dsts in (getattr(sub, "mapping", None) or {}).items()]
             elif kind == 3:
-                edges += [(src, list(dsts)) for src, dsts in
+                edges += [([src], list(dsts)) for src, dsts in
                           (getattr(sub, "alternates", None) or {}).items()]
+            elif kind == 4:
+                for first, ligs in (getattr(sub, "ligatures", None) or {}).items():
+                    edges += [([first, *lig.Component], [lig.LigGlyph])
+                              for lig in ligs]
     changed = True
     while changed:
         changed = False
-        for src, dsts in edges:
-            if defs.get(src) != 3:
+        for srcs, dsts in edges:
+            if any(defs.get(src) != 3 for src in srcs):
                 continue
             for dst in dsts:
                 if defs.get(dst) != 3:

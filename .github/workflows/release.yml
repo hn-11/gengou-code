@@ -174,9 +174,12 @@ jobs:
         run: |
           python scripts/verify_latin_vf.py "dist/latin/SumiMoji[wght].otf"
           python scripts/verify_latin_vf.py "dist/latin/SumiMoji-Italic[wght].otf"
+      # every face harmonize_latin.py rewrote, not two of the twenty:
+      # this pass is the only one that sees a Latin family whole, and it
+      # writes new win metrics into all ten statics of each
       - run: >-
           python scripts/verify_many.py
-          dist/latin/SumiMoji-Regular.otf dist/nerd/latin/SumiMojiNFM-BoldItalic.otf
+          'dist/latin/SumiMoji-*.otf' 'dist/nerd/latin/*.otf'
       - run: |
           cp LICENSE dist/LICENSE
           cp LICENSE dist/nerd/LICENSE

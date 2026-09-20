@@ -29,7 +29,9 @@ from verifylib import (  # noqa: E402
     check_gdef_marks,
     check_heights,
     check_mark_class_closure,
+    check_mark_features,
     check_private,
+    check_stray_marks,
     check_style_bits,
     check_tables,
     check_zones,
@@ -282,6 +284,10 @@ def main():
                         vf_cmap, check, " at the default weight")
     check_heights(tf, check, default_gs, vf_cmap)
     check_zones(tf, check, vf_cmap)
+    check_mark_features(tf, check, shape_default, default_gs,
+                        tf.getGlyphOrder(), vf_cmap)
+    check_stray_marks(shape_default, default_gs, tf.getGlyphOrder(), vf_cmap,
+                      check, is_italic)
     # the nameIDs verify_latin.py requires of the statics; 13 and 14 are
     # the licence and its URL, and dropping all seven passed this file
     for nid in (3, 4, 8, 9, 11, 13, 14):
@@ -310,6 +316,27 @@ def main():
                       - {0} - {build.CELL * n for n in range(1, 5)})
     check(not off_grid, f"every advance is 0 or a whole number of "
                         f"{build.CELL} cells (offenders: {off_grid})")
+    # on the grid is not the same as the RIGHT number of cells: only the
+    # glyph count of three ligature cases was read here, so widening
+    # '==' from two cells to three shaped 'a == b' at 4,200 units and
+    # passed (verify_latin.py has had this for every one of the 61 since
+    # v3, and the one-cell checks beside it)
+    wrong = {}
+    for seq, spec in build.LIGATURES.items():
+        infos, positions = shape_default(f"a {seq} b", {"calt": True, "liga": True})
+        adv = sum(p.x_advance for p in positions[2:len(infos) - 2])
+        if adv != spec["cells"] * build.CELL:
+            wrong[seq] = adv
+    check(not wrong, f"every ligature is the cells it declares "
+                     f"({len(build.LIGATURES)} probes; off: {wrong})")
+    for ch in build.MONA_AMBIGUOUS:
+        if ord(ch) in vf_cmap:
+            check(metrics[vf_cmap[ord(ch)]][0] == build.CELL,
+                  f"{ch!r} is one cell")
+    check(metrics[tf.getGlyphOrder()[0]][0] == build.CELL, ".notdef is one cell")
+    check(hhea.advanceWidthMax == max(adv for adv, _ in metrics.values()),
+          f"hhea advanceWidthMax is the widest advance "
+          f"({hhea.advanceWidthMax} vs {max(adv for adv, _ in metrics.values())})")
     tags = {fr.FeatureTag for fr in tf["GSUB"].table.FeatureList.FeatureRecord}
     missing = [t for t in ("calt", "liga", "ss01", "ss08", "cv99",
                            "zero", "cv01", "ss11") if t not in tags]
@@ -325,7 +352,7 @@ def main():
     # 600u right above Regular passed this file and the whole suite,
     # rendering `!=` into the next column at Bold
     lean = build.CELL // 2
-    spill, centres = {}, {}
+    spill, centres, default_boxes = {}, {}, {}
     probes = sorted({axis.minValue, axis.defaultValue, axis.maxValue}
                     | set(master_locations(tf, axis))
                     | {i.coordinates["wght"] for i in instances
@@ -341,6 +368,8 @@ def main():
             gs[g].draw(pen)
             if pen.bounds is None:
                 continue
+            if w == axis.defaultValue:
+                default_boxes[g] = pen.bounds
             union = pen.bounds if union is None else tuple(
                 f(a, b) for f, a, b in zip((min, min, max, max), union, pen.bounds))
             right = metrics[g][0] - pen.bounds[2]
@@ -360,6 +389,12 @@ def main():
                      f"({ {k: (len(v), v[:2]) for k, v in spill.items()} })")
     off_centre = {w: round(m, 1) for w, m in centres.items()
                   if m is None or abs(m) > 25}
+    bearings = [(g, round(metrics[g][1]), round(box[0]))
+                for g, box in default_boxes.items()
+                if abs(metrics[g][1] - box[0]) >= 2]
+    check(not bearings, f"hmtx bearings are the outlines' xMin at the "
+                        f"default location ({len(bearings)} off, e.g. "
+                        f"{bearings[:3]})")
     check(not off_centre, f"the letters sit centred in the cell at every "
                           f"location (mean ink-centre offsets "
                           f"{ {w: None if m is None else round(m, 1) for w, m in centres.items()} }; "

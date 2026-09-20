@@ -22,8 +22,10 @@ from verifylib import (  # noqa: E402
     check_gdef_marks,
     check_heights,
     check_mark_class_closure,
+    check_mark_features,
     check_private,
     check_stat,
+    check_stray_marks,
     check_style_bits,
     check_tables,
     check_zones,
@@ -178,6 +180,8 @@ def main():
     check_accents_clear(shape, gs, order, cmap, check)
     check_heights(tf, check, gs, cmap)
     check_zones(tf, check, cmap)
+    check_mark_features(tf, check, shape, gs, order, cmap)
+    check_stray_marks(shape, gs, order, cmap, check, italic)
     on = {"calt": True, "liga": True}
     for text, want in CASES:
         if any(ord(c) > 0x2FFF for c in text):

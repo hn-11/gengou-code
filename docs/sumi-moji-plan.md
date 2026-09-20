@@ -64,7 +64,7 @@ SHCJ は上流から外れた。
   Nerd Fonts 本家の命名を優先して現状維持、要判断。
 - **`drop_features` は FeatureRecord を消すだけで、参照されなくなった
   Lookup を残す**。`kern` / `halt` / `palt` の Lookup が JP 各面に 36 KB
-  ぶん残っている（GPOS 46,272 → 9,874 bytes 相当。数値は Regular 実測で、
+  ぶん残っている（GPOS 46,320 → 9,874 bytes 相当。数値は Regular 実測で、
   ラウンド 38〜41 が移した mark / mkmk / ccmp ぶん両辺とも 4,564 bytes
   増えている）。索引の張り替えを伴うので、圧縮後の実利（30 面で
   0.2 MB 程度）と天秤にかけて未着手。
