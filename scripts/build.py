@@ -990,6 +990,13 @@ def import_scp_variants(base, scp, default_map, marks):
                     imported[dst, is_mark] = name
                     if is_mark:
                         marks.add(name)
+                    # the variant is a donor glyph of ours now, so a
+                    # later import can name it: SCP's ccmp composes the
+                    # ogonek onto cv04's serifed i, and without this the
+                    # rule has no glyph to fire on. Spacing first, as in
+                    # graft_halfwidth — the accent keeps its default
+                    if not is_mark or dst not in default_map:
+                        default_map[dst] = name
                 tag_maps.setdefault(tag, {})[default_map[src]] = imported[dst, is_mark]
     return tag_maps, tag_names
 
@@ -1074,8 +1081,13 @@ def _ccmp_remap(lookup, gmap, shift, gid):
                     cov.glyphs = sorted((gmap[g] for g in cov.glyphs
                                          if g in gmap), key=gid)
                     alive = alive and bool(cov.glyphs)
-            for rec in getattr(st, "SubstLookupRecord", None) or ():
+            recs = [rec for rec in getattr(st, "SubstLookupRecord", None) or ()
+                    if rec.LookupListIndex in shift]
+            for rec in recs:
                 rec.LookupListIndex = shift[rec.LookupListIndex]
+            st.SubstLookupRecord = recs
+            st.SubstCount = len(recs)
+            alive = alive and bool(recs)
         else:
             raise ValueError(f"ccmp: unsupported GSUB LookupType {kind}")
         if alive:
@@ -1169,12 +1181,29 @@ def import_scp_ccmp(base, scp, default_map, marks):
                 if src in gmap:
                     graft(dst, gmap[src] in marks)
 
+    # which lookups survive the copy, before they are numbered: a rule
+    # can name a glyph this donor does not have (the italic donor has no
+    # Greek), and a chain context whose only callee went with it is
+    # dead too, so the set has to settle before the indices are handed
+    # out. Nothing is expected to drop today, and a drop says so
+    live = list(order)
+    while True:
+        seen = {old: k for k, old in enumerate(live)}
+        kept = [old for old in live
+                if _ccmp_remap(copy.deepcopy(gsub.LookupList.Lookup[old]),
+                               gmap, seen, base.getGlyphID)]
+        if kept == live:
+            break
+        for old in live:
+            if old not in kept:
+                print(f"  warning: ccmp lookup {old} has no rule this face "
+                      f"can use, dropped")
+        live = kept
     first = len(ours.LookupList.Lookup)
-    shift = {old: first + k for k, old in enumerate(order)}
-    for old in order:
+    shift = {old: first + k for k, old in enumerate(live)}
+    for old in live:
         lookup = copy.deepcopy(gsub.LookupList.Lookup[old])
-        if not _ccmp_remap(lookup, gmap, shift, base.getGlyphID):
-            raise ValueError(f"ccmp: lookup {old} came over empty")
+        _ccmp_remap(lookup, gmap, shift, base.getGlyphID)
         ours.LookupList.Lookup.append(lookup)
     ours.LookupList.LookupCount = len(ours.LookupList.Lookup)
     for fr in records:
@@ -1919,6 +1948,7 @@ def tile_vertically(font):
     cff = font["CFF "].cff
     td = cff[cff.fontNames[0]]
     hmtx = font["hmtx"]
+    vmtx = font.get("vmtx")
     redrawn = {}
     for name in sorted(tiling_glyphs(font)):
         adv = hmtx.metrics[name][0]
@@ -1929,6 +1959,7 @@ def tile_vertically(font):
         if path.bounds is None:
             continue
         _, y0, _, y1 = path.bounds
+        origin = vmtx_origin(font, name) if vmtx is not None else 0
         down = y0 - band[1] if y0 <= em[1] + 2 else 0
         up = band[3] - y1 if y1 >= em[3] - 2 else 0
         # (x, y) -> (y, x): the top and bottom edges become the right
@@ -1945,9 +1976,17 @@ def tile_vertically(font):
             continue
         private = glyph_private(font, td, name)
         pen = T2CharStringPen(pen_width(private, adv), gs)
-        _xform_path(out, flip).draw(pen)
+        new = _xform_path(out, flip)
+        new.draw(pen)
         cs = redrawn[name] = pen.getCharString(private=private)
         hmtx.metrics[name] = (adv, charstring_lsb(cs))
+        # the vertical origin is a top side bearing plus the glyph's own
+        # yMax, so growing upward would move it 120 units unless the
+        # bearing gives those back — and VORG, which states the origin
+        # outright, would no longer agree with vmtx
+        if vmtx is not None and name in vmtx.metrics:
+            vadv, _ = vmtx.metrics[name]
+            vmtx.metrics[name] = (vadv, origin - new.bounds[3])
     for name, cs in redrawn.items():
         td.CharStrings[name] = cs
     note_redrawn(font, redrawn)
