@@ -93,12 +93,15 @@ jobs:
           python scripts/bump_pins.py > /tmp/summary.md
           cat /tmp/summary.md
 
-      # ... and it has release notes to publish. Only on a run that has
-      # something to sync: the fallback is a patch bump off the last tag,
-      # and nobody writes that section until the release is being
-      # prepared - demanding one on every weekly run would fail the sync
-      # before bump_pins.py had looked at an upstream at all.
-      - name: CHANGELOG.md has a section for the release this sync cuts
+      # ... and whether there are release notes to publish under it. This
+      # decides whether the run CUTS a release, and never whether it
+      # syncs: the fallback tag is a patch bump off the last one, and
+      # nobody writes that section until a release is being prepared, so
+      # failing here would leave the pins unbumped for a missing section
+      # that is missing by design. The PR still opens and says so; a
+      # human writes the notes and dispatches the release.
+      - name: Release notes for the tag this sync would cut
+        id: notes
         if: steps.refresh.outputs.changed == 'true'
         run: |
           next="${{ steps.version.outputs.next }}"
@@ -108,10 +111,12 @@ jobs:
             flag
           ' CHANGELOG.md | tr -d '[:space:]')
           if [ -z "$body" ]; then
-            echo "::error::CHANGELOG.md has no '## $next' section (with notes under it) for the release this sync would cut"
-            exit 1
+            echo "::warning::CHANGELOG.md has no '## $next' section; syncing the pins without cutting a release"
+            echo "have=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "release notes for $next found"
+            echo "have=true" >> "$GITHUB_OUTPUT"
           fi
-          echo "release notes for $next found"
 
       - name: Compose PR body
         if: steps.refresh.outputs.changed == 'true'
@@ -122,8 +127,14 @@ jobs:
             cat /tmp/summary.md
             echo
             echo "CI builds the Regular faces from these pins and runs the"
-            echo "shaping regression before this can merge; on merge this"
-            echo "workflow cuts \`${{ steps.version.outputs.next }}\`."
+            echo "shaping regression before this can merge."
+            if [ "${{ steps.notes.outputs.have }}" = true ]; then
+              echo "On merge this workflow cuts \`${{ steps.version.outputs.next }}\`."
+            else
+              echo "No release: \`CHANGELOG.md\` has no"
+              echo "\`## ${{ steps.version.outputs.next }}\` section. Write one and run the"
+              echo "Release workflow by hand when these pins should ship."
+            fi
             echo
             echo "If the new upstream degrades glyphs, close this PR - the"
             echo "pins stay where they are and the next weekly run reopens it."
@@ -213,7 +224,7 @@ jobs:
       # suppresses workflow triggers from the default token), so the release is
       # dispatched instead - release.yml creates the tag itself on dispatch.
       - name: Release
-        if: steps.pr.outputs.pull-request-number != ''
+        if: steps.pr.outputs.pull-request-number != '' && steps.notes.outputs.have == 'true'
         run: |
           gh workflow run release.yml --ref main -f tag="${{ steps.version.outputs.next }}"
           echo "dispatched release ${{ steps.version.outputs.next }}"

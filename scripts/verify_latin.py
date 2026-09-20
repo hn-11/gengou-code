@@ -17,12 +17,15 @@ import build_latin  # noqa: E402
 from verify import CASES  # noqa: E402
 from verifylib import (  # noqa: E402
     Checker,
+    check_accents_clear,
     check_coverage_order,
     check_gdef_marks,
+    check_heights,
     check_private,
     check_stat,
     check_style_bits,
     check_tables,
+    check_zones,
     glyph_has_hint,
     hmtx_mismatches,
     make_shaper,
@@ -169,6 +172,10 @@ def main():
           f"vs {head.yMax}/{-head.yMin})")
 
     shape = make_shaper(FONT)
+    gs, order = tf.getGlyphSet(), tf.getGlyphOrder()
+    check_accents_clear(shape, gs, order, cmap, check)
+    check_heights(tf, check, gs, cmap)
+    check_zones(tf, check, cmap)
     on = {"calt": True, "liga": True}
     for text, want in CASES:
         if any(ord(c) > 0x2FFF for c in text):

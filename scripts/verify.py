@@ -1352,8 +1352,13 @@ def main():
     # REPLACED hang off it too. Their mark lookups name Source Han Sans's
     # own U+0300/U+0301/U+0307/U+030C, which no codepoint reaches once
     # the graft has re-pointed the cmap, so nothing attached and the
-    # accent drew through the letter's strokes: 164 of the 188 pairs
-    # shared ink where Source Han Sans shares none. The two the graft
+    # accent drew through the letter's strokes: 139 of the 172 pairs
+    # shared ink where Source Han Sans shares none. 58 still do — the
+    # pairs Source Han Sans never anchored, where its own accent falls
+    # clear into the next cell and ours, drawn one cell left, falls over
+    # the letter. That is the graft's convention everywhere (日 and あ
+    # take an unanchored accent the same way) and not this fix's to
+    # change. The two the graft
     # left alone (U+02EA, U+02EB, above) always worked, which is why
     # this went unseen — they are the only two this file probed
     grafted, attaches = {}, 0
@@ -1366,12 +1371,21 @@ def main():
             continue
         attaches += positions[1].x_offset != 0
         # Source Han Sans shares no ink here; unattached, the accent
-        # drew straight through the letter's strokes
+        # drew straight through the letter's strokes. And WHERE it sits
+        # is bounded too: every one of these hangs about the letter's
+        # right shoulder — upstream's own centres are 6 to 326 units
+        # from that edge, U+0307's the furthest — so an anchor shifted a
+        # whole cell, which shares no ink either, is caught
         area = ink_overlap(base + mark)
-        if area > 1:
-            grafted[base + mark] = (positions[1].x_offset, round(area))
-    check(not grafted, f"an attached Bopomofo tone mark clears the letter "
-                       f"(shared ink: {grafted})")
+        boxes = placed(base + mark)
+        off = None if None in boxes else \
+            (boxes[1][0] + boxes[1][1]) / 2 - boxes[0][1]
+        if area > 1 or off is None or abs(off) > FULLWIDTH / 2:
+            grafted[base + mark] = (positions[1].x_offset, round(area),
+                                    off if off is None else round(off))
+    check(not grafted, f"an attached Bopomofo tone mark hangs off the "
+                       f"letter's right shoulder (x_offset, shared ink, "
+                       f"centre past the letter: {grafted})")
     check(attaches == 4, f"the grafted accents reach Source Han Sans's own "
                          f"Bopomofo mark lookups ({attaches} of 4 attach)")
 
@@ -1653,6 +1667,7 @@ def main():
         for ok, msg in nerdpatch.icon_checks(tf, nerdpatch.symbols_for_checks()):
             check(ok, msg)
 
+    print("FAILED" if check.failed else "all checks passed")
     sys.exit(check.exit_code())
 
 

@@ -57,6 +57,12 @@ class Checker:
         self.failed = False
 
     def __call__(self, ok, msg):
+        # None is "not checked": nerdpatch.icon_checks reports its
+        # symbols-font checks that way when NF_SYMBOLS is unset, where
+        # it used to report them as passing
+        if ok is None:
+            print(f"skip {msg}")
+            return None
         print(f"{'ok  ' if ok else 'FAIL'} {msg}")
         self.failed |= not ok
         return ok
@@ -466,3 +472,98 @@ def check_private(tf, check):
     check(not bad_int, f"CFF zone and stem values are whole units at the "
                        f"default location ({len(bad_int)} are not, e.g. "
                        f"{bad_int[:3]})")
+
+
+ACCENT_BASES = "bdfhklt"
+ACCENTS = "̀́̂̃̄̆̇̈̌̊"
+
+
+def check_accents_clear(shape, gs, order, cmap, check, label=""):
+    """An accent sits ON the letter, not through it.
+
+    Source Code Pro places its combining marks entirely in GPOS — an
+    ascender's top anchor is 229 units above an x-height letter's — so
+    every one of these pairs depends on a mark anchor being where the
+    donor put it. verify.py has asked this of the JP faces, which only
+    IMPORT that GPOS, since the graft first drew 58 of 84 pairs through
+    the stem. The Latin faces and the variable fonts, where the donor's
+    mark positioning lives natively and the two variable fonts are the
+    whole of SumiMoji.zip, asked nothing: zeroing all 414 base anchors
+    dropped every accent into the letter and both said "all checks
+    passed"."""
+    through, pairs = {}, 0
+    for base in ACCENT_BASES:
+        for mark in ACCENTS:
+            if ord(base) not in cmap or ord(mark) not in cmap:
+                continue
+            infos, positions = shape(base + mark, {})
+            if len(infos) != 2:
+                continue        # composed into one glyph: nothing to clear
+            boxes = []
+            for info, pos in zip(infos, positions):
+                pen = BoundsPen(gs)
+                gs[order[info.codepoint]].draw(pen)
+                boxes.append(None if pen.bounds is None else
+                             (pen.bounds[1] + pos.y_offset,
+                              pen.bounds[3] + pos.y_offset))
+            pairs += 1
+            if None in boxes or boxes[1][0] < boxes[0][1]:
+                through[base + mark] = (None if None in boxes else
+                                        (round(boxes[0][1]), round(boxes[1][0])))
+    check(not through, f"an accent clears the letter it sits on{label} "
+                       f"({pairs} pairs; through: {through})")
+
+
+def check_heights(tf, check, gs, cmap):
+    """OS/2's sxHeight, sCapHeight and xAvgCharWidth against the
+    outlines.
+
+    build.set_latin_heights exists so a 486/656 face does not carry
+    Source Han Sans's 543/733 — CSS font-size-adjust, and a terminal
+    sizing its icons to the cap height, are 12% out on the wrong
+    numbers. verify.py reads all three back on the JP faces; neither
+    Latin verifier did, and 543/733/1000 passed both."""
+    os2 = tf["OS/2"]
+    for ch, attr in (("x", "sxHeight"), ("H", "sCapHeight")):
+        if ord(ch) not in cmap:
+            continue
+        pen = BoundsPen(gs)
+        gs[cmap[ord(ch)]].draw(pen)
+        got = getattr(os2, attr, None)
+        check(pen.bounds is not None and got is not None
+              and abs(got - pen.bounds[3]) <= 1,
+              f"OS/2.{attr} is the top of {ch!r} ({got} vs "
+              f"{None if pen.bounds is None else round(pen.bounds[3])})")
+    widths = [w for w, _lsb in tf["hmtx"].metrics.values() if w]
+    want = round(sum(widths) / len(widths)) if widths else 0
+    check(abs(os2.xAvgCharWidth - want) <= 1,
+          f"OS/2.xAvgCharWidth is the mean non-zero advance "
+          f"({os2.xAvgCharWidth} vs {want})")
+
+
+def check_zones(tf, check, cmap):
+    """The alignment zones are THIS face's x-height and cap height.
+
+    latin_blue_zones / the donor's own zones are measured on the face's
+    outlines; Source Han Sans's 540/733 against an actual 486/656 snaps
+    every stem to the wrong place at small sizes. verify.py asks this of
+    the JP faces' Latin FontDict — the Latin faces and the variable
+    fonts, where those zones are produced, passed with Source Han Sans's
+    values planted in, and with every zone array emptied."""
+    tag = "CFF " if "CFF " in tf else "CFF2"
+    cff = tf[tag].cff
+    td = cff[cff.fontNames[0]]
+    fds = getattr(td, "FDArray", None)
+    if fds is None or ord("H") not in cmap:
+        return
+    private = fds[td.FDSelect[tf.getGlyphID(cmap[ord("H")])]].Private \
+        if getattr(td, "FDSelect", None) is not None else fds[0].Private
+    blues = _private_values(private, "BlueValues")
+    os2 = tf["OS/2"]
+    wanted = [os2.sxHeight, os2.sCapHeight]
+    near = [any(abs(b - v) <= 14 for b in blues) for v in wanted]
+    stems = _private_values(private, "StdHW")
+    check(all(near) and stems and stems[0],
+          f"the alignment zones are this face's (BlueValues {blues}, "
+          f"x-height {os2.sxHeight}, cap {os2.sCapHeight}, "
+          f"StdHW {stems[0] if stems else None})")

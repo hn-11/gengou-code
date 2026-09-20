@@ -171,3 +171,76 @@ def test_check_gdef_marks_wants_every_combining_mark_classed(capsys):
     check = verifylib.Checker()
     verifylib.check_gdef_marks(font, check, cmap)
     assert check.failed
+
+
+def test_checker_prints_a_skip_for_a_check_that_could_not_run(capsys):
+    """nerdpatch.icon_checks reports its symbols-font checks as "not
+    checked" when NF_SYMBOLS is unset; it used to report them as
+    passing, which read as six more ok lines than were earned."""
+    check = verifylib.Checker()
+    assert check(None, "not checked") is None
+    assert check.failed is False and check.exit_code() == 0
+    assert capsys.readouterr().out == "skip not checked\n"
+
+
+def test_private_values_takes_the_default_of_a_cff2_blend():
+    """A CFF2 Private entry is blended: [default, delta per region] for a
+    scalar, a list of those for an array. Only the default has to be a
+    whole unit — varLib works the deltas out from the masters with the
+    region scalars, so they come out fractional for a master at an
+    intermediate weight and are meant to."""
+    private = type("_P", (), {})()
+    private.BlueValues = [[-12, 0.5], [0, -0.25], [486, 2.05]]
+    private.StdHW = [67, -10.01, 48.3]
+    private.StemSnapH = [67, 85]           # a plain CFF array
+    private.StdVW = 85.0                   # a plain CFF scalar
+    assert verifylib._private_values(private, "BlueValues") == [-12, 0, 486]
+    assert verifylib._private_values(private, "StdHW") == [67]
+    assert verifylib._private_values(private, "StemSnapH") == [67, 85]
+    assert verifylib._private_values(private, "StdVW") == [85.0]
+    assert verifylib._private_values(private, "OtherBlues") == []
+
+
+def test_check_private_reads_order_and_whole_units(capsys):
+    fonts = []
+
+    class _FD:
+        def __init__(self, private):
+            self.Private = private
+
+    class _Top:
+        def __init__(self, fds):
+            self.FDArray = fds
+
+    def font_with(**private):
+        p = type("_P", (), {})()
+        for key, value in private.items():
+            setattr(p, key, value)
+        top = _Top([_FD(p)])
+        cff = type("_C", (), {"fontNames": ["T"],
+                              "__getitem__": lambda self, n: top})()
+        table = type("_T", (), {"cff": cff})()
+        fonts.append(table)
+        return {"CFF ": table}
+
+    ok = font_with(BlueValues=[-12, 0, 486, 490], StdHW=67)
+    check = verifylib.Checker()
+    verifylib.check_private(ok, check)
+    assert not check.failed
+
+    check = verifylib.Checker()
+    verifylib.check_private(font_with(BlueValues=[-12, 0, 490, 486]), check)
+    assert check.failed                    # a pair the wrong way round
+
+    check = verifylib.Checker()
+    verifylib.check_private(font_with(BlueValues=[-12, 0, 486]), check)
+    assert check.failed                    # an odd number of edges
+
+    check = verifylib.Checker()
+    verifylib.check_private(font_with(BlueValues=[-12, 0], StdHW=67.34), check)
+    assert check.failed                    # a fractional stem width
+
+    check = verifylib.Checker()
+    verifylib.check_private(font_with(BlueValues=[-12, 0, 486, 733.9999999]),
+                            check)
+    assert check.failed                    # the blues eight faces shipped

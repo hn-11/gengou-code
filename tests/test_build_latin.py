@@ -292,3 +292,25 @@ def test_cell_is_scp_cell():
 
 def test_mona_k_scales_from_scp_cell_to_monaspace_cell():
     assert build_latin.MONA_K == 600 / build.MONA_CELL
+
+
+def test_fix_zone_order_rounds_the_zones_and_stems():
+    """Instancing a CFF2 blends each zone edge on its own, and the build
+    sorted them but never rounded them: eight of the ten static faces
+    shipped blues like 733.9999999 and StdHW 115.33964. The spec stores
+    these as integer deltas and a reader that truncates takes them a
+    unit low, under the overshoot the zone is there to suppress."""
+    private = SimpleNamespace(
+        BlueValues=[-12.0, 0.4, 496.1008301, 582.0000001000001,
+                    671.9999999, 733.9999999],
+        OtherBlues=[-222.0, -196.076874],
+        StdHW=115.33964, StdVW=147.76939,
+        StemSnapH=[67.4, 115.33964], BlueScale=0.0375)
+    font = _zone_font(private)
+
+    build_latin.fix_zone_order(font)
+    assert private.BlueValues == [-12, 0, 496, 582, 672, 734]
+    assert private.OtherBlues == [-222, -196]
+    assert (private.StdHW, private.StdVW) == (115, 148)
+    assert private.StemSnapH == [67, 115]
+    assert private.BlueScale == 0.0375     # the one real number, untouched

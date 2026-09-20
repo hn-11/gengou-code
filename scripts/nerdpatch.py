@@ -479,28 +479,34 @@ def icon_checks(font, symbols=None):
             return "not checked, no NF_SYMBOLS"
         return f"{len(bad)}: {bad[:6]}" if bad else "0"
 
+    def held(ok):
+        """None — "not checked" — where the answer needed the symbols
+        font and it was not there; the Checker prints those as skips
+        instead of passes."""
+        return None if sgs is None else ok
+
     gap = None if want is None else sorted(want - set(cmap))
     missing = ("not checked, no NF_SYMBOLS" if gap is None
                else f"{len(gap)} missing: {[hex(c) for c in gap[:8]]}")
     return [
-        (not gap,
+        (held(not gap),
          f"every codepoint the symbols font has is in the face "
          f"({len(seen)} of them drawn against the line box, {missing})"),
         (not blank, f"every line-box glyph in the face draws ink "
                     f"(blank: {blank})"),
-        (not misplaced, f"every grafted glyph is where icon_transform puts "
+        (held(not misplaced), f"every grafted glyph is where icon_transform puts "
                         f"it ({few(misplaced)})"),
-        (not wide, f"every icon is one cell wide — a Nerd Font MONO "
+        (held(not wide), f"every icon is one cell wide — a Nerd Font MONO "
                    f"(off: {few(wide)})"),
-        (not hollow, f"every icon the symbols font draws draws in the face "
+        (held(not hollow), f"every icon the symbols font draws draws in the face "
                      f"(blank: {few(hollow)})"),
-        (not over, f"every icon fits the cell and the line "
+        (held(not over), f"every icon fits the cell and the line "
                    f"(over: {few(over)})"),
         (not short, f"every stretched glyph tiles the cell and the line "
                     f"({len(seen)} line-box glyphs, off: {short})"),
         (not spill, f"every other line-box glyph sits inside the cell "
                     f"(off: {spill})"),
-        (not skew, f"every other line-box glyph keeps Nerd Fonts' aspect "
+        (held(not skew), f"every other line-box glyph keeps Nerd Fonts' aspect "
                    f"({'not checked, no NF_SYMBOLS' if sgs is None else f'off: {skew}'})"),
     ]
 

@@ -345,7 +345,11 @@ def _grafted(monkeypatch):
 def test_icon_checks_passes_a_good_graft(monkeypatch):
     face, symbols = _grafted(monkeypatch)
     assert all(ok for ok, _ in nerdpatch.icon_checks(face, symbols))
-    assert all(ok for ok, _ in nerdpatch.icon_checks(face))     # no NF_SYMBOLS
+    # no NF_SYMBOLS: nothing failed, and the six that needed the symbols
+    # font say so with None — the Checker prints those as skips
+    without = list(nerdpatch.icon_checks(face))
+    assert not any(ok is False for ok, _ in without)
+    assert sum(ok is None for ok, _ in without) == 6
 
 
 def test_icon_checks_faults_a_powerline_glyph_with_no_ink(monkeypatch):
@@ -417,5 +421,6 @@ def test_icon_checks_faults_an_icon_that_never_reached_the_face(monkeypatch):
     for table in face["cmap"].tables:
         table.cmap.pop(0xF0001, None)
     assert _checks(face, symbols)["every codepoint the symbols font has is in the face"] is False
-    # and with no symbols font at hand there is nothing to compare against
-    assert _checks(face)["every codepoint the symbols font has is in the face"] is True
+    # and with no symbols font at hand there is nothing to compare
+    # against: "not checked", not a pass
+    assert _checks(face)["every codepoint the symbols font has is in the face"] is None
