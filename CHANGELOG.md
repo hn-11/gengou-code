@@ -125,68 +125,22 @@
     そのまま載せる。`verify.py` は幅の方針・`fwid`・行間・Source Code Pro
     との `=` バー一致・和文との太さ対応を検査する
 
-## v4.0.0
 
-最後に公開したのは v3.2.0 で、v3.3.0 として書いた下の変更もこのリリースで
-初めて出る。
+### v4.0.0 公開後の自己レビューで見つけて直した不具合
 
-- ファミリー名を Shoyu Code Pro JP から **Sumi Moji JP** に改名
-  （PostScript 名 `SumiMojiJP*`、NF は `Sumi Moji JP NF` など、
-  ベンダー ID `SUMI`、環境変数 `SHOYU_*` → `SUMI_*`、リリース資産
-  `SumiMojiJP.zip` / `SumiMojiJP-NerdFont.zip`）。
-  欧文のみの Sumi Moji は仮称を外して正式名に。旧名の面とはファミリー名
-  が違うので共存する（置き換えるなら旧版をアンインストール）
-- `SumiMoji.zip` は可変フォント 2 面だけに。静的 12 面は JP 面のドナー・
-  NF パッチの入力・可変フォントの検証用に組むが配布しない
-  （`SumiMoji-NerdFont.zip` は静的面へのパッチのまま）
-- TTC を全部廃止（`SumiMojiJP*.ttc` / `SumiMoji.ttc`、`makeotc.py` ごと）。
-  リリースの単位を利用の単位（インストールする OTF）に揃える。中身は
-  zip の 12 面と同じで、サイズも 3% しか違わなかった
-- zip はファミリーごとに（`SumiMojiJP.zip` / `SumiMojiJP35.zip` /
-  `SumiMojiJPTerm.zip` と、その `-NerdFont.zip`）。1 回のダウンロードが
-  146 MB（NF は 201 MB）から 3 分の 1 になる。1 面のサイズは Source Han
-  Sans JP の面（4.6 MB）が床で、JP 面 4.7 MB はそこに着いている
-- NF 面は font-patcher のあと cffsubr でサブルーチン化し直す（FontForge
-  の書き出しで CFF のサブルーチンが減り、アイコン 1 万個の flat な
-  charstring も含めて膨らんでいた。JP Regular の NF 面 7.77 → 6.91 MB、
-  1 面 10 秒）
-- セルフレビューで見つけた不具合の修正:
-  - JP 各面の合字グリフ（61 種 + cv99 の 2 種）の CFF charstring 幅が
-    hmtx の送り幅と 510u ずれていた（記号用 FD の nominalWidthX で符号化
-    した後に `add_latin_fd` が A の FD 複製へ移していたため。描画は hmtx を
-    読むので見た目には出ないが、CFF を読む処理には誤った幅が見えていた）。
-    `latin_ligatures` も他の追加処理と同じ A の FD で追加するようにし、
-    `verify.py` が全グリフの CFF 幅と hmtx の一致を検査する
-  - 600 セルの 35 / Term ファミリーで半角記号 ￨￩￪￫￬￭￮（U+FFE8〜FFEE）の
-    送り幅が 500 のままだった（`HALFWIDTH_FORMS` が U+FFDC で止まって
-    いた）。East Asian Width "H" の 2 範囲を対象にし、`verify.py` が
-    U+FFE9 を検査する
-  - `nerdpatch.py`（と当時の `makeotc.py`）の `SumiMoji-*.otf` 探索が VF の
-    `SumiMoji-Italic[wght].otf` も拾い、Nerd Fonts パッチが CFF2 の VF を
-    受け取る状態だった。静的面だけを列挙する `verifylib.static_faces` に
-    置き換え
-  - Sumi Moji VF: `head` の外接矩形と `hhea` の広がり（xMaxExtent・両側の
-    最小サイドベアリング）が既定マスター（Regular）だけの値だったのを、
-    各マスターのアウトラインから測った和にした（保存時の再計算は既定
-    インスタンスしか見ないので切る）。`verify_latin_vf.py` は軸の両端と
-    既定のインスタンスを丸めなしで描き、外接矩形と hhea の 3 値を
-    突き合わせる。GSUB の FeatureParams を付け替えた
-    後に元の name レコード（Upright で 73 件）が参照されないまま残って
-    いたのと、SCP 由来の STAT / fvar の文字列 5 件を削除（`prune_orphan_names`、
-    静的面にも適用）。
-    `harmonize_win_metrics` は実行した面だけでなく出力ディレクトリ内の
-    ファミリー全面を対象にする（CI は Regular と Light Italic を別ステップ
-    で組む）。SCP VF のマスター位置の読み取りを wght 軸に限定
-  - `requirements.txt` の fontTools 下限を 4.52.4 に（`cffLib.CFF2ToCFF` と
-    `instantiateCFF2(round=)` を使うため。4.50 では import で落ちる）
-  - 結合文字の異体（cv11: U+0306 のキリル文字用ブレーヴェ）が送り幅 1 セルの
-    グリフとして取り込まれていたため、cv11 を有効にするとアクセントが
-    1 セル分の幅を取っていた。既定の結合文字と同じ 0 幅・1 セル左寄せで
-    取り込み、GDEF でもマークに分類する。`verify.py` が cv11 の前後で
-    U+0306 の送り幅 0 を検査する
-  - `_shcj_ref` がプール内で `sys.exit` していたのを例外に（他の面の
-    失敗と一緒に報告される）。`verify_latin_vf.py` は wght 軸が無い
-    フォントで FAIL を出して終了する
+上流と突き合わせて測りながら 51 ラウンド回した記録。主だったものは
+以下で、`verify.py` / `verify_latin.py` / `verify_latin_vf.py` には
+それぞれ再発を捕まえる検査が入っている（どれもわざと壊した面で
+落ちることを確認済み）。
+
+- Term の Medium 以上で、全角の結合記号が半分以上 1000 のセルに
+  取り残されていた（5 ウェイト中 3 つ。ビルドも止まっていた）
+- 注音符号の声調記号が全 JP 面で字の画に重なっていた（172 組中 139 組）
+- Term で多セルの合字の後ろの全角結合記号が 100u ずれていた（488 組）
+- Term の Nerd Fonts 版で、1 万 402 個のアイコンの後ろが同じく 100u ずれ
+- 欧文イタリックで U+0310 の後ろの結合記号 23 個が土台に付かなくなっていた
+- 欧文静的 10 面のうち 8 面が CFF の整列ゾーンを非整数で出荷していた
+
   - **`>>>=` が `>` `>` `≥` になっていた**（JavaScript の符号なし右シフト
     代入）。合字ガードは「合字より長い演算子の連なりは素のまま」を守る
     もので、後ろに伸ばした形自体が合字なら（`>=` の前の `>` は `>>=` に
@@ -346,7 +300,8 @@
     宣言値）、Monaspace の範囲を「合字のみ」から「合字・単独 ASCII 記号・
     そこから切り出した全角矢印」に。README と `verify.py` の斜体全角
     14 字の実測値も直した（送り幅 755〜1005、最重量のインク 672〜972。
-    同じ数値が CHANGELOG の v5.0.0 本文にも残っていた）。README の
+    この範囲はのちのラウンドでギリシャ・キリル全体として測り直しており、
+    README にはそちらの基準ウェイト 285〜1005 が載っている）。README の
     Nerd Fonts 節が「同じ相対寸法」と書いていたのを実際（同じ記号集合・
     同じ 1 セル送り。寸法差は `docs/sumi-moji-plan.md`）に、`^pa` の行を
     「行の全高いっぱい」から「セル幅と行の全高のうち先に当たるほう」に、
@@ -806,6 +761,69 @@
     ビルドの前に節の中身（見出しだけでなく本文）を見る。
     package ジョブは `harmonize_latin.py` が書き換えた 20 面すべてを
     検査し直す（従来は 2 面だけだった）
+
+## v4.0.0
+
+最後に公開したのは v3.2.0 で、v3.3.0 として書いた下の変更もこのリリースで
+初めて出る。
+
+- ファミリー名を Shoyu Code Pro JP から **Sumi Moji JP** に改名
+  （PostScript 名 `SumiMojiJP*`、NF は `Sumi Moji JP NF` など、
+  ベンダー ID `SUMI`、環境変数 `SHOYU_*` → `SUMI_*`、リリース資産
+  `SumiMojiJP.zip` / `SumiMojiJP-NerdFont.zip`）。
+  欧文のみの Sumi Moji は仮称を外して正式名に。旧名の面とはファミリー名
+  が違うので共存する（置き換えるなら旧版をアンインストール）
+- `SumiMoji.zip` は可変フォント 2 面だけに。静的 12 面は JP 面のドナー・
+  NF パッチの入力・可変フォントの検証用に組むが配布しない
+  （`SumiMoji-NerdFont.zip` は静的面へのパッチのまま）
+- TTC を全部廃止（`SumiMojiJP*.ttc` / `SumiMoji.ttc`、`makeotc.py` ごと）。
+  リリースの単位を利用の単位（インストールする OTF）に揃える。中身は
+  zip の 12 面と同じで、サイズも 3% しか違わなかった
+- zip はファミリーごとに（`SumiMojiJP.zip` / `SumiMojiJP35.zip` /
+  `SumiMojiJPTerm.zip` と、その `-NerdFont.zip`）。1 回のダウンロードが
+  146 MB（NF は 201 MB）から 3 分の 1 になる。1 面のサイズは Source Han
+  Sans JP の面（4.6 MB）が床で、JP 面 4.7 MB はそこに着いている
+- NF 面は font-patcher のあと cffsubr でサブルーチン化し直す（FontForge
+  の書き出しで CFF のサブルーチンが減り、アイコン 1 万個の flat な
+  charstring も含めて膨らんでいた。JP Regular の NF 面 7.77 → 6.91 MB、
+  1 面 10 秒）
+- セルフレビューで見つけた不具合の修正:
+  - JP 各面の合字グリフ（61 種 + cv99 の 2 種）の CFF charstring 幅が
+    hmtx の送り幅と 510u ずれていた（記号用 FD の nominalWidthX で符号化
+    した後に `add_latin_fd` が A の FD 複製へ移していたため。描画は hmtx を
+    読むので見た目には出ないが、CFF を読む処理には誤った幅が見えていた）。
+    `latin_ligatures` も他の追加処理と同じ A の FD で追加するようにし、
+    `verify.py` が全グリフの CFF 幅と hmtx の一致を検査する
+  - 600 セルの 35 / Term ファミリーで半角記号 ￨￩￪￫￬￭￮（U+FFE8〜FFEE）の
+    送り幅が 500 のままだった（`HALFWIDTH_FORMS` が U+FFDC で止まって
+    いた）。East Asian Width "H" の 2 範囲を対象にし、`verify.py` が
+    U+FFE9 を検査する
+  - `nerdpatch.py`（と当時の `makeotc.py`）の `SumiMoji-*.otf` 探索が VF の
+    `SumiMoji-Italic[wght].otf` も拾い、Nerd Fonts パッチが CFF2 の VF を
+    受け取る状態だった。静的面だけを列挙する `verifylib.static_faces` に
+    置き換え
+  - Sumi Moji VF: `head` の外接矩形と `hhea` の広がり（xMaxExtent・両側の
+    最小サイドベアリング）が既定マスター（Regular）だけの値だったのを、
+    各マスターのアウトラインから測った和にした（保存時の再計算は既定
+    インスタンスしか見ないので切る）。`verify_latin_vf.py` は軸の両端と
+    既定のインスタンスを丸めなしで描き、外接矩形と hhea の 3 値を
+    突き合わせる。GSUB の FeatureParams を付け替えた
+    後に元の name レコード（Upright で 73 件）が参照されないまま残って
+    いたのと、SCP 由来の STAT / fvar の文字列 5 件を削除（`prune_orphan_names`、
+    静的面にも適用）。
+    `harmonize_win_metrics` は実行した面だけでなく出力ディレクトリ内の
+    ファミリー全面を対象にする（CI は Regular と Light Italic を別ステップ
+    で組む）。SCP VF のマスター位置の読み取りを wght 軸に限定
+  - `requirements.txt` の fontTools 下限を 4.52.4 に（`cffLib.CFF2ToCFF` と
+    `instantiateCFF2(round=)` を使うため。4.50 では import で落ちる）
+  - 結合文字の異体（cv11: U+0306 のキリル文字用ブレーヴェ）が送り幅 1 セルの
+    グリフとして取り込まれていたため、cv11 を有効にするとアクセントが
+    1 セル分の幅を取っていた。既定の結合文字と同じ 0 幅・1 セル左寄せで
+    取り込み、GDEF でもマークに分類する。`verify.py` が cv11 の前後で
+    U+0306 の送り幅 0 を検査する
+  - `_shcj_ref` がプール内で `sys.exit` していたのを例外に（他の面の
+    失敗と一緒に報告される）。`verify_latin_vf.py` は wght 軸が無い
+    フォントで FAIL を出して終了する
 - ビルド時間の短縮: Term の全角グリフ約1.7万個は描き直さず charstring の
   中で右へ動かす（`shift_charstring`——先頭の vstem 座標と最初の moveto
   だけを動かし、幅オペランドを付け替える）ので、Source Han Sans 自身の

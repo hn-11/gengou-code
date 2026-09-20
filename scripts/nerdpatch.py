@@ -67,7 +67,8 @@ a box taller than it is wide, 600 x 856 for these faces. Grafting from
 Symbols Nerd Font Mono cannot reproduce that, because the symbols font
 was itself fitted into a square 2048 x 2048 cell and the scale groups
 that hold sets of icons at one size are baked into it: 3,496 of the
-10,369 icons here are taller than they are wide, and each of those is
+10,363 icons that keep the square cell (the separators and the progress
+bars are stretched instead) are taller than they are wide, and each is
 up to 1.43x smaller than an official patch would draw it (a group with
 font-patcher's own vertical padding, U+2770 among them, up to 2.1x).
 Re-fitting each icon on its own would break those groups, so the icons

@@ -35,9 +35,10 @@ def run(path):
 
 def main():
     # a literal path is a named face and must be there; only a pattern is
-    # allowed to sweep up nothing. The release job names one Nerd Fonts
-    # face explicitly — its ONLY check of a patched face — and a silently
-    # dropped argument reported that as a full pass
+    # allowed to sweep up nothing. A caller that names a face means that
+    # face verified, and a silently dropped argument reported a missing
+    # one as a full pass — which is how the release job, then naming a
+    # single Nerd Fonts face, could have checked no patched face at all
     missing = [a for a in sys.argv[1:]
                if not glob.has_magic(a) and not Path(a).exists()]
     if missing:
