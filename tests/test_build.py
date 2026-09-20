@@ -1777,58 +1777,88 @@ def _vtiling_font():
     """A face shaped like the built ones where tile_vertically reads it:
     each tiling character has a one-cell default that already spans the
     line (-400..1000, as the Latin donor draws it) and a full-width form
-    under fwid drawn to Source Han Sans's 1000-unit em (-120..880) —
-    plus a character with no full-width form at all, which must not be
-    touched."""
+    under fwid drawn to Source Han Sans's 1000-unit em (-120..880).
+    Everything the pass has to tell apart is here: a rule, a rule whose
+    ink stops short, a diagonal, a dashed vertical, an upper block, a
+    lower block, the full block, a shade, and a character inside the
+    blocks with no full-width form at all."""
     shapes = {
-        ".notdef": [(0, 0), (1, 0), (1, 1)],
-        # one-cell defaults: the vertical rule, the full block, an eighth
-        "vrule1": [(280, -400), (320, -400), (320, 1000), (280, 1000)],
-        "block1": [(0, -400), (600, -400), (600, 1000), (0, 1000)],
-        "eighth1": [(0, -400), (600, -400), (600, -225), (0, -225)],
-        # their full-width forms, in the 1000-unit em
-        "vruleF": [(480, -120), (520, -120), (520, 880), (480, 880)],
-        "blockF": [(0, -120), (1000, -120), (1000, 880), (0, 880)],
-        "eighthF": [(0, -120), (1000, -120), (1000, 5), (0, 5)],
-        # a full-width low line: no one-cell form, a 41-unit rule that
-        # tiles sideways only
-        "lowline": [(0, -120), (1000, -120), (1000, -79), (0, -79)],
+        ".notdef": [[(0, 0), (1, 0), (1, 1)]],
+        # one-cell defaults, all spanning the line
+        "vrule1": [[(280, -400), (320, -400), (320, 1000), (280, 1000)]],
+        "block1": [[(0, -400), (600, -400), (600, 1000), (0, 1000)]],
+        "eighth1": [[(0, -400), (600, -400), (600, -225), (0, -225)]],
+        "upper1": [[(0, 300), (600, 300), (600, 1000), (0, 1000)]],
+        "dash1": [[(280, -400), (320, -400), (320, 1000), (280, 1000)]],
+        "diag1": [[(0, -400), (120, -400), (600, 1000), (480, 1000)]],
+        "shade1": [[(0, -400), (600, -400), (600, -300), (0, -300)]],
+        "hrule1": [[(0, 180), (600, 180), (600, 220), (0, 220)]],
+        # full width already: its "full-width form" under fwid is
+        # itself, so there is no one-cell drawing for it to match
+        "heavy1": [[(460, -120), (540, -120), (540, 880), (460, 880)]],
+        # full-width forms, in the 1000-unit em
+        "vruleF": [[(480, -120), (520, -120), (520, 880), (480, 880)]],
+        "blockF": [[(0, -120), (1000, -120), (1000, 880), (0, 880)]],
+        "eighthF": [[(0, -120), (1000, -120), (1000, 5), (0, 5)]],
+        "upperF": [[(0, 380), (1000, 380), (1000, 880), (0, 880)]],
+        # three dashes, stopping 56 units short of the em at either end
+        "dashF": [[(480, -64), (520, -64), (520, 216), (480, 216)],
+                  [(480, 296), (520, 296), (520, 464), (480, 464)],
+                  [(480, 544), (520, 544), (520, 824), (480, 824)]],
+        "diagF": [[(0, -120), (200, -120), (1000, 880), (800, 880)]],
+        "shadeF": [[(0, -120), (1000, -120), (1000, -20), (0, -20)]],
+        "hruleF": [[(0, 360), (1000, 360), (1000, 400), (0, 400)]],
     }
-    order = [".notdef", "vrule1", "block1", "eighth1", "vruleF", "blockF",
-             "eighthF", "lowline"]
+    order = list(shapes)
     charstrings = {}
-    for g in order:
+    for g, contours in shapes.items():
         pen = T2CharStringPen(0, None)
-        pen.moveTo(shapes[g][0])
-        for pt in shapes[g][1:]:
-            pen.lineTo(pt)
-        pen.closePath()
+        for points in contours:
+            pen.moveTo(points[0])
+            for pt in points[1:]:
+                pen.lineTo(pt)
+            pen.closePath()
         charstrings[g] = pen.getCharString()
     fb = FontBuilder(1000, isTTF=False)
     fb.setupGlyphOrder(order)
     fb.setupCharacterMap({0x2502: "vrule1", 0x2588: "block1",
-                          0x2581: "eighth1", 0xFF3F: "lowline"})
+                          0x2581: "eighth1", 0x2580: "upper1",
+                          0x2506: "dash1", 0x2571: "diag1",
+                          0x2592: "shade1", 0x2500: "hrule1",
+                          0x2503: "heavy1"})
     fb.setupCFF("T", {}, charstrings, {})
-    fb.setupHorizontalMetrics({
-        ".notdef": (0, 0), "vrule1": (600, 280), "block1": (600, 0),
-        "eighth1": (600, 0), "vruleF": (1000, 480), "blockF": (1000, 0),
-        "eighthF": (1000, 0), "lowline": (1000, 0)})
+    metrics = {".notdef": (0, 0)}
+    for g in order[1:]:
+        wide = g.endswith("F") or g == "heavy1"
+        box = min(pt[0] for c in shapes[g] for pt in c)
+        metrics[g] = (1000 if wide else 600, box)
+    fb.setupHorizontalMetrics(metrics)
     fb.setupHorizontalHeader(ascent=984, descent=-273)
     fb.setupNameTable({"familyName": "T", "styleName": "R"})
     fb.setupOS2()
     fb.setupPost()
-    fb.addOpenTypeFeatures(
-        "feature fwid {\n"
-        "  sub vrule1 by vruleF;\n"
-        "  sub block1 by blockF;\n"
-        "  sub eighth1 by eighthF;\n"
-        "} fwid;\n")
+    fb.addOpenTypeFeatures("feature fwid {\n" + "".join(
+        f"  sub {one} by {one[:-1]}F;\n"
+        for one in ("vrule1", "block1", "eighth1", "upper1", "dash1",
+                    "diag1", "shade1", "hrule1")) + "} fwid;\n")
     font = fb.font
+    # a character whose full-width form is the glyph itself: feaLib will
+    # not write `sub X by X`, so it goes straight into the table
+    gsub = font["GSUB"].table
+    for fr in gsub.FeatureList.FeatureRecord:
+        if fr.FeatureTag == "fwid":
+            for li in fr.Feature.LookupListIndex:
+                gsub.LookupList.Lookup[li].SubTable[0].mapping["heavy1"] = "heavy1"
     font["vmtx"] = newTable("vmtx")
     # origin = top side bearing + yMax: 120 + 880 for every full width
-    font["vmtx"].metrics = {g: (1000, 120 if g.endswith("F") else 0)
-                            for g in order}
+    font["vmtx"].metrics = {g: (1000, 120 if g.endswith("F") or g == "heavy1"
+                                else 0) for g in order}
     return font
+
+
+def _band(font, name):
+    box = build._bounds(font.getGlyphSet(), name)
+    return (round(box[1]), round(box[3]))
 
 
 def test_tile_vertically_extrudes_a_rule_and_scales_a_block():
@@ -1839,29 +1869,55 @@ def test_tile_vertically_extrudes_a_rule_and_scales_a_block():
     onto the band instead, so an eighth block stays an eighth of the
     line rather than gaining the same units as the full block."""
     font = _vtiling_font()
-    assert build.tile_vertically(font) == 3
+    assert build.tile_vertically(font) == 6
     gs = font.getGlyphSet()
-    rule = build._bounds(gs, "vruleF")
-    assert (round(rule[1]), round(rule[3])) == (-400, 1000)
-    assert round(rule[2] - rule[0]) == 40          # the stem did not fatten
-    assert [round(v) for v in build._bounds(gs, "blockF")[1::2]] == [-400, 1000]
-    eighth = build._bounds(gs, "eighthF")
-    assert (round(eighth[1]), round(eighth[3])) == (-400, -225)
-    assert round(eighth[3] - eighth[1]) == round((1000 + 400) / 8)
+    assert _band(font, "vruleF") == (-400, 1000)
+    assert round(build._bounds(gs, "vruleF")[2]
+                 - build._bounds(gs, "vruleF")[0]) == 40   # no fattening
+    assert _band(font, "blockF") == (-400, 1000)
+    assert _band(font, "eighthF") == (-400, -225)          # an eighth, at the floor
+    assert _band(font, "upperF") == (300, 1000)            # a half, at the ceiling
     # the origin is a bearing plus the glyph's own yMax, so the bearing
     # has to give back what the ink gained above it
     assert build.vmtx_origin(font, "blockF") == 1000
     assert font["vmtx"].metrics["blockF"][1] == 0
 
 
-def test_tile_vertically_leaves_a_character_with_no_one_cell_form():
-    """＿ and ￣ are full width in the default too: there is no one-cell
-    form for theirs to match, and extruding the 41-unit rule turned it
-    into a 320-unit slab."""
+def test_tile_vertically_scales_a_dashed_rule_whose_ink_stops_short():
+    """A dashed vertical never reaches the edge of its em, so extruding
+    would skip it and a column of them would break at every line; it is
+    in the scale class, and the pattern grows with the glyph."""
     font = _vtiling_font()
     build.tile_vertically(font)
-    low = build._bounds(font.getGlyphSet(), "lowline")
-    assert (round(low[1]), round(low[3])) == (-120, -79)
+    assert _band(font, "dashF") == (-322, 922)     # -400 + (y + 120) * 1.4
+
+
+def test_tile_vertically_leaves_a_short_rule_and_a_diagonal():
+    """The two guards on the extrusion: ─'s ink stops well inside its
+    em, so there is nothing at the edge to extrude, and ╱ reaches both
+    edges but presents a slant rather than a rule there."""
+    font = _vtiling_font()
+    build.tile_vertically(font)
+    assert _band(font, "hruleF") == (360, 400)
+    assert _band(font, "diagF") == (-120, 880)
+
+
+def test_tile_vertically_tiles_a_shade_instead_of_stretching_it():
+    """A shade's dots would come out ovals under a 40% stretch, so the
+    pattern is repeated a whole em up and down and cut to the band."""
+    font = _vtiling_font()
+    build.tile_vertically(font)
+    assert _band(font, "shadeF") == (-120, 980)
+
+
+def test_tile_vertically_leaves_a_character_with_no_full_width_form():
+    """The pass reads the full-width forms a fwid substitution reaches:
+    a character whose only glyph is its default is not drawn to stack,
+    and extruding it would redraw the character."""
+    font = _vtiling_font()
+    build.tile_vertically(font)
+    assert _band(font, "heavy1") == (-120, 880)
+    assert "heavy1" not in build.vtiling_glyphs(font)
 
 
 def test_tile_vertically_needs_the_block_and_its_full_width_form():
@@ -1940,3 +1996,50 @@ def test_ccmp_remap_drops_a_context_whose_callee_did_not_survive():
     st.SubstCount = 1
     lookup = _lookup(6, st)
     assert not build._ccmp_remap(lookup, {"a": "za"}, {}, {"za": 1}.get)
+
+
+def test_insert_lookups_first_renumbers_everything_that_points_at_one():
+    """ccmp has to run before the features that change a letter, and a
+    shaper runs a stage's lookups in LookupList order whatever order the
+    features name them — so the copies go in front, and every index
+    already in the table moves up: the features' own lists and the
+    nested ones a chain context calls."""
+    st = otTables.ChainContextSubst()
+    st.Format = 3
+    st.BacktrackCoverage = []
+    st.InputCoverage = [_coverage(["a"])]
+    st.LookAheadCoverage = []
+    rec = otTables.SubstLookupRecord()
+    rec.SequenceIndex, rec.LookupListIndex = 0, 1
+    st.SubstLookupRecord = [rec]
+    st.SubstCount = 1
+    single = otTables.SingleSubst()
+    single.mapping = {"a": "b"}
+    table = otTables.GSUB()
+    table.LookupList = otTables.LookupList()
+    table.LookupList.Lookup = [_lookup(6, st), _lookup(1, single)]
+    table.FeatureList = otTables.FeatureList()
+    fr = otTables.FeatureRecord()
+    fr.FeatureTag = "cv04"
+    fr.Feature = otTables.Feature()
+    fr.Feature.LookupListIndex = [0, 1]
+    table.FeatureList.FeatureRecord = [fr]
+
+    ours = _lookup(1, otTables.SingleSubst())
+    ours.SubTable[0].mapping = {"i": "dotlessi"}
+    build._insert_lookups_first(table, [ours])
+
+    assert table.LookupList.Lookup[0] is ours
+    assert table.LookupList.LookupCount == 3
+    assert fr.Feature.LookupListIndex == [1, 2]
+    assert table.LookupList.Lookup[1].SubTable[0].SubstLookupRecord[0].LookupListIndex == 2
+
+
+def test_insert_lookups_first_on_nothing_changes_nothing():
+    table = otTables.GSUB()
+    table.LookupList = otTables.LookupList()
+    table.LookupList.Lookup = [_lookup(1, otTables.SingleSubst())]
+    table.FeatureList = otTables.FeatureList()
+    table.FeatureList.FeatureRecord = []
+    build._insert_lookups_first(table, [])
+    assert len(table.LookupList.Lookup) == 1

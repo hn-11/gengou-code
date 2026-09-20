@@ -1103,6 +1103,46 @@ def _ccmp_remap(lookup, gmap, shift, gid):
     return bool(keep)
 
 
+def _renumber_lookups(obj, by, seen=None):
+    """Add `by` to every nested lookup index under `obj`: a contextual
+    lookup names the lookup it calls by its index in the LookupList, in
+    a SubstLookupRecord that can sit under a rule set, a class set or
+    the subtable itself."""
+    if seen is None:
+        seen = set()
+    if id(obj) in seen:
+        return
+    seen.add(id(obj))
+    if isinstance(obj, (list, tuple)):
+        for item in obj:
+            _renumber_lookups(item, by, seen)
+        return
+    for attr, value in vars(obj).items() if hasattr(obj, "__dict__") else ():
+        if attr in ("SubstLookupRecord", "PosLookupRecord"):
+            for rec in value or ():
+                rec.LookupListIndex += by
+        elif isinstance(value, (list, tuple)) or hasattr(value, "__dict__"):
+            _renumber_lookups(value, by, seen)
+
+
+def _insert_lookups_first(table, lookups):
+    """Put `lookups` at the front of the LookupList, renumbering every
+    reference to the ones already there. A shaper applies a stage's
+    lookups in LookupList order whatever order the features name them,
+    so a lookup appended at the end runs last — which for ccmp means
+    after the variant features and after the ligatures, and cv04's
+    serifed i then reached the combining mark with its dot still on."""
+    by = len(lookups)
+    if not by:
+        return
+    for lookup in table.LookupList.Lookup:
+        _renumber_lookups(lookup, by)
+    for fr in table.FeatureList.FeatureRecord:
+        fr.Feature.LookupListIndex = [i + by for i in fr.Feature.LookupListIndex]
+    table.LookupList.Lookup[:0] = list(lookups)
+    table.LookupList.LookupCount = len(table.LookupList.Lookup)
+
+
 def import_scp_ccmp(base, scp, default_map, marks):
     """Carry the Latin donor's 'ccmp' — composition and decomposition —
     across the graft, the way import_scp_variants carries its variant
@@ -1151,6 +1191,7 @@ def import_scp_ccmp(base, scp, default_map, marks):
         append_glyph(base, td, name, pen.getCharString(private=private),
                      fd_index, width, None, vdon)
         gmap[src] = name
+        default_map.setdefault(src, name)
         grafted += 1
         if is_mark:
             marks.add(name)
@@ -1205,19 +1246,136 @@ def import_scp_ccmp(base, scp, default_map, marks):
                 print(f"  warning: ccmp lookup {old} has no rule this face "
                       f"can use, dropped")
         live = kept
-    first = len(ours.LookupList.Lookup)
-    shift = {old: first + k for k, old in enumerate(live)}
+    # at the FRONT of the list, where ccmp belongs: a shaper runs a
+    # stage's lookups in LookupList order, so appended ones ran after
+    # the variant features and the ligatures, and cv04's serifed i met
+    # a combining mark with its dot still on — the very defect the
+    # import exists to fix, on the variant path
+    shift = {old: k for k, old in enumerate(live)}
+    copied = []
     for old in live:
         lookup = copy.deepcopy(gsub.LookupList.Lookup[old])
         _ccmp_remap(lookup, gmap, shift, base.getGlyphID)
-        ours.LookupList.Lookup.append(lookup)
-    ours.LookupList.LookupCount = len(ours.LookupList.Lookup)
+        copied.append(lookup)
+    _insert_lookups_first(ours, copied)
     # the feature names what the donor's feature named, not the closure
     listed = sorted(shift[old] for old in live if old in own)
     for fr in records:
         fr.Feature.LookupListIndex.extend(listed)
         fr.Feature.LookupCount = len(fr.Feature.LookupListIndex)
     return grafted
+
+
+# (coverage, array, record list) per GPOS mark lookup type: the coverage
+# and the array are parallel, so a glyph and its anchors move together
+_MARK_ARRAYS = {
+    4: (("MarkCoverage", "MarkArray", "MarkRecord"),
+        ("BaseCoverage", "BaseArray", "BaseRecord")),
+    5: (("MarkCoverage", "MarkArray", "MarkRecord"),
+        ("LigatureCoverage", "LigatureArray", "LigatureAttach")),
+    6: (("Mark1Coverage", "Mark1Array", "MarkRecord"),
+        ("Mark2Coverage", "Mark2Array", "Mark2Record")),
+}
+
+
+def _remap_mark_subtable(sub, kind, gmap, gid):
+    """Rewrite one mark-attachment subtable in our glyph names. A
+    coverage here is not a set: its order is the order of the array
+    beside it, so the glyph and its anchors are sorted together.
+    Returns False when a coverage comes over empty."""
+    for cov_attr, arr_attr, rec_attr in _MARK_ARRAYS[kind]:
+        cov = getattr(sub, cov_attr, None)
+        array = getattr(sub, arr_attr, None)
+        records = getattr(array, rec_attr, None) if array else None
+        if cov is None or records is None:
+            return False
+        kept = sorted(((gmap[g], rec) for g, rec in zip(cov.glyphs, records)
+                       if g in gmap), key=lambda pair: gid(pair[0]))
+        if not kept:
+            return False
+        cov.glyphs = [g for g, _ in kept]
+        setattr(array, rec_attr, [rec for _, rec in kept])
+        for count in (f"{rec_attr}Count", f"{cov_attr[:-8]}Count"):
+            if hasattr(array, count):
+                setattr(array, count, len(kept))
+    return True
+
+
+def import_scp_marks(base, scp, default_map, marks):
+    """Carry the Latin donor's mark positioning across the graft, so an
+    accent sits on the letter it belongs to. Returns the number of
+    lookups copied.
+
+    Source Code Pro draws its combining marks as spacing glyphs and
+    places them entirely in GPOS: 'mark' attaches one to the base's own
+    top anchor, which is higher on an ascender than on an x-height
+    letter, and 'mkmk' stacks a second on the first. graft_halfwidth
+    keeps the outline and gives it a 0 advance one cell left, which
+    lands it correctly over an x, o or a — and 229 units too low on b d
+    f h k l, straight through the ascender: 58 of 84 ascender-and-accent
+    pairs drew their ink into one another where the Latin-only faces
+    drew none.
+
+    The lookups are copied with every glyph name rewritten and the
+    coverages re-sorted with their anchor arrays (a mark coverage is
+    positional, not a set), then every anchor ON a mark is moved the
+    same cell left as its outline was, so attachment lands exactly
+    where the donor's does. The donor's own 'mark' also carries a
+    SinglePos that takes a cell off each mark's advance; ours are 0
+    wide already, so that one is left behind."""
+    if "GPOS" not in scp or "GPOS" not in base:
+        return 0
+    donor = scp["GPOS"].table
+    ours = base["GPOS"].table
+    gmap = dict(default_map)
+    wanted = {}
+    for fr in donor.FeatureList.FeatureRecord:
+        if fr.FeatureTag in ("mark", "mkmk"):
+            for li in fr.Feature.LookupListIndex:
+                wanted.setdefault(li, set()).add(fr.FeatureTag)
+    copied = {}
+    for li in sorted(wanted):
+        kind, _ = _unwrap_pos(donor.LookupList.Lookup[li])
+        if kind not in _MARK_ARRAYS:
+            continue        # the advance adjuster: our marks are 0 wide
+        lookup = copy.deepcopy(donor.LookupList.Lookup[li])
+        kind, subtables = _unwrap_pos(lookup)
+        keep = [entry for entry, sub in zip(lookup.SubTable, subtables)
+                if _remap_mark_subtable(sub, kind, gmap, base.getGlyphID)]
+        if not keep:
+            continue
+        lookup.SubTable = keep
+        lookup.SubTableCount = len(keep)
+        _, subtables = _unwrap_pos(lookup)
+        back = {name: -CELL for name in marks}
+        for sub in subtables:
+            _shift_subtable_anchors(kind, sub, back)
+        copied[li] = len(ours.LookupList.Lookup)
+        ours.LookupList.Lookup.append(lookup)
+    if not copied:
+        return 0
+    ours.LookupList.LookupCount = len(ours.LookupList.Lookup)
+    for tag in ("mark", "mkmk"):
+        idx = sorted(ours for li, ours in copied.items() if tag in wanted[li])
+        if idx:
+            _add_feature(ours, tag, idx)
+    sort_feature_list(ours)
+    # 'mkmk' asks GDEF which marks it may stack on (LookupFlag's mark
+    # attachment type); Source Han Sans JP declares no such classes, so
+    # the donor's travel with the lookups that read them
+    donor_classes = getattr(scp.get("GDEF"), "table", None)
+    donor_classes = getattr(donor_classes, "MarkAttachClassDef", None)
+    if donor_classes is not None and "GDEF" in base:
+        gdef = base["GDEF"].table
+        classes = dict(getattr(getattr(gdef, "MarkAttachClassDef", None),
+                               "classDefs", None) or {})
+        for name, cls in donor_classes.classDefs.items():
+            if name in gmap:
+                classes[gmap[name]] = cls
+        if gdef.MarkAttachClassDef is None:
+            gdef.MarkAttachClassDef = otTables.MarkAttachClassDef()
+        gdef.MarkAttachClassDef.classDefs = classes
+    return len(copied)
 
 
 def copy_line_metrics(base, latin):
@@ -1755,10 +1913,15 @@ def edge_is_rule(path, side):
         return False
     moved = _xform_path(inner, (1, 0, 0, 1, back, 0))
     diff = pathops.op(edge, moved, pathops.PathOp.XOR)
-    # a rule overlays itself exactly; the tolerance is for float edges,
-    # and tight enough that a wave starting flat at a crest (〰: 1u of
-    # drift in 10, a 2% difference) still counts as a curve
-    return abs(diff.area) <= 0.005 * abs(edge.area)
+    # a rule overlays itself exactly; the tolerance is for float edges
+    # and for a leg that is already bending — the rounded corners ╭ ╮ ╯
+    # ╰ measure 0.0059 at the straight end of the arc, identically in
+    # every weight, and 0.005 read them as curves and left them out of
+    # the tiling. It stays under everything the box drawing has to
+    # reject: a diagonal ╱ ╲ ╳ is 0.34, and of the shapes decided by
+    # codepoint elsewhere a triangle's flat side is 0.0100 and the
+    # flattest wave 0.0083 (Heavy's 〰)
+    return abs(diff.area) <= 0.007 * abs(edge.area)
 
 
 def extend_edges(path, gap, left=True, right=True):
@@ -1938,11 +2101,12 @@ def widen_fullwidth(font, cell, skip=()):
 #   vertical dashed rules, whose pattern must scale with them
 #   rule — the rest of the box drawing: extruded, so a stem or a double
 #   rule keeps its weight
-# The shades ░ ▒ ▓ are in neither: sideways they are stretched whole,
-# but a 40% vertical stretch would draw their dots as ovals against the
-# one-cell default's round ones.
+#   tile — the shades, whose dots a 40% stretch would draw as ovals: the
+#   pattern is repeated a whole em up and down and cut to the band,
+#   which is what the cell above and the cell below would have shown
 VTILING_SCALE = ((0x2506, 0x2507), (0x250A, 0x250B), (0x254E, 0x254F),
                  (0x2580, 0x2590), (0x2594, 0x259F))
+VTILING_TILE = ((0x2591, 0x2593),)
 VTILING_RULE = ((0x2500, 0x257F),)
 
 
@@ -1955,7 +2119,8 @@ def vtiling_glyphs(font):
     cmap = font.getBestCmap()
     fwid = feature_map(font, "fwid")
     out = {}
-    for blocks, how in ((VTILING_RULE, "rule"), (VTILING_SCALE, "scale")):
+    for blocks, how in ((VTILING_RULE, "rule"), (VTILING_SCALE, "scale"),
+                        (VTILING_TILE, "tile")):
         for lo, hi in blocks:
             for cp in range(lo, hi + 1):
                 full = fwid.get(cmap.get(cp))
@@ -1982,7 +2147,9 @@ def tile_vertically(font):
     widen_fullwidth makes sideways, made on the outline transposed, so a
     stem keeps its weight. A block element is mapped onto the band
     instead, em edge to band edge, which is what keeps ▁ an eighth of
-    the line and ▀ a half of it. Returns the number redrawn."""
+    the line and ▀ a half of it, and a shade has its pattern repeated a
+    whole em up and down and cut to the band. Returns the number
+    redrawn."""
     cmap = font.getBestCmap()
     gs = font.getGlyphSet()
     fwid = feature_map(font, "fwid")
@@ -2007,6 +2174,14 @@ def tile_vertically(font):
         if how == "scale":
             out = _xform_path(path, (1, 0, 0, scale, 0,
                                      band[1] - em[1] * scale))
+        elif how == "tile":
+            span = em[3] - em[1]
+            out = path
+            for dy in (-span, span):
+                out = pathops.op(out, _xform_path(path, (1, 0, 0, 1, 0, dy)),
+                                 pathops.PathOp.UNION)
+            out = pathops.op(out, _rect_path(-1e5, band[1], 1e5, band[3]),
+                             pathops.PathOp.INTERSECTION)
         else:
             down = y0 - band[1] if y0 <= em[1] + 2 else 0
             up = band[3] - y1 if y1 >= em[3] - 2 else 0
@@ -3404,6 +3579,10 @@ def build_face(job):
     # the FeatureList only)
     n_ccmp = import_scp_ccmp(base, latin, default_map, marks)
     classify_marks(base, marks)   # the grafted marks, the variants, ccmp's
+    # and where each of them sits: after classify_marks, which is what
+    # tells a shaper they are marks at all, and after the ccmp import,
+    # whose composed accents the donor positions too
+    n_mark = import_scp_marks(base, latin, default_map, marks)
     # the Halfwidth block into one cell first, so its copies are
     # condensed from Source Han Sans's own advance and not from the one
     # the grid pass would give it
@@ -3471,7 +3650,8 @@ def build_face(job):
     return (f"{face_label}{f' [{suffix}]' if suffix else ''}: "
             f"latin={n_scp} fwid={len(fullwidth)} vert={n_vert} "
             f"fitted={n_fit} half={n_half} letters={n_letters} "
-            f"ligs={len(added)} ccmp={n_ccmp} tall={n_tall} -> {out.name}")
+            f"ligs={len(added)} ccmp={n_ccmp} mark={n_mark} "
+            f"tall={n_tall} -> {out.name}")
 
 
 # VFSource / _vf_source are build_latin.py's and build_latin_vf.py's

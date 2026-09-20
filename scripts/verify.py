@@ -51,6 +51,9 @@ VTILING = "\u2502\u2503\u2551\u2588"
 # circumflex-breve, and the Cyrillic ї it decomposes first
 CCMP_PROBES = (("i", "\u0307"), ("j", "\u0301"), ("g", "\u0303"),
                ("\u00ea", "\u0306"), ("\u0457", "\u0301"))
+# the above-base accents an ascender has to clear: grave, acute,
+# circumflex, tilde, macron, breve, dot, diaeresis, caron, ring
+ACCENTS = "\u0300\u0301\u0302\u0303\u0304\u0306\u0307\u0308\u030c\u030a"
 
 # suffix in the base family name -> expected (half-width, full-width) advances
 FAMILY_METRICS = {
@@ -612,19 +615,74 @@ def main():
     # at each one and a run of fwid █ came out striped, while the
     # one-cell defaults — which the Latin donor draws -400..1000 — did
     # not (build.tile_vertically)
+    def spans_line(box):
+        return box is not None and box[1] <= hhea.descent and box[3] >= hhea.ascent
+
     vseam = {}
     for ch in VTILING:
         for feats in ({}, {"fwid": True}):
             infos, _ = shape_infos(ch, feats)
             pen = BoundsPen(arrow_gs)
             arrow_gs[glyph_order[infos[0].codepoint]].draw(pen)
-            box = pen.bounds
-            if box is None or box[1] > hhea.descent or box[3] < hhea.ascent:
-                vseam[ch, bool(feats)] = None if box is None else (
-                    round(box[1]), round(box[3]))
+            if not spans_line(pen.bounds):
+                vseam[ch, bool(feats)] = None if pen.bounds is None else (
+                    round(pen.bounds[1]), round(pen.bounds[3]))
     check(not vseam, f"every vertical rule spans the whole line "
                      f"({hhea.ascent}..{hhea.descent}; "
                      f"{2 * len(VTILING)} probes; off: {vseam})")
+
+    # not only those four, and edge by edge: over the whole box-drawing
+    # and block range, a character whose one-cell default reaches the
+    # top or the bottom of the line must have a full-width form that
+    # reaches it too. Whole-span probes miss the corners — ╭ runs down
+    # and right, so only its foot is at the line's floor, and the four
+    # arcs ╭ ╮ ╯ ╰ were the ones left 137 units short at every line
+    # while ┌ ┐ ┘ └ joined
+    short, pairs = {}, 0
+    for cp in range(0x2500, 0x25A0):
+        if cp not in cmap:
+            continue
+        one = BoundsPen(arrow_gs)
+        arrow_gs[cmap[cp]].draw(one)
+        infos, _ = shape_infos(chr(cp), {"fwid": True})
+        full = glyph_order[infos[0].codepoint]
+        if one.bounds is None or full == cmap[cp]:
+            continue          # blank, or no separate full-width form
+        wide = BoundsPen(arrow_gs)
+        arrow_gs[full].draw(wide)
+        pairs += 1
+        if wide.bounds is None or (
+                one.bounds[1] <= hhea.descent < wide.bounds[1]
+                or one.bounds[3] >= hhea.ascent > wide.bounds[3]):
+            short[chr(cp)] = None if wide.bounds is None else (
+                round(wide.bounds[1]), round(wide.bounds[3]))
+    check(not short, f"a full-width form reaches the line's edge "
+                     f"wherever its one-cell default does ({pairs} pairs; "
+                     f"off: {short})")
+
+    # and a rounded corner is the same corner: Source Han Sans draws ╭
+    # on exactly ┌'s bounding box, so the two must still agree once the
+    # tiling passes are done. They did not — the arc's leg bends, which
+    # read as a curve rather than a rule, so it was neither lengthened
+    # down the page nor extruded sideways in Term, where it came out
+    # stretched instead and its stem stood 48 units against every other
+    # fwid vertical's 40
+    corners = {}
+    for arc, corner in zip("\u256d\u256e\u256f\u2570", "\u250c\u2510\u2518\u2514"):
+        boxes = []
+        for ch in (arc, corner):
+            if ord(ch) not in cmap:
+                break
+            infos, _ = shape_infos(ch, {"fwid": True})
+            pen = BoundsPen(arrow_gs)
+            arrow_gs[glyph_order[infos[0].codepoint]].draw(pen)
+            boxes.append(pen.bounds)
+        if len(boxes) == 2 and (None in boxes or max(
+                abs(a - b) for a, b in zip(*boxes)) > 2):
+            corners[arc + corner] = [None if b is None else
+                                     tuple(round(v) for v in b) for b in boxes]
+    check(not corners, f"a rounded corner keeps its corner's box "
+                       f"(off: {corners})")
 
     # the dashes that exist to butt together. Source Han Sans draws ⸺
     # 1580 units of ink in a 1672 advance — a 92-unit joint — and the
@@ -699,6 +757,34 @@ def main():
     check(not loose, f"ccmp fires only in the donor's own context "
                      f"(off: {loose})")
 
+    # an accent has to sit ON the letter, not through it. Source Code
+    # Pro places its combining marks entirely in GPOS — the top anchor
+    # of an ascender is 229 units above an x-height letter's — and the
+    # graft, which gives a mark a 0 advance and shifts its ink one cell
+    # left, got the x-height case right and drew the accent through the
+    # stem of b d f h k l: 58 of 84 pairs shared ink (import_scp_marks
+    # carries the donor's 'mark' and 'mkmk' over)
+    through = {}
+    for base in "bdfhklt":
+        for mark in ACCENTS:
+            if ord(base) not in cmap or ord(mark) not in cmap:
+                continue
+            infos, positions = shape_infos(base + mark, {})
+            if len(infos) != 2:
+                continue        # composed into one glyph: nothing to clear
+            boxes = []
+            for info, pos in zip(infos, positions):
+                pen = BoundsPen(arrow_gs)
+                arrow_gs[glyph_order[info.codepoint]].draw(pen)
+                boxes.append(None if pen.bounds is None else
+                             (pen.bounds[1] + pos.y_offset,
+                              pen.bounds[3] + pos.y_offset))
+            if None in boxes or boxes[1][0] < boxes[0][1]:
+                through[base + mark] = (None if None in boxes else
+                                        (round(boxes[0][1]), round(boxes[1][0])))
+    check(not through, f"an accent clears the letter it sits on "
+                       f"({7 * len(ACCENTS)} pairs; through: {through})")
+
     # ＿ and ￣ are full width in the default too, so there is no
     # one-cell form for a full-width one to match: lengthening them down
     # the page drew the 41-unit rule as a 320-unit slab (Source Han Sans
@@ -729,18 +815,33 @@ def main():
     ramp = {}
     full = fwid_box("\u2588")
     if full is not None:
-        band = full[3] - full[1]
-        for k in range(1, 9):
-            ch = chr(0x2580 + k)          # ▁ through █, an eighth apart
+        lo, hi = full[1], full[3]
+        band = hi - lo
+        # ▁ through █ grow UP from the floor an eighth at a time; ▔ and
+        # ▀ hang from the ceiling. Height alone is not the character: a
+        # ▀ drawn at the floor is a ▄, and measured by height only it
+        # passed
+        for ch, want, anchor in (
+                *((chr(0x2580 + k), band * k / 8, "bottom") for k in range(1, 9)),
+                ("\u2594", band / 8, "top"),     # ▔, an eighth from the top
+                ("\u2580", band / 2, "top")):    # ▀, the other half of ▄
             box = fwid_box(ch)
-            want = band * k / 8
-            if box is None or abs((box[3] - box[1]) - want) > 2:
-                ramp[ch] = None if box is None else round(box[3] - box[1])
-        half = fwid_box("\u2580")         # ▀, the other half of ▄
-        if half is None or abs((half[3] - half[1]) - band / 2) > 2:
-            ramp["\u2580"] = None if half is None else round(half[3] - half[1])
+            edge = None if box is None else (box[1] - lo if anchor == "bottom"
+                                             else hi - box[3])
+            if box is None or abs((box[3] - box[1]) - want) > 2 or abs(edge) > 2:
+                ramp[ch] = None if box is None else (round(box[1]), round(box[3]))
+        # and the quadrants sit in their own quarter of the cell
+        for ch, top, left in (("\u2598", True, True), ("\u259D", True, False),
+                              ("\u2596", False, True), ("\u2597", False, False)):
+            box = fwid_box(ch)
+            adv = hmtx[glyph_order[shape_infos(ch, {"fwid": True})[0][0].codepoint]][0]
+            want = ((lo + hi) / 2 if top else lo, hi if top else (lo + hi) / 2,
+                    0 if left else adv / 2, adv / 2 if left else adv)
+            got = None if box is None else (box[1], box[3], box[0], box[2])
+            if got is None or max(abs(a - b) for a, b in zip(got, want)) > 2:
+                ramp[ch] = None if got is None else tuple(round(v) for v in got)
     check(not ramp, f"the fwid block elements step an eighth of the line "
-                    f"at a time (off: {ramp})")
+                    f"at a time, from the right edge (off: {ramp})")
 
     # ... and nothing ELSE grew with the advance. A Source Han Sans glyph
     # is drawn inside its 1000 em, so in Term, where the advance is 1200,
