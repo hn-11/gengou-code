@@ -14,7 +14,9 @@ HINT_OPS = frozenset({"hstem", "vstem", "hstemhm", "vstemhm", "hintmask", "cntrm
 
 
 def make_shaper(source, variations=None):
-    """shape(text, feats) -> (glyph infos, glyph positions) for a font
+    """shape(text, feats, script=None, language=None, direction=None)
+    -> (glyph infos,
+    glyph positions) for a font
     given as a path or as the font's bytes; `variations` ({axis tag:
     user value}) sets a variable font's location — HarfBuzz shapes the
     VF itself there, no instancing needed."""
@@ -24,10 +26,19 @@ def make_shaper(source, variations=None):
     if variations:
         font.set_variations(variations)
 
-    def shape(text, feats):
+    def shape(text, feats, script=None, language=None, direction=None):
         buf = hb.Buffer()
         buf.add_str(text)
         buf.guess_segment_properties()
+        if direction:
+            buf.direction = direction
+        # a language form is only reachable through its own tag, so the
+        # caller can name the script and language HarfBuzz should ask
+        # for instead of the ones it guessed from the text
+        if script:
+            buf.script = script
+        if language:
+            buf.language = language
         hb.shape(font, buf, feats)
         return list(buf.glyph_infos), list(buf.glyph_positions)
     return shape

@@ -1173,8 +1173,8 @@ def _locl_lookups(gsub):
     Unlike ccmp, locl is not a feature to turn on everywhere, and not
     even one set of lookups everywhere it is on: Source Code Pro gives
     script grek the Greek accents, script cyrl one set by default and
-    another under Serbian, and Navajo and Skolt Sami a third under
-    their own language tags. Registering the union put the Greek tonos
+    another under Serbian, and Northern Sami and Skolt Sami a third
+    under their own language tags. Registering the union put the Greek tonos
     in a Cyrillic run, where it stopped ї + U+0301 composing."""
     order, where = set(), {}
     locl = {i for i, fr in enumerate(gsub.FeatureList.FeatureRecord)
@@ -1235,51 +1235,85 @@ def import_scp_locl(base, scp, default_map, where_ours):
         _ccmp_remap(lookup, gmap, shift, base.getGlyphID)
         copied.append(lookup)
     _insert_lookups_first(ours, copied)
+    # every pair the donor names, not only those the base already has
+    # a LangSys for: _add_feature_where makes the missing ones
     _add_feature_where(ours, "locl",
                        {pair: sorted(shift[old] for old in theirs
                                      if old in shift)
                         for pair, theirs in where.items()
-                        if pair in where_ours})
+                        if pair[0] in {s for s, _ in where_ours}})
     sort_feature_list(ours)
     return len(live)
+
+
+def _new_langsys(record, lang):
+    """A LangSys for `lang` under `record`'s script, starting from the
+    script's default. The donor gives some languages their own forms
+    and the base font has no record for them — Source Han Sans JP has
+    no Serbian and no Northern Sami — so the Serbian б and the Sami eng
+    were copied in and left unreachable."""
+    made = otTables.LangSys()
+    made.LookupOrder = None
+    made.ReqFeatureIndex = 0xFFFF
+    made.FeatureIndex = []
+    default = record.Script.DefaultLangSys
+    if default is not None:
+        made.ReqFeatureIndex = default.ReqFeatureIndex
+        made.FeatureIndex = list(default.FeatureIndex)
+    made.FeatureCount = len(made.FeatureIndex)
+    entry = otTables.LangSysRecord()
+    entry.LangSysTag = lang
+    entry.LangSys = made
+    record.Script.LangSysRecord.append(entry)
+    record.Script.LangSysRecord.sort(key=lambda r: r.LangSysTag)
+    record.Script.LangSysCount = len(record.Script.LangSysRecord)
+    return made
 
 
 def _add_feature_where(table, tag, where):
     """Make each (script, language) pair in `where` reach the lookups
     IT is given — `_add_feature` puts one set on every LangSys, which
     is right for ccmp and wrong for a feature whose whole point is that
-    it differs by language."""
+    it differs by language. A language the font has no LangSys for gets
+    one, built from the script's default.
+
+    Nothing already in the table is edited: one FeatureRecord per
+    distinct lookup list is added and swapped into the LangSys that
+    wants it. Source Han Sans shares one 'locl' record between a
+    script's default and its languages, so merging into it put the
+    Serbian б in every Cyrillic run."""
     records = table.FeatureList.FeatureRecord
     existing = {i for i, fr in enumerate(records) if fr.FeatureTag == tag}
-    lacking = {}
+    made = {}
     for record in table.ScriptList.ScriptRecord:
+        asked = {lang for script, lang in where if script == record.ScriptTag}
+        have = {r.LangSysTag for r in record.Script.LangSysRecord} | {None}
+        for lang in sorted(asked - have, key=str):
+            _new_langsys(record, lang)
         for lang, langsys in ([(None, record.Script.DefaultLangSys)]
                               + [(r.LangSysTag, r.LangSys)
                                  for r in record.Script.LangSysRecord]):
             wanted = where.get((record.ScriptTag, lang))
             if langsys is None or not wanted:
                 continue
-            mine = existing.intersection(langsys.FeatureIndex)
-            if mine:
-                for i in mine:
-                    feat = records[i].Feature
-                    for li in wanted:
-                        if li not in feat.LookupListIndex:
-                            feat.LookupListIndex.append(li)
-                    feat.LookupCount = len(feat.LookupListIndex)
-            else:
-                lacking.setdefault(tuple(wanted), []).append(langsys)
-    for wanted, langsystems in lacking.items():
-        fr = otTables.FeatureRecord()
-        fr.FeatureTag = tag
-        fr.Feature = otTables.Feature()
-        fr.Feature.FeatureParams = None
-        fr.Feature.LookupListIndex = list(wanted)
-        fr.Feature.LookupCount = len(wanted)
-        records.append(fr)
-        index = len(records) - 1
-        for langsys in langsystems:
-            langsys.FeatureIndex.append(index)
+            mine = sorted(existing.intersection(langsys.FeatureIndex))
+            keep = list(wanted)
+            for i in mine:
+                keep += [li for li in records[i].Feature.LookupListIndex
+                         if li not in keep]
+            key = tuple(sorted(keep))
+            if key not in made:
+                fr = otTables.FeatureRecord()
+                fr.FeatureTag = tag
+                fr.Feature = otTables.Feature()
+                fr.Feature.FeatureParams = None
+                fr.Feature.LookupListIndex = list(key)
+                fr.Feature.LookupCount = len(key)
+                records.append(fr)
+                made[key] = len(records) - 1
+            langsys.FeatureIndex = sorted(
+                [i for i in langsys.FeatureIndex if i not in existing]
+                + [made[key]])
             langsys.FeatureCount = len(langsys.FeatureIndex)
     table.FeatureList.FeatureCount = len(records)
 
@@ -2307,6 +2341,44 @@ def tiling_glyphs(font):
     return out
 
 
+def shift_mark_placements(font, moved):
+    """Move the GPOS placements that put a mark on the vertical column
+    with the outline widen_fullwidth just moved. Returns the number of
+    subtables adjusted.
+
+    Source Han Sans centres its full-width marks for a vertical run in
+    'vert', with a SinglePos that places them +500 across the column —
+    a number measured against the outline, the way an anchor is. Move
+    the outline and leave it, and in Term the enclosing circle sat 100
+    units left of the column it encloses, the tone marks U+302A/302B
+    hung outside its left edge and U+302C/302D stood inside its
+    right."""
+    if not moved or "GPOS" not in font:
+        return 0
+    done = 0
+    for lookup in font["GPOS"].table.LookupList.Lookup:
+        kind, subtables = _unwrap_pos(lookup)
+        if kind != 1:
+            continue
+        for sub in subtables:
+            names = getattr(getattr(sub, "Coverage", None), "glyphs", None) or []
+            ours = [n for n in names if n in moved]
+            if not ours:
+                continue
+            if len(ours) != len(names):
+                raise ValueError(
+                    "a GPOS placement covers both moved marks and other "
+                    f"glyphs ({names[:4]}...); it would need splitting")
+            if not sub.ValueFormat & 0x1:
+                continue
+            step = moved[ours[0]]
+            values = sub.Value if sub.Format == 2 else [sub.Value]
+            for value in values:
+                value.XPlacement = getattr(value, "XPlacement", 0) - step
+            done += 1
+    return done
+
+
 def realign_halfwidth_marks(font, cell, moved):
     """Put the full-width combining marks back where they were over a
     HALF-width base. Returns the number of glyphs the rule covers.
@@ -2345,19 +2417,29 @@ def realign_halfwidth_marks(font, cell, moved):
     first = len(gpos.LookupList.Lookup)
     gpos.LookupList.Lookup.append(_new_lookup_obj(1, back))
 
-    rule = otTables.ChainContextPos()
-    rule.Format = 3
-    rule.BacktrackCoverage = [coverage(halves)]
-    rule.BacktrackGlyphCount = 1
-    rule.InputCoverage = [coverage(moved)]
-    rule.InputGlyphCount = 1
-    rule.LookAheadCoverage = []
-    rule.LookAheadGlyphCount = 0
-    rec = otTables.PosLookupRecord()
-    rec.SequenceIndex, rec.LookupListIndex = 0, first
-    rule.PosLookupRecord = [rec]
-    rule.PosCount = 1
-    gpos.LookupList.Lookup.append(_new_lookup_obj(8, rule))
+    # one subtable per depth: a mark advances 0, so in ｶ ゛ ⃝ the glyph
+    # before the circle is the dakuten, not the kana, and a single
+    # backtrack would leave every mark after the first behind
+    rules = []
+    for depth in range(3):
+        rule = otTables.ChainContextPos()
+        rule.Format = 3
+        rule.BacktrackCoverage = ([coverage(moved)] * depth
+                                  + [coverage(halves)])
+        rule.BacktrackGlyphCount = depth + 1
+        rule.InputCoverage = [coverage(moved)]
+        rule.InputGlyphCount = 1
+        rule.LookAheadCoverage = []
+        rule.LookAheadGlyphCount = 0
+        rec = otTables.PosLookupRecord()
+        rec.SequenceIndex, rec.LookupListIndex = 0, first
+        rule.PosLookupRecord = [rec]
+        rule.PosCount = 1
+        rules.append(rule)
+    chain = _new_lookup_obj(8, rules[0])
+    chain.SubTable = rules
+    chain.SubTableCount = len(rules)
+    gpos.LookupList.Lookup.append(chain)
     gpos.LookupList.LookupCount = len(gpos.LookupList.Lookup)
     _add_feature(gpos, "mark", [first + 1])
     sort_feature_list(gpos)
@@ -2501,6 +2583,7 @@ def widen_fullwidth(font, cell, skip=()):
     for name, cs in redrawn.items():
         td.CharStrings[name] = cs        # a plain CFF has no charStringsIndex
     shift_anchors(font, moved_by)
+    shift_mark_placements(font, marks_moved)
     realign_halfwidth_marks(font, cell, marks_moved)
     note_redrawn(font, redrawn)
     print(f"  full-width widened to {2 * cell}: {shifted} shifted with their hints, "
@@ -2516,7 +2599,7 @@ def widen_fullwidth(font, cell, skip=()):
 #   scale — the block elements and the quadrants, whose whole point is a
 #   fraction of the cell (an eighth block must stay an eighth of the
 #   line, not gain the same 280 units as the full block), and the
-#   vertical dashed rules, whose pattern must scale with them
+#   diagonals
 #   rule — the rest of the box drawing: extruded, so a stem or a double
 #   rule keeps its weight. The diagonals ╱ ╲ ╳ are scaled instead, as
 #   they are sideways: extruding a slant would grow a tail, and the

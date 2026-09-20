@@ -124,9 +124,11 @@ SCP の字形に戻る。
 
 線の太さは**面ごとに** Source Code Pro のインスタンスの `=` のバー厚を
 実測し、Monaspace VF の wght を二分探索で一致させたインスタンスから
-取り込む。Italic 面には slnt 軸で傾斜も追随させ（SCP Italic の −12° に
-対し Monaspace の slnt は −11° が下限なので、残り 1° はアウトラインを
-シアーして合わせる）、ベースラインは両フォントの `=` の縦中心を揃える。
+取り込む。Italic 面には slnt 軸で傾斜も追随させ（SCP Italic は −11°
+——`post.italicAngle` も実測のステム角 11.38° もそう——で、Monaspace の
+slnt の下限と一致するため、シアーは掛からない。コード中の −12° は角度を
+申告しないドナーへのフォールバック）、ベースラインは両フォントの `=` の
+縦中心を揃える。
 Monaspace VF の wght 下限（200）は `=` バー厚 53u で SCP Light の 37u に
 届かないため、Light では Monaspace 由来のアウトラインを片側 8u 内側に
 削って（pathops でストローク幅 2d を差し引く）太さを合わせている。
@@ -325,7 +327,7 @@ Source Code Pro VF / Monaspace VF の Releases から取得する。
 `SUMI_SKIP_AUTOHINT=1` を立てるとスキップできる。Term の全角グリフ約1.7万個
 は描き直さず charstring の中で 100 ユニット右へ動かす（`shift_charstring`）
 ので、Source Han Sans 自身のヒントがそのまま残り、ヒント付けは各面で
-描き直したおよそ 2,050〜2,550 グリフ（欧文レイヤー、`fwid` の全角形、グリッドに
+描き直したおよそ 2,250〜2,650 グリフ（欧文レイヤー、`fwid` の全角形、グリッドに
 乗せ直した比例幅の残り、Term で伸ばした罫線など）だけで済む。ヒント付与後は cffsubr（AFDKO の
 `tx`、`requirements.txt` に同梱）で CFF をサブルーチン化している。
 

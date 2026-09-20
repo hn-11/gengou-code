@@ -381,8 +381,9 @@ cmap・GSUB の shaping 結果が roundoff（±1〜2ユニット）を除いて�
   SCP との太さ一致に 1u 程度のずれが出うる。超える場合はマスターを増やす
   ——実測では Regular 実インスタンスのバー厚が静的版に対し ±1u 以内
   （`scripts/verify_latin_vf.py` で継続確認）
-- **Italic**: SCP Italic は −12°、Monaspace の slnt は −11° が下限。
-  残り 1° のシアーは現行どおりマスター生成時に掛ける
+- **Italic**: SCP Italic は −11°（`post.italicAngle`、実測ステム角
+  11.38°）で Monaspace の slnt の下限と一致するため、シアーは掛からない
+  ——コード中の −12° は角度を申告しないドナーへのフォールバック
 - **名前**: Sumi Moji / Sumi Moji JP で確定。商標（USPTO / J-PlatPat）は
   この環境から未確認。変更箇所の一覧は 2 節
 - **バージョン**: JP と同じタグで同時にリリースする（別バージョン番号を

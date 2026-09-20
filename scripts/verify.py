@@ -298,6 +298,43 @@ def main():
     check(not bearings, f"hmtx bearings are the outlines' xMin "
                         f"({len(bearings)} off: {bearings[:5]})")
 
+    # the numbers a rasterizer clips and lays out by. build.py turns
+    # fontTools' own recalculation off (recalcBBoxes = False) and works
+    # them out in one pass, so they are only as right as that pass —
+    # and nothing read them: zeroing head's box, hhea's extents or the
+    # OS/2 range bits all passed
+    head, hhea2, os2b = tf["head"], tf["hhea"], tf["OS/2"]
+    inked = list(bounds.values())
+    want_box = (min(b[0] for b in inked), min(b[1] for b in inked),
+                max(b[2] for b in inked), max(b[3] for b in inked))
+    got_box = (head.xMin, head.yMin, head.xMax, head.yMax)
+    check(all(abs(a - b) <= 1 for a, b in zip(got_box, want_box)),
+          f"head's bounding box is the ink's ({got_box} vs "
+          f"{tuple(round(v) for v in want_box)})")
+    widths = [hmtx[n][0] for n in tf.getGlyphOrder()]
+    extents = [hmtx[n][1] + (b[2] - b[0]) for n, b in bounds.items()]
+    right = [hmtx[n][0] - hmtx[n][1] - (b[2] - b[0]) for n, b in bounds.items()]
+    for label, got, want in (
+            ("advanceWidthMax", hhea2.advanceWidthMax, max(widths)),
+            ("minLeftSideBearing", hhea2.minLeftSideBearing,
+             min(hmtx[n][1] for n in bounds)),
+            ("minRightSideBearing", hhea2.minRightSideBearing, min(right)),
+            ("xMaxExtent", hhea2.xMaxExtent, max(extents))):
+        check(abs(got - want) <= 1,
+              f"hhea {label} is the outlines' ({got} vs {round(want)})")
+    check(os2b.fsType == 0, f"OS/2 fsType is installable ({os2b.fsType})")
+    check(os2b.usFirstCharIndex == min(cmap) and os2b.usLastCharIndex ==
+          min(max(cmap), 0xFFFF),
+          f"OS/2 first/last char index are the cmap's "
+          f"({os2b.usFirstCharIndex:#x}, {os2b.usLastCharIndex:#x})")
+    stored = tuple(getattr(os2b, f"ulUnicodeRange{i}") for i in range(1, 5))
+    os2b.recalcUnicodeRanges(tf)
+    again = tuple(getattr(os2b, f"ulUnicodeRange{i}") for i in range(1, 5))
+    check(stored == again, f"OS/2 Unicode ranges match the cmap "
+                           f"({[hex(v) for v in stored]} vs "
+                           f"{[hex(v) for v in again]})")
+
+
     # and nothing paints a whole cell past its own advance: an italic
     # overhangs by design (up to 138u in the Latin layer), a glyph put on
     # a step too small for its ink would not (grid_step). The boxes are
@@ -493,13 +530,21 @@ def main():
     # (build.repoint_features), so a missing re-point looks exactly like
     # a working feature from the outside
     vert_off = []
-    for ch in "「、ー…":       # Source Han Sans rotates these; not — or “
-        infos, _p = shape_infos(ch, {})
-        rot, _p = shape_infos(ch, {"vert": True})
-        if not infos or not rot or infos[0].codepoint == rot[0].codepoint:
-            vert_off.append(ch)
-    check("vert" in tags and not vert_off,
-          f"vert reaches the characters that rotate (off: {vert_off})")
+    for tag in ("vert", "vrt2"):   # repoint_features re-points both
+        for ch in "「、ー…":     # Source Han Sans rotates these; not — or “
+            infos, _p = shape_infos(ch, {})
+            rot, _p = shape_infos(ch, {tag: True})
+            if not infos or not rot or infos[0].codepoint == rot[0].codepoint:
+                vert_off.append((tag, ch))
+    check({"vert", "vrt2"} <= tags and not vert_off,
+          f"vert and vrt2 reach the characters that rotate (off: {vert_off})")
+    # and the rest of what the build keeps: dropping a feature outright
+    # looked the same as a working one from the outside
+    for tag in ("fwid", "hwid", "aalt", "dlig", "ruby",
+                "jp78", "jp83", "jp90", "nlck", "locl", "ccmp"):
+        check(tag in tags, f"GSUB carries {tag}")
+    for tag in ("vkrn", "vhal", "vpal"):
+        check(tag in gpos, f"GPOS carries {tag} ({sorted(gpos)})")
     for text, want in (("あて", exp_full), ("いて", exp_full)):
         _infos, positions = shape_infos(text, {})
         check(positions[0].x_advance == want,
@@ -671,6 +716,21 @@ def main():
                     round(box[0]), round(box[2]), adv)
     check(not seam, f"every tiling character spans its whole advance "
                     f"({2 * len(TILING)} probes; off: {seam})")
+
+    # every box-drawing and block character draws: the probes below
+    # name fourteen of them, and a build that emptied any of the other
+    # 146 — or their full-width forms — shipped a font that set a
+    # terminal frame as whitespace and passed every gate
+    blank = []
+    for cp in range(0x2500, 0x25A0):
+        if cp not in cmap:
+            continue
+        infos, _p = shape_infos(chr(cp), {"fwid": True})
+        for name in (cmap[cp], glyph_order[infos[0].codepoint]):
+            if name not in bounds and name not in blank:
+                blank.append(name)
+    check(not blank, f"every box-drawing and block glyph draws "
+                     f"({2 * 160} probes; blank: {blank[:6]})")
 
     # a dashed rule's pattern must not break where two of them meet:
     # the gap across the join has to be the gap inside the glyph. Such
@@ -992,6 +1052,23 @@ def main():
     check(not voiced, f"a voicing mark clears the half-width kana it "
                       f"marks (shared ink: {voiced})")
 
+    # the Serbian and Northern Sami forms are copied in with the Greek;
+    # Source Han Sans JP has no LangSys for either, so they were
+    # unreachable until the import made one (build._new_langsys)
+    langs = {}
+    for script, lang, text in ((() if italic else (("cyrl", "sr", "\u0431"),))
+                               + (("latn", "se", "\u014a"),)):
+        if ord(text) not in cmap:
+            continue
+        tagged = shape_infos(text, {}, script=script, language=lang)[0]
+        default = shape_infos(text, {}, script=script)[0]
+        if len(tagged) != 1 or tagged[0].codepoint == default[0].codepoint:
+            langs[script, lang] = glyph_order[tagged[0].codepoint]
+    which = ("the Sami Ŋ, the italic donor having no Cyrillic" if italic
+             else "the Serbian б and the Sami Ŋ")
+    check(not langs, f"the donor's language forms are reachable "
+                     f"({which}; unchanged: {langs})")
+
     # the two double-span marks straddle the pair they join: Source
     # Code Pro pulls them half a cell left in GPOS, and dropping that
     # with the advance beside it centred the tie on the first letter —
@@ -1043,6 +1120,53 @@ def main():
             around[base] = (round(off), tuple(round(v) for v in boxes[1]))
     check(not around, f"an enclosing mark stays around its character "
                       f"(off centre: {around})")
+
+    # and it stays around it DOWN a column too. Source Han Sans centres
+    # these marks on the vertical column with a placement in 'vert',
+    # measured against the outline — move the outline for Term and
+    # leave that, and the circle sat 100 units left of the character,
+    # the tone marks U+302A/302B hung outside the column's left edge
+    # and U+302C/302D stood inside its right
+    column = {}
+    for base in "\u56fd\u4e00":
+        if ord(base) not in cmap or 0x20DD not in cmap:
+            continue
+        infos, positions = shape_infos(base + "\u20dd", {}, direction="ttb")
+        if len(infos) != 2:
+            continue
+        boxes = []
+        for info, pos in zip(infos, positions):
+            pen = BoundsPen(arrow_gs)
+            arrow_gs[glyph_order[info.codepoint]].draw(pen)
+            boxes.append(None if pen.bounds is None else
+                         (pen.bounds[0] + pos.x_offset,
+                          pen.bounds[2] + pos.x_offset))
+        if None in boxes:
+            column[base] = None
+            continue
+        off = (boxes[1][0] + boxes[1][1]) / 2 - (boxes[0][0] + boxes[0][1]) / 2
+        if abs(off) > 2:
+            column[base] = (round(off), tuple(round(v) for v in boxes[1]))
+    check(not column, f"an enclosing mark stays around its character "
+                      f"down a column (off centre: {column})")
+
+    # and where it lands must not depend on how many marks come
+    # before it: the rule that gives Term's shift back over a
+    # half-width base reads the glyph in front, and a mark is 0 wide,
+    # so with one backtrack only the FIRST mark of a stack was put back
+    stacked_marks = {}
+    for base in "\uff76\uff88":
+        if ord(base) not in cmap or 0x20DD not in cmap or 0x3099 not in cmap:
+            continue
+        alone = placed(base + "\u20dd")
+        after = placed(base + "\u3099\u20dd")
+        if len(alone) != 2 or len(after) != 3 or None in alone + after:
+            continue
+        if max(abs(a - b) for a, b in zip(alone[1], after[2])) > 2:
+            stacked_marks[base] = (tuple(round(v) for v in alone[1]),
+                                   tuple(round(v) for v in after[2]))
+    check(not stacked_marks, f"a mark lands the same behind one mark as "
+                             f"behind none (off: {stacked_marks})")
 
     # a full-width base carries its own anchors: Source Han Sans hangs
     # the Bopomofo tone marks off ㄓ, and widening it to two cells moves

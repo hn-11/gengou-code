@@ -4,6 +4,7 @@ metrics pass over an assembled dist/."""
 import sys
 from pathlib import Path
 
+import pytest
 from fontTools.ttLib import TTFont
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -43,14 +44,14 @@ def test_main_harmonizes_each_family(tmp_path, capsys, monkeypatch):
     assert "nerd/latin/SumiMojiNFM: win metrics 1200/400 over 2 faces" in out
 
 
-def test_main_skips_a_family_directory_with_no_faces(tmp_path, capsys, monkeypatch):
-    """The package job assembles dist/ from the release artifacts: a
-    directory that arrived empty is reported and stepped over, not a
-    crash inside max() on no faces."""
+def test_main_stops_on_a_family_directory_with_no_faces(tmp_path, monkeypatch):
+    """This is the only pass that sees a Latin family whole, and the
+    release job does not read its output — a layout change that left it
+    with nothing to do would have published per-face win metrics. It
+    says so and stops, rather than stepping over it."""
     for name, _family in harmonize_latin.FAMILIES:
         (tmp_path / name).mkdir(parents=True)
     monkeypatch.setattr(sys, "argv", ["harmonize_latin.py", str(tmp_path)])
-    harmonize_latin.main()
-    out = capsys.readouterr().out
-    for name, family in harmonize_latin.FAMILIES:
-        assert f"{name}/{family}: no faces, skipped" in out
+    with pytest.raises(SystemExit) as stopped:
+        harmonize_latin.main()
+    assert "no faces to harmonize" in str(stopped.value)
