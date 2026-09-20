@@ -21,6 +21,7 @@ from verifylib import (  # noqa: E402
     check_coverage_order,
     check_gdef_marks,
     check_heights,
+    check_mark_class_closure,
     check_private,
     check_stat,
     check_style_bits,
@@ -148,6 +149,7 @@ def main():
         check(tbl not in tf, f"no {tbl} table")
     check_gdef_marks(tf, check, cmap)
     check_coverage_order(tf, check)
+    check_mark_class_closure(tf, check)
     check_private(tf, check)
     gpos = {fr.FeatureTag for fr in tf["GPOS"].table.FeatureList.FeatureRecord} \
         if "GPOS" in tf else set()

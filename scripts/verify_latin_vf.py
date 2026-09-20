@@ -28,6 +28,7 @@ from verifylib import (  # noqa: E402
     check_coverage_order,
     check_gdef_marks,
     check_heights,
+    check_mark_class_closure,
     check_private,
     check_style_bits,
     check_tables,
@@ -259,6 +260,7 @@ def main():
           f"GPOS keeps SCP's mark positioning, no kern ({sorted(vf_gpos)})")
     check_gdef_marks(tf, check, vf_cmap)
     check_coverage_order(tf, check)
+    check_mark_class_closure(tf, check)
     check_private(tf, check)
     letters = {g for cp, g in vf_cmap.items()
                if 0x30 <= cp <= 0x39 or 0x41 <= cp <= 0x5A or 0x61 <= cp <= 0x7A}

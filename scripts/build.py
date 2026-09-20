@@ -3855,10 +3855,21 @@ def classify_marks(font, marks):
 
 
 def classify_unicode_marks(font):
-    """GDEF class 3 (Mark) for every cmap'd glyph whose Unicode category is
-    Mn — Source Code Pro leaves two of its own combining marks (U+035F,
-    U+0361, the double-width ones) unclassified. Existing classes are
-    kept, the rest of Source Code Pro's marks already are class 3."""
+    """GDEF class 3 (Mark) for every cmap'd glyph whose Unicode category
+    is Mn, and for everything a feature substitutes for one of those.
+    Existing classes are kept.
+
+    Source Code Pro leaves two of its own combining marks (U+035F,
+    U+0361, the double-width ones) unclassified — and, in the ITALIC
+    donor only, the `.cap` design its ccmp swaps U+0310 for after a
+    capital. A substituted glyph takes its class from GDEF alone once a
+    font has a GlyphClassDef (HarfBuzz has no Unicode-category
+    fallback), so that one became a BASE: the mark-to-base search for
+    the next mark stopped on it and gave up, and 23 of the 53 combining
+    marks lost their attachment after U+0310 in all five italic Latin
+    faces and the italic variable font — `E` + U+0310 + U+0301 put both
+    accents on the character after them. Reachable only through a
+    feature, so the cmap sweep above could not see it."""
     if "GDEF" not in font or font["GDEF"].table.GlyphClassDef is None:
         return []
     defs = font["GDEF"].table.GlyphClassDef.classDefs
@@ -3867,6 +3878,33 @@ def classify_unicode_marks(font):
         if unicodedata.category(chr(cp)) == "Mn" and defs.get(g) != 3:
             defs[g] = 3
             fixed.append(g)
+    # the closure: a variant of a variant of a mark is a mark too. A
+    # ligature is left alone — its components need not all be marks
+    edges = []
+    for lookup in (font["GSUB"].table.LookupList.Lookup
+                   if "GSUB" in font else []):
+        kind, subtables = _unwrap(lookup)
+        for sub in subtables:
+            if kind == 1:
+                edges += [(src, [dst])
+                          for src, dst in (getattr(sub, "mapping", None) or {}).items()]
+            elif kind == 2:
+                edges += [(src, list(dsts))
+                          for src, dsts in (getattr(sub, "mapping", None) or {}).items()]
+            elif kind == 3:
+                edges += [(src, list(dsts)) for src, dsts in
+                          (getattr(sub, "alternates", None) or {}).items()]
+    changed = True
+    while changed:
+        changed = False
+        for src, dsts in edges:
+            if defs.get(src) != 3:
+                continue
+            for dst in dsts:
+                if defs.get(dst) != 3:
+                    defs[dst] = 3
+                    fixed.append(dst)
+                    changed = True
     return fixed
 
 

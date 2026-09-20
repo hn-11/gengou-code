@@ -567,3 +567,39 @@ def check_zones(tf, check, cmap):
           f"the alignment zones are this face's (BlueValues {blues}, "
           f"x-height {os2.sxHeight}, cap {os2.sCapHeight}, "
           f"StdHW {stems[0] if stems else None})")
+
+
+def check_mark_class_closure(tf, check):
+    """Everything a feature substitutes for a GDEF mark is a GDEF mark.
+
+    Once a font has a GlyphClassDef, HarfBuzz takes a substituted
+    glyph's class from it alone — there is no Unicode-category fallback
+    — so a variant left unclassified becomes a BASE. Source Code Pro
+    Italic leaves the `.cap` design its ccmp swaps U+0310 for after a
+    capital unclassified, and the mark-to-base search for the NEXT mark
+    then stopped on it: 23 of the 53 combining marks lost their
+    attachment after U+0310 in all five italic Latin faces and the
+    italic variable font, `E` + U+0310 + U+0301 putting both accents on
+    the character after them."""
+    gdef = getattr(tf.get("GDEF"), "table", None)
+    defs = getattr(getattr(gdef, "GlyphClassDef", None), "classDefs", None)
+    if not defs or "GSUB" not in tf:
+        return
+    adrift = []
+    for lookup in tf["GSUB"].table.LookupList.Lookup:
+        kind, subtables = build._unwrap(lookup)
+        for sub in subtables:
+            pairs = []
+            if kind in (1, 2):
+                pairs = [(src, dst if isinstance(dst, (list, tuple)) else [dst])
+                         for src, dst in (getattr(sub, "mapping", None) or {}).items()]
+            elif kind == 3:
+                pairs = [(src, list(dsts)) for src, dsts in
+                         (getattr(sub, "alternates", None) or {}).items()]
+            for src, dsts in pairs:
+                if defs.get(src) != 3:
+                    continue
+                adrift += [(src, dst, defs.get(dst)) for dst in dsts
+                           if defs.get(dst) != 3]
+    check(not adrift, f"a mark's substitute is a mark in GDEF too "
+                      f"({len(adrift)} are not, e.g. {sorted(set(adrift))[:3]})")

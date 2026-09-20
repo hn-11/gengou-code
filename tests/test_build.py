@@ -2327,3 +2327,46 @@ def test_extend_realign_bases_adds_glyphs_appended_after_the_widening():
         names = sub.BacktrackCoverage[-1].glyphs
         assert names == sorted(set(names), key=gid) == sorted(["half", "cjk"], key=gid)
     assert build.extend_realign_bases(font, []) == 0
+
+
+def test_classify_unicode_marks_follows_a_mark_through_its_substitutes():
+    """A substituted glyph takes its GDEF class from GDEF alone once a
+    font has a GlyphClassDef — HarfBuzz has no Unicode-category
+    fallback — so a variant left unclassified becomes a BASE and the
+    mark-to-base search for the next mark stops on it. Source Code Pro
+    Italic leaves the `.cap` design its ccmp swaps U+0310 for after a
+    capital unclassified, and 23 of the 53 combining marks lost their
+    attachment after U+0310 in every italic Latin face."""
+    order = [".notdef", "mark", "cap", "capalt", "base", "lig"]
+    font = make_font(order, {0x0310: "mark", ord("E"): "base"},
+                     dict.fromkeys(order, 600))
+    gdef = newTable("GDEF")
+    gdef.table = otTables.GDEF()
+    gdef.table.Version = 0x00010000
+    gdef.table.GlyphClassDef = otTables.GlyphClassDef()
+    gdef.table.GlyphClassDef.classDefs = {"base": 1}
+    font["GDEF"] = gdef
+
+    single = otTables.SingleSubst()
+    single.mapping = {"mark": "cap"}
+    alt = otTables.AlternateSubst()
+    alt.alternates = {"cap": ["capalt"]}
+    liga = otTables.LigatureSubst()          # left alone: not every
+    liga.ligatures = {}                      # component need be a mark
+    gsub = newTable("GSUB")
+    gsub.table = otTables.GSUB()
+    gsub.table.LookupList = otTables.LookupList()
+    gsub.table.LookupList.Lookup = []
+    for kind, sub in ((1, single), (3, alt), (4, liga)):
+        lookup = otTables.Lookup()
+        lookup.LookupType, lookup.SubTable = kind, [sub]
+        gsub.table.LookupList.Lookup.append(lookup)
+    font["GSUB"] = gsub
+
+    fixed = build.classify_unicode_marks(font)
+    classes = font["GDEF"].table.GlyphClassDef.classDefs
+    # the cmap'd mark, then its variant, then the variant's variant
+    assert set(fixed) == {"mark", "cap", "capalt"}
+    assert classes["mark"] == classes["cap"] == classes["capalt"] == 3
+    assert classes["base"] == 1 and "lig" not in classes
+    assert build.classify_unicode_marks(font) == []      # idempotent

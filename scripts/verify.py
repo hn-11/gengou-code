@@ -16,6 +16,7 @@ from build import FULLWIDTH, _unwrap, _unwrap_pos  # noqa: E402
 from verifylib import (  # noqa: E402
     Checker,
     check_coverage_order,
+    check_mark_class_closure,
     check_private,
     check_stat,
     check_style_bits,
@@ -274,6 +275,7 @@ def main():
               f"(want {build.WEIGHT_CLASS[weight]} for {weight})")
 
     check_coverage_order(tf, check)
+    check_mark_class_closure(tf, check)
     check_private(tf, check)
 
     # line metrics: Source Code Pro's, hhea and typo alike, USE_TYPO_METRICS
