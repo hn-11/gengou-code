@@ -1002,11 +1002,16 @@ def import_scp_variants(base, scp, default_map, marks):
 
 
 def _ccmp_lookups(gsub):
-    """The lookup indices SCP's 'ccmp' uses, its chain contexts' callees
-    folded in and the whole sorted: a chain context substitutes nothing
-    itself, it names the lookup that does, and a shaper applies lookups
-    in LookupList order, so the order is what has to survive the copy."""
+    """(every lookup index SCP's 'ccmp' needs, the ones the feature
+    itself names). A chain context substitutes nothing itself, it names
+    the lookup that does, so the callees have to be copied too — and a
+    shaper applies lookups in LookupList order, so that order is what
+    has to survive the copy. But only the first list is copied: a callee
+    listed in the feature as well would run with its context thrown
+    away, which is the difference between 'i' before a combining mark
+    and 'i' anywhere at all."""
     order = set()
+    own = set()
 
     def add(i):
         if i in order:
@@ -1021,8 +1026,9 @@ def _ccmp_lookups(gsub):
     for fr in gsub.FeatureList.FeatureRecord:
         if fr.FeatureTag == "ccmp":
             for li in fr.Feature.LookupListIndex:
+                own.add(li)
                 add(li)
-    return sorted(order)
+    return sorted(order), own
 
 
 def _ccmp_remap(lookup, gmap, shift, gid):
@@ -1123,7 +1129,7 @@ def import_scp_ccmp(base, scp, default_map, marks):
     record — Source Han Sans has one per script, and the Latin, Greek
     and Cyrillic this touches are three of them."""
     gsub = scp["GSUB"].table
-    order = _ccmp_lookups(gsub)
+    order, own = _ccmp_lookups(gsub)
     ours = base["GSUB"].table
     records = [fr for fr in ours.FeatureList.FeatureRecord
                if fr.FeatureTag == "ccmp"]
@@ -1206,8 +1212,10 @@ def import_scp_ccmp(base, scp, default_map, marks):
         _ccmp_remap(lookup, gmap, shift, base.getGlyphID)
         ours.LookupList.Lookup.append(lookup)
     ours.LookupList.LookupCount = len(ours.LookupList.Lookup)
+    # the feature names what the donor's feature named, not the closure
+    listed = sorted(shift[old] for old in live if old in own)
     for fr in records:
-        fr.Feature.LookupListIndex.extend(sorted(shift.values()))
+        fr.Feature.LookupListIndex.extend(listed)
         fr.Feature.LookupCount = len(fr.Feature.LookupListIndex)
     return grafted
 
@@ -1918,6 +1926,44 @@ def widen_fullwidth(font, cell, skip=()):
           f"{len(redrawn)} redrawn ({tiled} of them lengthened to keep tiling)")
 
 
+# How a tiling character is lengthened DOWN the page, by block. The
+# sideways classes do not transpose: ┄ tiles across the cell and ┆ down
+# the page, and ＿ ￣ 〰 ◢ tile sideways only — they have no one-cell
+# form to match, so their full-width glyph IS the default and
+# lengthening it would redraw the character (＿'s 41-unit rule came out
+# a 320-unit slab).
+#   scale — the block elements and the quadrants, whose whole point is a
+#   fraction of the cell (an eighth block must stay an eighth of the
+#   line, not gain the same 280 units as the full block), and the
+#   vertical dashed rules, whose pattern must scale with them
+#   rule — the rest of the box drawing: extruded, so a stem or a double
+#   rule keeps its weight
+# The shades ░ ▒ ▓ are in neither: sideways they are stretched whole,
+# but a 40% vertical stretch would draw their dots as ovals against the
+# one-cell default's round ones.
+VTILING_SCALE = ((0x2506, 0x2507), (0x250A, 0x250B), (0x254E, 0x254F),
+                 (0x2580, 0x2590), (0x2594, 0x259F))
+VTILING_RULE = ((0x2500, 0x257F),)
+
+
+def vtiling_glyphs(font):
+    """{glyph: 'scale' | 'rule'} over the full-width forms of the
+    characters that tile down the page. Only the forms a fwid
+    substitution reaches: a character the Latin donor draws at one cell
+    already spans the line in its default form, and one with no
+    one-cell form at all (＿ ￣ 〰) is not drawn to stack."""
+    cmap = font.getBestCmap()
+    fwid = feature_map(font, "fwid")
+    out = {}
+    for blocks, how in ((VTILING_RULE, "rule"), (VTILING_SCALE, "scale")):
+        for lo, hi in blocks:
+            for cp in range(lo, hi + 1):
+                full = fwid.get(cmap.get(cp))
+                if full is not None and full != cmap.get(cp):
+                    out[full] = how
+    return out
+
+
 def tile_vertically(font):
     """Make the full-width box drawing and block elements as tall as a
     line, so a column of them joins.
@@ -1930,54 +1976,57 @@ def tile_vertically(font):
     draws its box drawing -400..1000, tall enough to overlap the line —
     and that band is the target here.
 
-    A glyph is lengthened only where its ink reaches the edge of the em
-    it is drawn in (█'s own extent, which is the full cell by
-    definition) AND presents a rule there: the same two tests
-    widen_fullwidth makes sideways, made on the outline transposed. A
-    shade (░ ▒ ▓), a diagonal or a wave presents a pattern instead and
-    is left alone — sideways such a glyph is stretched whole, but a 26%
-    vertical stretch would draw its dots as ovals against the one-cell
-    default's round ones. Returns the number lengthened."""
+    A rule (vtiling_glyphs) is lengthened only where its ink reaches the
+    edge of the em it is drawn in (█'s own full-width extent, which is
+    the cell by definition) AND presents a rule there: the two tests
+    widen_fullwidth makes sideways, made on the outline transposed, so a
+    stem keeps its weight. A block element is mapped onto the band
+    instead, em edge to band edge, which is what keeps ▁ an eighth of
+    the line and ▀ a half of it. Returns the number redrawn."""
     cmap = font.getBestCmap()
     gs = font.getGlyphSet()
-    band = _bounds(gs, cmap[0x2502]) if 0x2502 in cmap else None
+    fwid = feature_map(font, "fwid")
     block = cmap.get(0x2588)
-    em = _bounds(gs, feature_map(font, "fwid").get(block, block)) if block else None
+    band = _bounds(gs, block) if block else None
+    em = _bounds(gs, fwid.get(block)) if fwid.get(block) else None
     if band is None or em is None:
         return 0
     cff = font["CFF "].cff
     td = cff[cff.fontNames[0]]
     hmtx = font["hmtx"]
     vmtx = font.get("vmtx")
+    scale = (band[3] - band[1]) / (em[3] - em[1])
     redrawn = {}
-    for name in sorted(tiling_glyphs(font)):
-        adv = hmtx.metrics[name][0]
-        if adv != FULLWIDTH:
-            continue
+    for name, how in sorted(vtiling_glyphs(font).items()):
         path = pathops.Path()
         gs[name].draw(path.getPen())
         if path.bounds is None:
             continue
         _, y0, _, y1 = path.bounds
         origin = vmtx_origin(font, name) if vmtx is not None else 0
-        down = y0 - band[1] if y0 <= em[1] + 2 else 0
-        up = band[3] - y1 if y1 >= em[3] - 2 else 0
-        # (x, y) -> (y, x): the top and bottom edges become the right
-        # and left ones, and the sideways machinery reads them as they
-        # are. Transposing back undoes the mirrored winding with it
-        flip = (0, 1, 1, 0, 0, 0)
-        tp = _xform_path(path, flip)
-        out = tp
-        if down > 0 and edge_is_rule(tp, "left"):
-            out = extend_edges(out, down, left=True, right=False)
-        if up > 0 and edge_is_rule(tp, "right"):
-            out = extend_edges(out, up, left=False, right=True)
-        if out is tp:
-            continue
+        if how == "scale":
+            out = _xform_path(path, (1, 0, 0, scale, 0,
+                                     band[1] - em[1] * scale))
+        else:
+            down = y0 - band[1] if y0 <= em[1] + 2 else 0
+            up = band[3] - y1 if y1 >= em[3] - 2 else 0
+            # (x, y) -> (y, x): the top and bottom edges become the
+            # right and left ones, and the sideways machinery reads them
+            # as they are. Transposing back undoes the mirrored winding
+            flip = (0, 1, 1, 0, 0, 0)
+            tp = _xform_path(path, flip)
+            out = tp
+            if down > 0 and edge_is_rule(tp, "left"):
+                out = extend_edges(out, down, left=True, right=False)
+            if up > 0 and edge_is_rule(tp, "right"):
+                out = extend_edges(out, up, left=False, right=True)
+            if out is tp:
+                continue
+            out = _xform_path(out, flip)
+        adv = hmtx.metrics[name][0]
         private = glyph_private(font, td, name)
         pen = T2CharStringPen(pen_width(private, adv), gs)
-        new = _xform_path(out, flip)
-        new.draw(pen)
+        out.draw(pen)
         cs = redrawn[name] = pen.getCharString(private=private)
         hmtx.metrics[name] = (adv, charstring_lsb(cs))
         # the vertical origin is a top side bearing plus the glyph's own
@@ -1986,7 +2035,7 @@ def tile_vertically(font):
         # outright, would no longer agree with vmtx
         if vmtx is not None and name in vmtx.metrics:
             vadv, _ = vmtx.metrics[name]
-            vmtx.metrics[name] = (vadv, origin - new.bounds[3])
+            vmtx.metrics[name] = (vadv, origin - out.bounds[3])
     for name, cs in redrawn.items():
         td.CharStrings[name] = cs
     note_redrawn(font, redrawn)

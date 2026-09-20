@@ -1774,68 +1774,101 @@ def test_fit_to_grid_stretches_a_tiling_glyph_into_its_step():
 
 
 def _vtiling_font():
-    """A face with the three glyphs tile_vertically reads: the one-cell
-    vertical rule whose ink band is the target (U+2502, as the Latin
-    donor draws it), a full-width block that is the em (U+2588), and a
-    full-width triangle that reaches the same em but presents no rule at
-    its top."""
-    order = [".notdef", "vrule", "block", "tri"]
+    """A face shaped like the built ones where tile_vertically reads it:
+    each tiling character has a one-cell default that already spans the
+    line (-400..1000, as the Latin donor draws it) and a full-width form
+    under fwid drawn to Source Han Sans's 1000-unit em (-120..880) —
+    plus a character with no full-width form at all, which must not be
+    touched."""
     shapes = {
         ".notdef": [(0, 0), (1, 0), (1, 1)],
-        "vrule": [(280, -400), (320, -400), (320, 1000), (280, 1000)],
-        "block": [(0, -120), (1000, -120), (1000, 880), (0, 880)],
-        "tri": [(0, -120), (1000, -120), (1000, 880)],
+        # one-cell defaults: the vertical rule, the full block, an eighth
+        "vrule1": [(280, -400), (320, -400), (320, 1000), (280, 1000)],
+        "block1": [(0, -400), (600, -400), (600, 1000), (0, 1000)],
+        "eighth1": [(0, -400), (600, -400), (600, -225), (0, -225)],
+        # their full-width forms, in the 1000-unit em
+        "vruleF": [(480, -120), (520, -120), (520, 880), (480, 880)],
+        "blockF": [(0, -120), (1000, -120), (1000, 880), (0, 880)],
+        "eighthF": [(0, -120), (1000, -120), (1000, 5), (0, 5)],
+        # a full-width low line: no one-cell form, a 41-unit rule that
+        # tiles sideways only
+        "lowline": [(0, -120), (1000, -120), (1000, -79), (0, -79)],
     }
+    order = [".notdef", "vrule1", "block1", "eighth1", "vruleF", "blockF",
+             "eighthF", "lowline"]
     charstrings = {}
-    for g, points in shapes.items():
+    for g in order:
         pen = T2CharStringPen(0, None)
-        pen.moveTo(points[0])
-        for pt in points[1:]:
+        pen.moveTo(shapes[g][0])
+        for pt in shapes[g][1:]:
             pen.lineTo(pt)
         pen.closePath()
         charstrings[g] = pen.getCharString()
     fb = FontBuilder(1000, isTTF=False)
     fb.setupGlyphOrder(order)
-    fb.setupCharacterMap({0x2502: "vrule", 0x2588: "block", 0x25E2: "tri"})
+    fb.setupCharacterMap({0x2502: "vrule1", 0x2588: "block1",
+                          0x2581: "eighth1", 0xFF3F: "lowline"})
     fb.setupCFF("T", {}, charstrings, {})
-    fb.setupHorizontalMetrics({".notdef": (0, 0), "vrule": (600, 280),
-                               "block": (1000, 0), "tri": (1000, 0)})
+    fb.setupHorizontalMetrics({
+        ".notdef": (0, 0), "vrule1": (600, 280), "block1": (600, 0),
+        "eighth1": (600, 0), "vruleF": (1000, 480), "blockF": (1000, 0),
+        "eighthF": (1000, 0), "lowline": (1000, 0)})
     fb.setupHorizontalHeader(ascent=984, descent=-273)
     fb.setupNameTable({"familyName": "T", "styleName": "R"})
     fb.setupOS2()
     fb.setupPost()
+    fb.addOpenTypeFeatures(
+        "feature fwid {\n"
+        "  sub vrule1 by vruleF;\n"
+        "  sub block1 by blockF;\n"
+        "  sub eighth1 by eighthF;\n"
+        "} fwid;\n")
     font = fb.font
     font["vmtx"] = newTable("vmtx")
-    # origin = top side bearing + yMax: 120 + 880 for both full widths
-    font["vmtx"].metrics = {".notdef": (1000, 0), "vrule": (1000, 0),
-                            "block": (1000, 120), "tri": (1000, 120)}
+    # origin = top side bearing + yMax: 120 + 880 for every full width
+    font["vmtx"].metrics = {g: (1000, 120 if g.endswith("F") else 0)
+                            for g in order}
     return font
 
 
-def test_tile_vertically_lengthens_a_rule_and_leaves_a_pattern():
-    """The full-width rules are Source Han Sans's, drawn to its 1000-unit
-    em, and the line is 1257: under fwid a column of │ broke at every
-    line. They are extruded to the band the one-cell default occupies —
-    but only where the ink reaches the em AND presents a rule there, so
-    a triangle, whose cross-section changes as it goes, is left alone."""
+def test_tile_vertically_extrudes_a_rule_and_scales_a_block():
+    """The full-width rules are Source Han Sans's, drawn to its
+    1000-unit em, and the line is 1257: under fwid a column of │ broke
+    at every line. A rule is extruded to the band its one-cell default
+    occupies, so its stem keeps its weight; a block element is mapped
+    onto the band instead, so an eighth block stays an eighth of the
+    line rather than gaining the same units as the full block."""
     font = _vtiling_font()
-    assert build.tile_vertically(font) == 1
+    assert build.tile_vertically(font) == 3
     gs = font.getGlyphSet()
-    block = build._bounds(gs, "block")
-    assert (round(block[1]), round(block[3])) == (-400, 1000)
-    assert (round(block[0]), round(block[2])) == (0, 1000)   # x untouched
-    assert build._bounds(gs, "tri")[3] == 880                # not a rule
+    rule = build._bounds(gs, "vruleF")
+    assert (round(rule[1]), round(rule[3])) == (-400, 1000)
+    assert round(rule[2] - rule[0]) == 40          # the stem did not fatten
+    assert [round(v) for v in build._bounds(gs, "blockF")[1::2]] == [-400, 1000]
+    eighth = build._bounds(gs, "eighthF")
+    assert (round(eighth[1]), round(eighth[3])) == (-400, -225)
+    assert round(eighth[3] - eighth[1]) == round((1000 + 400) / 8)
     # the origin is a bearing plus the glyph's own yMax, so the bearing
     # has to give back what the ink gained above it
-    assert build.vmtx_origin(font, "block") == 1000
-    assert font["vmtx"].metrics["block"][1] == 0
+    assert build.vmtx_origin(font, "blockF") == 1000
+    assert font["vmtx"].metrics["blockF"][1] == 0
 
 
-def test_tile_vertically_needs_the_band_and_the_em():
-    """Both references come from the cmap; a face without them is left
-    alone rather than guessed at."""
+def test_tile_vertically_leaves_a_character_with_no_one_cell_form():
+    """＿ and ￣ are full width in the default too: there is no one-cell
+    form for theirs to match, and extruding the 41-unit rule turned it
+    into a 320-unit slab."""
     font = _vtiling_font()
-    build.set_cmap(font, {0x2502: ".notdef"})
+    build.tile_vertically(font)
+    low = build._bounds(font.getGlyphSet(), "lowline")
+    assert (round(low[1]), round(low[3])) == (-120, -79)
+
+
+def test_tile_vertically_needs_the_block_and_its_full_width_form():
+    """Both references come from the cmap and fwid; a face without them
+    is left alone rather than guessed at."""
+    font = _vtiling_font()
+    build.set_cmap(font, {0x2588: ".notdef"})
     assert build.tile_vertically(font) == 0
 
 

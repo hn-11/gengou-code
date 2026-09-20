@@ -676,6 +676,72 @@ def main():
     check(not ccmp, f"the donor's ccmp composes ({probes} probes; "
                     f"off: {ccmp})")
 
+    # ... and only where the donor lets it. Its dotless i and its raised
+    # accents live in lookups a chain context calls — listing those in
+    # the feature as well, as the first copy did, ran them with the
+    # context thrown away: every 'i' and 'j' in running text came out
+    # dotless and every accent over a lowercase letter jumped to capital
+    # height (129u, on a 486u x-height)
+    loose = {}
+    for ch in "ij":
+        if ord(ch) not in cmap:
+            continue
+        infos, _ = shape_infos(ch, {})
+        got = glyph_order[infos[0].codepoint]
+        if len(infos) != 1 or got != cmap[ord(ch)]:
+            loose[ch] = got
+    if 0x0300 in cmap:
+        for base, want_default in (("x", True), ("X", False)):
+            infos, _ = shape_infos(base + "\u0300", {})
+            got = glyph_order[infos[-1].codepoint]
+            if (got == cmap[0x0300]) is not want_default:
+                loose[base + "\u0300"] = got
+    check(not loose, f"ccmp fires only in the donor's own context "
+                     f"(off: {loose})")
+
+    # ＿ and ￣ are full width in the default too, so there is no
+    # one-cell form for a full-width one to match: lengthening them down
+    # the page drew the 41-unit rule as a 320-unit slab (Source Han Sans
+    # draws it 36 to 50 units through the weights)
+    slabs = {}
+    for ch in "\uFF3F\uFFE3":
+        if ord(ch) not in cmap:
+            continue
+        pen = BoundsPen(arrow_gs)
+        arrow_gs[cmap[ord(ch)]].draw(pen)
+        box = pen.bounds
+        if box is None or box[3] - box[1] > 100:
+            slabs[ch] = None if box is None else round(box[3] - box[1])
+    check(not slabs, f"the full-width low line and macron are rules, not "
+                     f"slabs (over 100u tall: {slabs})")
+
+    # the block elements are fractions of the line, and under fwid they
+    # are Source Han Sans's, drawn to a 1000-unit em: mapped onto the
+    # 1400-unit band they keep their eighths, but EXTRUDED to it they
+    # all gained the same 280 units and ▁ drew 29% of the cell where it
+    # means an eighth
+    def fwid_box(ch):
+        infos, _ = shape_infos(ch, {"fwid": True})
+        pen = BoundsPen(arrow_gs)
+        arrow_gs[glyph_order[infos[0].codepoint]].draw(pen)
+        return pen.bounds
+
+    ramp = {}
+    full = fwid_box("\u2588")
+    if full is not None:
+        band = full[3] - full[1]
+        for k in range(1, 9):
+            ch = chr(0x2580 + k)          # ▁ through █, an eighth apart
+            box = fwid_box(ch)
+            want = band * k / 8
+            if box is None or abs((box[3] - box[1]) - want) > 2:
+                ramp[ch] = None if box is None else round(box[3] - box[1])
+        half = fwid_box("\u2580")         # ▀, the other half of ▄
+        if half is None or abs((half[3] - half[1]) - band / 2) > 2:
+            ramp["\u2580"] = None if half is None else round(half[3] - half[1])
+    check(not ramp, f"the fwid block elements step an eighth of the line "
+                    f"at a time (off: {ramp})")
+
     # ... and nothing ELSE grew with the advance. A Source Han Sans glyph
     # is drawn inside its 1000 em, so in Term, where the advance is 1200,
     # any of them outside the tiling blocks with more than 1000 of ink
