@@ -973,6 +973,14 @@ def import_scp_variants(base, scp, default_map, marks):
                 if src not in default_map:
                     continue
                 is_mark = default_map[src] in marks
+                # another import may already have drawn this one —
+                # cv11's breve is also a locl form — and grafting it
+                # again left the copy the feature selects with none of
+                # the donor's anchors, 229 units low under every
+                # ascender
+                already = default_map.get(dst)
+                if already is not None and (already in marks) == is_mark:
+                    imported.setdefault((dst, is_mark), already)
                 if (dst, is_mark) not in imported:
                     # the DEFAULT's advance, not the variant's: a
                     # variant must not be a different width from the
@@ -2419,9 +2427,10 @@ def realign_halfwidth_marks(font, cell, moved):
 
     # one subtable per depth: a mark advances 0, so in ｶ ゛ ⃝ the glyph
     # before the circle is the dakuten, not the kana, and a single
-    # backtrack would leave every mark after the first behind
+    # backtrack would leave every mark after the first behind. Three
+    # marks deep is as far as this goes
     rules = []
-    for depth in range(3):
+    for depth in range(4):
         rule = otTables.ChainContextPos()
         rule.Format = 3
         rule.BacktrackCoverage = ([coverage(moved)] * depth
@@ -2441,7 +2450,13 @@ def realign_halfwidth_marks(font, cell, moved):
     chain.SubTableCount = len(rules)
     gpos.LookupList.Lookup.append(chain)
     gpos.LookupList.LookupCount = len(gpos.LookupList.Lookup)
-    _add_feature(gpos, "mark", [first + 1])
+    # under 'dist', not 'mark': a shaper runs 'mark' in a vertical run
+    # too, and there the marks are already put on the column by Source
+    # Han Sans's own 'vert' placement (shift_mark_placements moves that
+    # one with the outline). Correcting again there pushed the tone
+    # marks 100 units clear of the column. 'dist' is horizontal-only
+    # and is exactly what it is for
+    _add_feature(gpos, "dist", [first + 1])
     sort_feature_list(gpos)
     return len(halves)
 

@@ -12,6 +12,7 @@ from fontTools.pens.transformPen import TransformPen
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 import build  # noqa: E402
+from build import FULLWIDTH, _unwrap, _unwrap_pos  # noqa: E402
 from verifylib import (  # noqa: E402
     Checker,
     check_style_bits,
@@ -1248,6 +1249,58 @@ def main():
     check(not stacked_marks, f"a mark lands the same behind one mark as "
                              f"behind none (off: {stacked_marks})")
 
+    # ... and a mark after a HALF-width base stays on the column too.
+    # The rule that gives Term's shift back is horizontal-only ('dist'):
+    # under 'mark' a shaper ran it in a vertical run as well, on top of
+    # the placement that puts the mark on the column, and the tone
+    # marks stood 100 units clear of it
+    outside = {}
+    for base in "\uff76A":
+        for mark in "\u20dd\u302c\u3099":
+            if ord(base) not in cmap or ord(mark) not in cmap:
+                continue
+            infos, positions = shape_infos(base + mark, {}, direction="ttb")
+            if len(infos) != 2:
+                continue
+            pen = BoundsPen(arrow_gs)
+            arrow_gs[glyph_order[infos[1].codepoint]].draw(pen)
+            if pen.bounds is None:
+                continue
+            column = FULLWIDTH / 2      # the vertical column is ±500
+            lo = pen.bounds[0] + positions[1].x_offset
+            hi = pen.bounds[2] + positions[1].x_offset
+            if lo < -column - 2 or hi > column + 2:
+                outside[base + mark] = (round(lo), round(hi))
+    check(not outside, f"a mark stays on the column after a half-width "
+                       f"base (outside ±{FULLWIDTH // 2}: {outside})")
+
+    # every mark a feature substitutes for a positioned one is
+    # positioned too: cv11's breve was grafted twice, and the copy the
+    # feature selects carried none of the donor's anchors — 229 units
+    # low under every ascender, its outline inside the letter's for 35
+    # of them
+    positioned = set()
+    for lookup in tf["GPOS"].table.LookupList.Lookup:
+        kind, subs = _unwrap_pos(lookup)
+        if kind not in (4, 5, 6):
+            continue
+        for table in subs:
+            for attr in ("MarkCoverage", "Mark1Coverage"):
+                cov = getattr(table, attr, None)
+                if cov is not None:
+                    positioned.update(cov.glyphs)
+    adrift = []
+    for lookup in tf["GSUB"].table.LookupList.Lookup:
+        kind, subs = _unwrap(lookup)
+        if kind != 1:
+            continue
+        for table in subs:
+            for src, dst in table.mapping.items():
+                if src in positioned and dst not in positioned:
+                    adrift.append((src, dst))
+    check(not adrift, f"a mark's alternate is positioned like the mark "
+                      f"({len(positioned)} positioned; adrift: {adrift[:4]})")
+
     # a full-width base carries its own anchors: Source Han Sans hangs
     # the Bopomofo tone marks off ㄓ, and widening it to two cells moves
     # its ink 100u right — leave the anchor behind (shift_anchors) and
@@ -1382,7 +1435,7 @@ def main():
     # sparse and run to 65497, and a first cut that used one never
     # looked at 60% of the kanji.)
     if exp_full > 1000:
-        from build import _unwrap, tiling_glyphs
+        from build import tiling_glyphs
         tiling = tiling_glyphs(tf)
         pairs = []
         for lookup in tf["GSUB"].table.LookupList.Lookup:
