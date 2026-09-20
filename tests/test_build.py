@@ -1883,13 +1883,21 @@ def test_tile_vertically_extrudes_a_rule_and_scales_a_block():
     assert font["vmtx"].metrics["blockF"][1] == 0
 
 
-def test_tile_vertically_scales_a_dashed_rule_whose_ink_stops_short():
+def test_tile_vertically_puts_a_dashed_rule_on_the_line_s_own_pitch():
     """A dashed vertical never reaches the edge of its em, so extruding
-    would skip it and a column of them would break at every line; it is
-    in the scale class, and the pattern grows with the glyph."""
+    would skip it and a column of them would break at every line. It is
+    mapped onto the LINE rather than the band a block gets: a pattern
+    has to repeat at the pitch a column of cells advances by, and on
+    the band its period came out 11% long — one dash merged with the
+    next line's."""
     font = _vtiling_font()
     build.tile_vertically(font)
-    assert _band(font, "dashF") == (-322, 922)     # -400 + (y + 120) * 1.4
+    hhea = font["hhea"]
+    line = hhea.ascent - hhea.descent
+    # the em -120..880 mapped onto -273..984
+    assert _band(font, "dashF") == (round(hhea.descent + 56 * line / 1000),
+                                    round(hhea.descent + 944 * line / 1000))
+    assert _band(font, "blockF") == (-400, 1000)   # a block keeps the band
 
 
 def test_tile_vertically_leaves_a_short_rule_and_a_slant():

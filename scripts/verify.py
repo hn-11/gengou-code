@@ -6,6 +6,9 @@ import os
 import sys
 from pathlib import Path
 
+import pathops
+from fontTools.pens.transformPen import TransformPen
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 from verifylib import Checker, hmtx_mismatches, make_shaper  # noqa: E402
@@ -215,6 +218,25 @@ def main():
     check(not off_grid,
           f"every advance in the font is on the grid ({len(hmtx.metrics)} glyphs; "
           f"off: {[(n, hmtx[n][0]) for n in off_grid[:5]]})")
+
+    # the names the face ships under. verify_latin.py checks its side;
+    # nothing checked this one, and the JP faces are what SumiMojiJP.zip
+    # carries
+    name = tf["name"]
+    fam = family_name(tf)
+    is_nf = fam.endswith(" Nerd Font Mono")
+    base_fam = fam[:-len(" Nerd Font Mono")] if is_nf else fam
+    want_fam = "Sumi Moji JP" + (" Term" if exp_full > 1000 else "")
+    check(base_fam == want_fam, f"family name {fam!r} (want {want_fam!r})")
+    ps_family = "SumiMojiJP" + ("Term" if exp_full > 1000 else "") \
+        + ("NFM" if is_nf else "")
+    check((name.getDebugName(6) or "").startswith(ps_family + "-"),
+          f"PostScript name {name.getDebugName(6)!r} (want {ps_family}-...)")
+    n0 = name.getDebugName(0) or ""
+    for donor in ("Source Han Sans", "Source Code Pro", "Monaspace"):
+        check(donor in n0, f"nameID 0 credits {donor}")
+    for nid in (1, 2, 3, 4, 5, 6, 8, 9, 11, 13, 14):
+        check(bool(name.getDebugName(nid)), f"nameID {nid} is set")
 
     # a coverage table is searched by glyph id, so its list has to be
     # in that order — and the mark coverages are parallel to their
@@ -650,6 +672,48 @@ def main():
     check(not seam, f"every tiling character spans its whole advance "
                     f"({2 * len(TILING)} probes; off: {seam})")
 
+    # a dashed rule's pattern must not break where two of them meet:
+    # the gap across the join has to be the gap inside the glyph. Such
+    # a rule is never faulted by the span test above — by construction
+    # its ink does not fill its advance — so a Term face that centred ┄
+    # instead of stretching it (111 inside against 312 at the join)
+    # passed every gate this file had
+    def dashes(name, axis):
+        """[(lo, hi)] of each piece of `name` along `axis` (0 = x)."""
+        import pathops
+        path = pathops.Path()
+        arrow_gs[name].draw(path.getPen())
+        return sorted((c.bounds[axis], c.bounds[axis + 2])
+                      for c in path.contours)
+
+    line_pitch = hhea.ascent - hhea.descent + hhea.lineGap
+    pattern = {}
+    for block, axis in (((0x2504, 0x2505, 0x2508, 0x2509, 0x254C, 0x254D), 0),
+                        ((0x2506, 0x2507, 0x250A, 0x250B, 0x254E, 0x254F), 1)):
+        for cp in block:
+            if cp not in cmap:
+                continue
+            # down the page, only the full-width forms: the one-cell
+            # defaults are Source Code Pro's own drawing, and its
+            # vertical dashes do not repeat at this line pitch either
+            # (┆ measures 134 inside against 191 across, in the donor
+            # and here alike) — that is the donor's design, not ours
+            for feats in (({"fwid": True},) if axis else ({}, {"fwid": True})):
+                infos, _ = shape_infos(chr(cp), feats)
+                name = glyph_order[infos[0].codepoint]
+                pieces = dashes(name, axis)
+                if len(pieces) < 2:
+                    continue
+                pitch = hmtx[name][0] if axis == 0 else line_pitch
+                inside = [pieces[i + 1][0] - pieces[i][1]
+                          for i in range(len(pieces) - 1)]
+                join = pieces[0][0] + pitch - pieces[-1][1]
+                if max(abs(g - join) for g in inside) > 3:
+                    pattern[chr(cp), bool(feats)] = (
+                        [round(g) for g in inside], round(join))
+    check(not pattern, f"a dashed rule keeps its pattern across the join "
+                       f"(inside vs across: {pattern})")
+
     # and the same thing DOWN the page. A line is 1257 units tall here
     # (Source Code Pro's metrics on a face whose Japanese is drawn to a
     # 1000-unit em), so a full-width rule that stops at its own em
@@ -833,7 +897,7 @@ def main():
     # place in the donor too — but without the feature, or without the
     # GDEF classes its lookup flag reads, NONE of them move and the two
     # accents draw on top of one another
-    lifted = probes = 0
+    lifted = above = probes = 0
     for base in "xz":
         for first, second in zip(ACCENTS, ACCENTS[1:] + ACCENTS[:1]):
             text = base + first + second
@@ -844,8 +908,18 @@ def main():
                 continue          # composed: nothing left to stack
             probes += 1
             lifted += positions[2].y_offset > 0
-    check(probes and lifted, f"a second accent is lifted clear of the "
-                             f"first ({lifted} of {probes} stacked)")
+            feet = []
+            for info, pos in zip(infos, positions):
+                pen = BoundsPen(arrow_gs)
+                arrow_gs[glyph_order[info.codepoint]].draw(pen)
+                feet.append(None if pen.bounds is None
+                            else pen.bounds[1] + pos.y_offset)
+            above += None not in feet and feet[2] >= feet[1]
+    # all but two: Source Code Pro leaves a flat accent over a round one
+    # where it is, and the upright donor does it once, the italic twice
+    check(probes and above >= probes - 2,
+          f"a second accent sits no lower than the first "
+          f"({above} of {probes} stacked, {lifted} of them lifted)")
 
     # the lift is read through GDEF: 'mkmk' asks which marks it may
     # stack on by the mark attachment class in its lookup flag, and a
@@ -854,10 +928,69 @@ def main():
                       "MarkAttachClassDef", None)
     filtered = [lk.LookupFlag >> 8 for lk in tf["GPOS"].table.LookupList.Lookup
                 if lk.LookupFlag >> 8]
-    check(not filtered or (classes is not None
-                           and set(filtered) <= set(classes.classDefs.values())),
-          f"GDEF names the mark classes GPOS filters on ({sorted(set(filtered))}; "
-          f"GDEF has {sorted(set((classes.classDefs.values() if classes else ())))})")
+    named = sorted(set(classes.classDefs.values())) if classes else []
+    check(filtered and classes is not None and set(filtered) <= set(named),
+          f"GDEF names the mark classes GPOS filters on "
+          f"({sorted(set(filtered))}; GDEF has {named})")
+
+    # Greek gets the Greek accents. Source Code Pro maps them under
+    # 'locl' for script grek — the tonos is 132 units wide where the
+    # Latin cap acute is 188 and sits 138 units lower — and its own
+    # ccmp composes the breathing marks from those locl forms, so
+    # without the feature ρ + U+0313 + U+0301 never composed and drew
+    # the psili inside the acute (build.import_scp_locl)
+    greek = {}
+    for latin_base, greek_base in (() if italic else
+                                   (("B", "\u0392"), ("A", "\u0391"))):
+        if any(ord(c) not in cmap for c in (latin_base, greek_base, "\u0301")):
+            continue
+        pair = [shape_infos(b + "\u0301", {})[0] for b in (latin_base, greek_base)]
+        if any(len(infos) != 2 for infos in pair):
+            continue
+        if pair[0][1].codepoint == pair[1][1].codepoint:
+            greek[greek_base] = glyph_order[pair[1][1].codepoint]
+    for text in (() if italic else ("\u03c1\u0313\u0301", "\u03b1\u0313\u0300")):
+        if any(ord(c) not in cmap for c in text):
+            continue
+        got = len(shape_infos(text, {})[0])
+        if got != 2:
+            greek[text] = got
+    where = ("not checked, the italic donor has no Greek" if italic
+             else f"off: {greek}")
+    check(not greek, f"Greek takes the Greek accents and composes its "
+                     f"breathing marks ({where})")
+
+    # a voicing mark over a HALF-width kana must not be drawn into it.
+    # The mark is registered to the cell before it, and Term widens the
+    # full-width cell only — moving the mark with it put 100 units of ｶ
+    # ﾈ ｳ under the dakuten (build.realign_halfwidth_marks)
+
+    def ink_overlap(text):
+        paths, pen_x = [], 0
+        infos, positions = shape_infos(text, {})
+        if len(infos) != 2:
+            return 0
+        for info, pos in zip(infos, positions):
+            path = pathops.Path()
+            arrow_gs[glyph_order[info.codepoint]].draw(path.getPen())
+            moved = pathops.Path()
+            path.draw(TransformPen(moved.getPen(),
+                                   (1, 0, 0, 1, pen_x + pos.x_offset, pos.y_offset)))
+            paths.append(moved)
+            pen_x += pos.x_advance
+        return abs(pathops.op(paths[0], paths[1],
+                              pathops.PathOp.INTERSECTION).area)
+
+    voiced = {}
+    for kana in "\uff76\uff88\uff73":
+        for mark in "\u3099\u309a":
+            if ord(kana) not in cmap or ord(mark) not in cmap:
+                continue
+            area = ink_overlap(kana + mark)
+            if area > 1:
+                voiced[kana + mark] = round(area)
+    check(not voiced, f"a voicing mark clears the half-width kana it "
+                      f"marks (shared ink: {voiced})")
 
     # the two double-span marks straddle the pair they join: Source
     # Code Pro pulls them half a cell left in GPOS, and dropping that
@@ -998,6 +1131,23 @@ def main():
                                              else hi - box[3])
             if box is None or abs((box[3] - box[1]) - want) > 2 or abs(edge) > 2:
                 ramp[ch] = None if box is None else (round(box[1]), round(box[3]))
+        # the same series across the cell: ▏ through ▉ grow right from
+        # x = 0 an eighth at a time, ▐ and ▕ hang off the right edge
+        def fwid_adv(ch):
+            infos, _ = shape_infos(ch, {"fwid": True})
+            return hmtx[glyph_order[infos[0].codepoint]][0]
+
+        for k in range(1, 8):
+            ch = chr(0x2590 - k)       # ▏ (U+258F) through ▉ (U+2589)
+            box, adv = fwid_box(ch), fwid_adv(ch)
+            if box is None or abs((box[2] - box[0]) - adv * k / 8) > 2 \
+                    or abs(box[0]) > 2:
+                ramp[ch] = None if box is None else (round(box[0]), round(box[2]))
+        for ch, part in (("\u2590", 1 / 2), ("\u2595", 1 / 8)):
+            box, adv = fwid_box(ch), fwid_adv(ch)
+            if box is None or abs((box[2] - box[0]) - adv * part) > 2 \
+                    or abs(box[2] - adv) > 2:
+                ramp[ch] = None if box is None else (round(box[0]), round(box[2]))
         # and the quadrants sit in their own quarter of the cell
         for ch, top, left in (("\u2598", True, True), ("\u259D", True, False),
                               ("\u2596", False, True), ("\u2597", False, False)):
@@ -1094,7 +1244,6 @@ def main():
               f"paired within {budget}u")
 
     # imported outlines must be overlap-free (VF instancing leaves seams)
-    import pathops
     gs = tf.getGlyphSet()
     glyph_order = tf.getGlyphOrder()
 

@@ -347,7 +347,10 @@ Source Code Pro VF / Monaspace VF の Releases から取得する。
   一致範囲を1文字だけにしてネストした LigatureSubst に残りを委ねる形は
   一致範囲外の消費が OpenType 未定義動作で DirectWrite が非対応だった
   ため）、ss01〜08 はグループ別ルックアップ、cv99 が .alt 切替
-- 欧文ドナーの GPOS（`mark` / `mkmk`）も移す（`import_scp_marks`）。
+- 欧文ドナーの `locl` も移す（`import_scp_locl`）。ギリシャ文字は
+  ギリシャのアクセント（トノス）を取り、気息記号が合成される。登録は
+  ドナーと同じスクリプト・言語の組にだけ行う
+- 欧文ドナーの GPOS（`mark` / `mkmk` / `ccmp`）も移す（`import_scp_marks`）。
   Source Code Pro は結合記号の位置を GPOS に置いているので、これが無いと
   アクセントが `b d f h k l` の上伸部を突き抜ける
 - 欧文ドナーの `ccmp`（既定オン）は JP 面にも丸ごと移す（`import_scp_ccmp`

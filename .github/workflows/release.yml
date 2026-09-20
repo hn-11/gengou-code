@@ -182,6 +182,12 @@ jobs:
             flag && /^## / {flag=0}
             flag
           ' CHANGELOG.md > release_notes.md
+          # an awk that matches nothing writes an empty file, and the
+          # release would publish with no notes at all
+          if [ "$PUBLISH" = true ] && [ ! -s release_notes.md ]; then
+            echo "::error::CHANGELOG.md has no '## ${SUMI_VERSION_TAG}' section"
+            exit 1
+          fi
       - if: env.PUBLISH == 'true'
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:

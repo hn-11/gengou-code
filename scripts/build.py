@@ -1103,27 +1103,16 @@ def _ccmp_remap(lookup, gmap, shift, gid):
     return bool(keep)
 
 
-def graft_scp_ccmp(base, scp, default_map, marks):
-    """Give the face the glyphs SCP's 'ccmp' draws that the graft had no
-    reason to: the composed marks (circumflex and acute as one), the
-    dotted-i forms, the accents' flattened shapes for stacking. Each is
-    grafted the way graft_halfwidth grafts the glyph it comes from — a
-    mark (its source is one) at 0 advance with the ink a cell left,
-    anything else at SCP's own advance — and named in `default_map`, so
-    a later import can wire a rule that mentions it.
-
-    Called twice, because the two imports need each other: the variant
-    features have rules on what ccmp composes (cv02's single-storey g̃)
-    and ccmp has rules on what the variants draw (the ogonek under
-    cv04's serifed i). A glyph already grafted is skipped, so the second
-    pass only picks up what the first could not reach. Returns the
-    number grafted."""
-    if "GSUB" not in scp:
-        return 0
+def graft_scp_outputs(base, scp, default_map, marks, order):
+    """Give the face the glyphs the donor's lookups `order` draw that
+    the graft had no reason to. Each is grafted the way graft_halfwidth
+    grafts the glyph it comes from — a mark (its source is one) at 0
+    advance with the ink a cell left, anything else at SCP's own
+    advance — and named in `default_map`, so a later import can wire a
+    rule that mentions it. A glyph already there is skipped, so the
+    pass can run again once another import has unlocked more sources.
+    Returns the number grafted."""
     gsub = scp["GSUB"].table
-    order, _ = _ccmp_lookups(gsub)
-    if not order:
-        return 0
     td, _, fd_index, private, vdon = append_context(base)
     scp_gs = scp.getGlyphSet()
     grafted = 0
@@ -1143,11 +1132,11 @@ def graft_scp_ccmp(base, scp, default_map, marks):
         if is_mark:
             marks.add(name)
 
-    # in SCP's own lookup order, so a composed mark is grafted before
-    # the lookup that restyles it needs to know it is a mark. A
+    # in the donor's own lookup order, so a composed mark is grafted
+    # before the lookup that restyles it needs to know it is a mark. A
     # substitution's output is a mark when its input is one (a
-    # decomposition's first output is the base, the rest are the accents
-    # it carries)
+    # decomposition's first output is the base, the rest are the
+    # accents it carries)
     for i in order:
         kind, subtables = _unwrap(gsub.LookupList.Lookup[i])
         for st in subtables:
@@ -1175,6 +1164,152 @@ def graft_scp_ccmp(base, scp, default_map, marks):
                 if src in default_map:
                     graft(dst, default_map[src] in marks)
     return grafted
+
+
+def _locl_lookups(gsub):
+    """(every lookup index the donor's 'locl' uses, {(script tag,
+    language tag or None): the indices THAT one gets}).
+
+    Unlike ccmp, locl is not a feature to turn on everywhere, and not
+    even one set of lookups everywhere it is on: Source Code Pro gives
+    script grek the Greek accents, script cyrl one set by default and
+    another under Serbian, and Navajo and Skolt Sami a third under
+    their own language tags. Registering the union put the Greek tonos
+    in a Cyrillic run, where it stopped ї + U+0301 composing."""
+    order, where = set(), {}
+    locl = {i for i, fr in enumerate(gsub.FeatureList.FeatureRecord)
+            if fr.FeatureTag == "locl"}
+    for record in gsub.ScriptList.ScriptRecord:
+        for lang, langsys in ([(None, record.Script.DefaultLangSys)]
+                              + [(r.LangSysTag, r.LangSys)
+                                 for r in record.Script.LangSysRecord]):
+            if langsys is None:
+                continue
+            mine = locl.intersection(langsys.FeatureIndex)
+            if not mine:
+                continue
+            theirs = where.setdefault((record.ScriptTag, lang), set())
+            for i in mine:
+                theirs.update(gsub.FeatureList.FeatureRecord[i]
+                              .Feature.LookupListIndex)
+            order.update(theirs)
+    return sorted(order), where
+
+
+def import_scp_locl(base, scp, default_map, where_ours):
+    """Carry the donor's 'locl' — the Greek shapes of the accents, and
+    the Serbian and Sami letterforms — for the scripts and languages it
+    names, not for the whole font. Returns the number of lookups
+    copied.
+
+    Without it a Greek run gets the Latin accent: Β + U+0301 drew the
+    cap acute, 188 units wide and 138 units high, where the donor draws
+    the tonos at 132 wide. Worse, SCP's own ccmp composes the breathing
+    marks from the locl OUTPUTS, so ρ + U+0313 + U+0301 never composed
+    and the psili was drawn inside the acute — 192 Greek sequences."""
+    if "GSUB" not in scp:
+        return 0
+    gsub = scp["GSUB"].table
+    order, where = _locl_lookups(gsub)
+    ours = base["GSUB"].table
+    if not order:
+        return 0
+    gmap = dict(default_map)
+    live = list(order)
+    while True:
+        seen = {old: k for k, old in enumerate(live)}
+        kept = [old for old in live
+                if _ccmp_remap(copy.deepcopy(gsub.LookupList.Lookup[old]),
+                               gmap, seen, base.getGlyphID)]
+        if kept == live:
+            break
+        live = kept
+    if not live:
+        return 0
+    # in front, like ccmp: a locl form is what the rest of the features
+    # then work on, and SCP's own ccmp composes from these outputs
+    shift = {old: k for k, old in enumerate(live)}
+    copied = []
+    for old in live:
+        lookup = copy.deepcopy(gsub.LookupList.Lookup[old])
+        _ccmp_remap(lookup, gmap, shift, base.getGlyphID)
+        copied.append(lookup)
+    _insert_lookups_first(ours, copied)
+    _add_feature_where(ours, "locl",
+                       {pair: sorted(shift[old] for old in theirs
+                                     if old in shift)
+                        for pair, theirs in where.items()
+                        if pair in where_ours})
+    sort_feature_list(ours)
+    return len(live)
+
+
+def _add_feature_where(table, tag, where):
+    """Make each (script, language) pair in `where` reach the lookups
+    IT is given — `_add_feature` puts one set on every LangSys, which
+    is right for ccmp and wrong for a feature whose whole point is that
+    it differs by language."""
+    records = table.FeatureList.FeatureRecord
+    existing = {i for i, fr in enumerate(records) if fr.FeatureTag == tag}
+    lacking = {}
+    for record in table.ScriptList.ScriptRecord:
+        for lang, langsys in ([(None, record.Script.DefaultLangSys)]
+                              + [(r.LangSysTag, r.LangSys)
+                                 for r in record.Script.LangSysRecord]):
+            wanted = where.get((record.ScriptTag, lang))
+            if langsys is None or not wanted:
+                continue
+            mine = existing.intersection(langsys.FeatureIndex)
+            if mine:
+                for i in mine:
+                    feat = records[i].Feature
+                    for li in wanted:
+                        if li not in feat.LookupListIndex:
+                            feat.LookupListIndex.append(li)
+                    feat.LookupCount = len(feat.LookupListIndex)
+            else:
+                lacking.setdefault(tuple(wanted), []).append(langsys)
+    for wanted, langsystems in lacking.items():
+        fr = otTables.FeatureRecord()
+        fr.FeatureTag = tag
+        fr.Feature = otTables.Feature()
+        fr.Feature.FeatureParams = None
+        fr.Feature.LookupListIndex = list(wanted)
+        fr.Feature.LookupCount = len(wanted)
+        records.append(fr)
+        index = len(records) - 1
+        for langsys in langsystems:
+            langsys.FeatureIndex.append(index)
+            langsys.FeatureCount = len(langsys.FeatureIndex)
+    table.FeatureList.FeatureCount = len(records)
+
+
+def scripts_with_langsys(table):
+    """{(script tag, language tag or None)} the font has a LangSys for."""
+    out = set()
+    for record in table.ScriptList.ScriptRecord:
+        if record.Script.DefaultLangSys is not None:
+            out.add((record.ScriptTag, None))
+        for r in record.Script.LangSysRecord:
+            out.add((record.ScriptTag, r.LangSysTag))
+    return out
+
+
+def graft_scp_ccmp(base, scp, default_map, marks):
+    """Give the face the glyphs SCP's 'ccmp' draws that the graft had
+    no reason to: the composed marks (circumflex and acute as one), the
+    dotted-i forms, the accents' flattened shapes for stacking.
+
+    Called twice, because the two imports need each other: the variant
+    features have rules on what ccmp composes (cv02's single-storey g̃)
+    and ccmp has rules on what the variants draw (the ogonek under
+    cv04's serifed i). Returns the number grafted."""
+    if "GSUB" not in scp:
+        return 0
+    order, _ = _ccmp_lookups(scp["GSUB"].table)
+    if not order:
+        return 0
+    return graft_scp_outputs(base, scp, default_map, marks, order)
 
 
 def _renumber_lookups(obj, by, seen=None):
@@ -2172,6 +2307,73 @@ def tiling_glyphs(font):
     return out
 
 
+def realign_halfwidth_marks(font, cell, moved):
+    """Put the full-width combining marks back where they were over a
+    HALF-width base. Returns the number of glyphs the rule covers.
+
+    widen_fullwidth moves them with the cell they ride on — but only
+    the full-width cell grew. The half-width layer (the Latin, and the
+    Halfwidth katakana) is one cell in both families, so over ｶ or ﾈ
+    the mark came out 100 units left of where Source Han Sans puts it,
+    into the kana's own strokes: 25 of the 116 Halfwidth-kana-and-
+    voicing pairs went from touching nowhere to sharing up to 4,651
+    square units of ink. A contextual rule gives those 100 units back
+    when the glyph before the mark is one cell wide; everything else
+    keeps the move."""
+    if not moved or "GPOS" not in font:
+        return 0
+    hmtx = font["hmtx"]
+    gid = font.getGlyphID
+    halves = sorted((name for name in font.getGlyphOrder()
+                     if hmtx[name][0] == cell), key=gid)
+    if not halves:
+        return 0
+
+    def coverage(names):
+        cov = otTables.Coverage()
+        cov.glyphs = sorted(names, key=gid)
+        return cov
+
+    back = otTables.SinglePos()
+    back.Format = 1
+    back.Coverage = coverage(moved)
+    back.Value = otTables.ValueRecord()
+    # every mark moved by the same step, and this undoes it
+    back.Value.XPlacement = -next(iter(moved.values()))
+    back.ValueFormat = 0x1
+    gpos = font["GPOS"].table
+    first = len(gpos.LookupList.Lookup)
+    gpos.LookupList.Lookup.append(_new_lookup_obj(1, back))
+
+    rule = otTables.ChainContextPos()
+    rule.Format = 3
+    rule.BacktrackCoverage = [coverage(halves)]
+    rule.BacktrackGlyphCount = 1
+    rule.InputCoverage = [coverage(moved)]
+    rule.InputGlyphCount = 1
+    rule.LookAheadCoverage = []
+    rule.LookAheadGlyphCount = 0
+    rec = otTables.PosLookupRecord()
+    rec.SequenceIndex, rec.LookupListIndex = 0, first
+    rule.PosLookupRecord = [rec]
+    rule.PosCount = 1
+    gpos.LookupList.Lookup.append(_new_lookup_obj(8, rule))
+    gpos.LookupList.LookupCount = len(gpos.LookupList.Lookup)
+    _add_feature(gpos, "mark", [first + 1])
+    sort_feature_list(gpos)
+    return len(halves)
+
+
+def _new_lookup_obj(kind, subtable):
+    """A Lookup holding one subtable, with no flags."""
+    lookup = otTables.Lookup()
+    lookup.LookupType = kind
+    lookup.LookupFlag = 0
+    lookup.SubTable = [subtable]
+    lookup.SubTableCount = 1
+    return lookup
+
+
 def fullwidth_marks(font):
     """The 0-advance combining marks Source Han Sans draws INSIDE a
     full-width cell — the enclosing circle and square, the kana voicing
@@ -2227,7 +2429,7 @@ def widen_fullwidth(font, cell, skip=()):
     td = cff[cff.fontNames[0]]
     gs = font.getGlyphSet()
     hmtx = font["hmtx"]
-    redrawn, moved_by = {}, {}
+    redrawn, moved_by, marks_moved = {}, {}, {}
     shifted = tiled = 0
     tiling = tiling_glyphs(font)
     skip = set(skip)
@@ -2254,6 +2456,7 @@ def widen_fullwidth(font, cell, skip=()):
                 redrawn[name] = pen.getCharString(private=private)
             hmtx.metrics[name] = (0, lsb + step)
             moved_by[name] = step
+            marks_moved[name] = step
             continue
         if adv <= 0 or adv % FULLWIDTH or name in skip:
             continue
@@ -2298,6 +2501,7 @@ def widen_fullwidth(font, cell, skip=()):
     for name, cs in redrawn.items():
         td.CharStrings[name] = cs        # a plain CFF has no charStringsIndex
     shift_anchors(font, moved_by)
+    realign_halfwidth_marks(font, cell, marks_moved)
     note_redrawn(font, redrawn)
     print(f"  full-width widened to {2 * cell}: {shifted} shifted with their hints, "
           f"{len(redrawn)} redrawn ({tiled} of them lengthened to keep tiling)")
@@ -2318,11 +2522,17 @@ def widen_fullwidth(font, cell, skip=()):
 #   they are sideways: extruding a slant would grow a tail, and the
 #   one-cell default is already 1200 tall in a 600 cell — a steeper
 #   diagonal is the design for a line, not a distortion of it
+#   period — the vertical dashed rules, whose pattern has to repeat at
+#   the LINE's own pitch, not the band's: their em is mapped onto the
+#   line box instead, so a column of them keeps one rhythm across the
+#   join. Mapped onto the band like a block, ┊'s bottom dash and the
+#   next line's top dash overlapped by 57 units and merged into one
+#   471-unit dash among 264-unit ones
 #   tile — the shades, whose dots a 40% stretch would draw as ovals: the
 #   pattern is repeated a whole em up and down and cut to the band,
 #   which is what the cell above and the cell below would have shown
-VTILING_SCALE = ((0x2506, 0x2507), (0x250A, 0x250B), (0x254E, 0x254F),
-                 (0x2571, 0x2573), (0x2580, 0x2590), (0x2594, 0x259F))
+VTILING_SCALE = ((0x2571, 0x2573), (0x2580, 0x2590), (0x2594, 0x259F))
+VTILING_PERIOD = ((0x2506, 0x2507), (0x250A, 0x250B), (0x254E, 0x254F))
 VTILING_TILE = ((0x2591, 0x2593),)
 VTILING_RULE = ((0x2500, 0x257F),)
 
@@ -2337,7 +2547,7 @@ def vtiling_glyphs(font):
     fwid = feature_map(font, "fwid")
     out = {}
     for blocks, how in ((VTILING_RULE, "rule"), (VTILING_SCALE, "scale"),
-                        (VTILING_TILE, "tile")):
+                        (VTILING_PERIOD, "period"), (VTILING_TILE, "tile")):
         for lo, hi in blocks:
             for cp in range(lo, hi + 1):
                 full = fwid.get(cmap.get(cp))
@@ -2364,9 +2574,10 @@ def tile_vertically(font):
     widen_fullwidth makes sideways, made on the outline transposed, so a
     stem keeps its weight. A block element is mapped onto the band
     instead, em edge to band edge, which is what keeps ▁ an eighth of
-    the line and ▀ a half of it, and a shade has its pattern repeated a
-    whole em up and down and cut to the band. Returns the number
-    redrawn."""
+    the line and ▀ a half of it; a dashed vertical is mapped onto the
+    LINE instead, so its pattern repeats at the pitch a column of cells
+    advances by; and a shade has its pattern repeated a whole em up and
+    down and cut to the band. Returns the number redrawn."""
     cmap = font.getBestCmap()
     gs = font.getGlyphSet()
     fwid = feature_map(font, "fwid")
@@ -2380,6 +2591,11 @@ def tile_vertically(font):
     hmtx = font["hmtx"]
     vmtx = font.get("vmtx")
     scale = (band[3] - band[1]) / (em[3] - em[1])
+    # a pattern repeats at the line's pitch, not the band's: hhea's own
+    # box, which is what a column of cells advances by
+    hhea = font["hhea"]
+    line = (hhea.descent, hhea.ascent)
+    period = (line[1] - line[0]) / (em[3] - em[1])
     redrawn = {}
     for name, how in sorted(vtiling_glyphs(font).items()):
         path = pathops.Path()
@@ -2388,9 +2604,10 @@ def tile_vertically(font):
             continue
         _, y0, _, y1 = path.bounds
         origin = vmtx_origin(font, name) if vmtx is not None else 0
-        if how == "scale":
-            out = _xform_path(path, (1, 0, 0, scale, 0,
-                                     band[1] - em[1] * scale))
+        if how in ("scale", "period"):
+            sy, lo = ((scale, band[1]) if how == "scale"
+                      else (period, line[0]))
+            out = _xform_path(path, (1, 0, 0, sy, 0, lo - em[1] * sy))
         elif how == "tile":
             span = em[3] - em[1]
             out = path
@@ -3783,8 +4000,12 @@ def build_face(job):
     latin = TTFont(latin_path)
     base = TTFont(Path(env["SHS_DIR"]) / shs_file)
     n_scp, replaced, default_map, marks = graft_halfwidth(base, latin)
-    # what ccmp composes before the variant features are read, so a
-    # variant rule on a composed glyph has a glyph to name
+    # the locl forms first: SCP's ccmp composes the Greek breathing
+    # marks from them, so they have to exist before that graft runs
+    locl_order, locl_where = _locl_lookups(latin["GSUB"].table)
+    n_locl = graft_scp_outputs(base, latin, default_map, marks, locl_order)
+    # then what ccmp composes, before the variant features are read, so
+    # a variant rule on a composed glyph has a glyph to name
     n_ccmp = graft_scp_ccmp(base, latin, default_map, marks)
     variant_maps, variant_names = import_scp_variants(base, latin, default_map, marks)
     copy_line_metrics(base, latin)
@@ -3798,6 +4019,8 @@ def build_face(job):
     # renumber the list once they are in (drop_features below touches
     # the FeatureList only)
     n_ccmp += import_scp_ccmp(base, latin, default_map, marks)
+    n_locl += import_scp_locl(base, latin, default_map,
+                              scripts_with_langsys(base["GSUB"].table))
     classify_marks(base, marks)   # the grafted marks, the variants, ccmp's
     # and where each of them sits: after classify_marks, which is what
     # tells a shaper they are marks at all, and after the ccmp import,
@@ -3870,7 +4093,7 @@ def build_face(job):
     return (f"{face_label}{f' [{suffix}]' if suffix else ''}: "
             f"latin={n_scp} fwid={len(fullwidth)} vert={n_vert} "
             f"fitted={n_fit} half={n_half} letters={n_letters} "
-            f"ligs={len(added)} ccmp={n_ccmp} mark={n_mark} "
+            f"ligs={len(added)} ccmp={n_ccmp} locl={n_locl} mark={n_mark} "
             f"tall={n_tall} -> {out.name}")
 
 

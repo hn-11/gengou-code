@@ -43,7 +43,10 @@ runs:
       with:
         path: upstreams
         # Key derives from the pins above so a bump busts the cache automatically.
-        key: upstreams-${{ env.SHS_TAG }}-${{ env.SCP_VF_ZIP }}-${{ env.MONA_TAG }}-${{ env.NF_TAG }}
+        # SCP_TAG as well as SCP_VF_ZIP: bump_pins.py derives the zip name
+        # from the tag's -vf component alone, so a release that moves only
+        # the upright or italic one left the key — and the cache — unchanged
+        key: upstreams-${{ env.SHS_TAG }}-${{ env.SCP_TAG }}-${{ env.SCP_VF_ZIP }}-${{ env.MONA_TAG }}-${{ env.NF_TAG }}
     - if: steps.up.outputs.cache-hit != 'true'
       shell: bash
       run: |
