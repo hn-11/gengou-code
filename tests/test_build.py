@@ -1823,7 +1823,7 @@ def _vtiling_font():
     fb.setupGlyphOrder(order)
     fb.setupCharacterMap({0x2502: "vrule1", 0x2588: "block1",
                           0x2581: "eighth1", 0x2580: "upper1",
-                          0x2506: "dash1", 0x2571: "diag1",
+                          0x2506: "dash1", 0x2541: "diag1",
                           0x2592: "shade1", 0x2500: "hrule1",
                           0x2503: "heavy1"})
     fb.setupCFF("T", {}, charstrings, {})
@@ -1892,10 +1892,11 @@ def test_tile_vertically_scales_a_dashed_rule_whose_ink_stops_short():
     assert _band(font, "dashF") == (-322, 922)     # -400 + (y + 120) * 1.4
 
 
-def test_tile_vertically_leaves_a_short_rule_and_a_diagonal():
+def test_tile_vertically_leaves_a_short_rule_and_a_slant():
     """The two guards on the extrusion: ─'s ink stops well inside its
-    em, so there is nothing at the edge to extrude, and ╱ reaches both
-    edges but presents a slant rather than a rule there."""
+    em, so there is nothing at the edge to extrude, and a slanted shape
+    in the rule class reaches both edges but presents no rule there —
+    extruding one would grow it a tail."""
     font = _vtiling_font()
     build.tile_vertically(font)
     assert _band(font, "hruleF") == (360, 400)

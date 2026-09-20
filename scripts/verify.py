@@ -785,6 +785,27 @@ def main():
     check(not through, f"an accent clears the letter it sits on "
                        f"({7 * len(ACCENTS)} pairs; through: {through})")
 
+    # the two imports need each other: SCP's variant features have rules
+    # on what ccmp composes (cv02's single-storey g̃) and ccmp has rules
+    # on what the variants draw (the ogonek under cv04's serifed i). A
+    # variant that cannot reach a composed glyph leaves the default
+    # design on the page with the feature on
+    tags = {fr.FeatureTag for fr in tf["GSUB"].table.FeatureList.FeatureRecord}
+    missed = {}
+    for text, group in (("g\u0303", ("cv02", "ss13")),
+                        ("i\u0307", ("cv04", "ss14"))):
+        if any(ord(c) not in cmap for c in text):
+            continue
+        plain = [i.codepoint for i in shape_infos(text, {})[0]]
+        for tag in group:
+            if tag not in tags:
+                continue
+            got = [i.codepoint for i in shape_infos(text, {tag: True})[0]]
+            if got == plain:
+                missed[text, tag] = [glyph_order[g] for g in got]
+    check(not missed, f"a variant feature reaches what ccmp composes "
+                      f"(unchanged: {missed})")
+
     # ＿ and ￣ are full width in the default too, so there is no
     # one-cell form for a full-width one to match: lengthening them down
     # the page drew the 41-unit rule as a 320-unit slab (Source Han Sans

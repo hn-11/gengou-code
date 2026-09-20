@@ -1103,6 +1103,80 @@ def _ccmp_remap(lookup, gmap, shift, gid):
     return bool(keep)
 
 
+def graft_scp_ccmp(base, scp, default_map, marks):
+    """Give the face the glyphs SCP's 'ccmp' draws that the graft had no
+    reason to: the composed marks (circumflex and acute as one), the
+    dotted-i forms, the accents' flattened shapes for stacking. Each is
+    grafted the way graft_halfwidth grafts the glyph it comes from — a
+    mark (its source is one) at 0 advance with the ink a cell left,
+    anything else at SCP's own advance — and named in `default_map`, so
+    a later import can wire a rule that mentions it.
+
+    Called twice, because the two imports need each other: the variant
+    features have rules on what ccmp composes (cv02's single-storey g̃)
+    and ccmp has rules on what the variants draw (the ogonek under
+    cv04's serifed i). A glyph already grafted is skipped, so the second
+    pass only picks up what the first could not reach. Returns the
+    number grafted."""
+    if "GSUB" not in scp:
+        return 0
+    gsub = scp["GSUB"].table
+    order, _ = _ccmp_lookups(gsub)
+    if not order:
+        return 0
+    td, _, fd_index, private, vdon = append_context(base)
+    scp_gs = scp.getGlyphSet()
+    grafted = 0
+
+    def graft(src, is_mark):
+        nonlocal grafted
+        if src in default_map:
+            return
+        width, dx = (0, -CELL) if is_mark else (scp["hmtx"][src][0], 0)
+        pen = T2CharStringPen(pen_width(private, width), scp_gs)
+        draw_clean([(scp_gs, src, (1, 0, 0, 1, dx, 0))], pen)
+        name = alloc_glyph_name(base)
+        append_glyph(base, td, name, pen.getCharString(private=private),
+                     fd_index, width, None, vdon)
+        default_map[src] = name
+        grafted += 1
+        if is_mark:
+            marks.add(name)
+
+    # in SCP's own lookup order, so a composed mark is grafted before
+    # the lookup that restyles it needs to know it is a mark. A
+    # substitution's output is a mark when its input is one (a
+    # decomposition's first output is the base, the rest are the accents
+    # it carries)
+    for i in order:
+        kind, subtables = _unwrap(gsub.LookupList.Lookup[i])
+        for st in subtables:
+            if kind == 1:
+                pairs = list(st.mapping.items())
+            elif kind == 3:
+                pairs = [(s, a[0]) for s, a in st.alternates.items() if a]
+            elif kind == 2:
+                for src, seq in st.mapping.items():
+                    if src not in default_map:
+                        continue
+                    for k, dst in enumerate(seq):
+                        graft(dst, k > 0 or default_map[src] in marks)
+                continue
+            elif kind == 4:
+                for src, rules in st.ligatures.items():
+                    if src not in default_map:
+                        continue
+                    for lig in rules:
+                        graft(lig.LigGlyph, default_map[src] in marks)
+                continue
+            else:
+                continue        # a chain context draws nothing itself
+            for src, dst in pairs:
+                if src in default_map:
+                    graft(dst, default_map[src] in marks)
+    return grafted
+
+
 def _renumber_lookups(obj, by, seen=None):
     """Add `by` to every nested lookup index under `obj`: a contextual
     lookup names the lookup it calls by its index in the LookupList, in
@@ -1175,58 +1249,11 @@ def import_scp_ccmp(base, scp, default_map, marks):
                if fr.FeatureTag == "ccmp"]
     if not order or not records:
         return 0
-    td, _, fd_index, private, vdon = append_context(base)
-    scp_gs = scp.getGlyphSet()
+    # the rules whose source is itself a variant (SCP composes the
+    # ogonek onto cv04's serifed i) could not be grafted before
+    # import_scp_variants made that glyph
+    grafted = graft_scp_ccmp(base, scp, default_map, marks)
     gmap = dict(default_map)
-    grafted = 0
-
-    def graft(src, is_mark):
-        nonlocal grafted
-        if src in gmap:
-            return
-        width, dx = (0, -CELL) if is_mark else (scp["hmtx"][src][0], 0)
-        pen = T2CharStringPen(pen_width(private, width), scp_gs)
-        draw_clean([(scp_gs, src, (1, 0, 0, 1, dx, 0))], pen)
-        name = alloc_glyph_name(base)
-        append_glyph(base, td, name, pen.getCharString(private=private),
-                     fd_index, width, None, vdon)
-        gmap[src] = name
-        default_map.setdefault(src, name)
-        grafted += 1
-        if is_mark:
-            marks.add(name)
-
-    # what the feature draws that the graft has not: in SCP's own lookup
-    # order, so a composed mark is grafted before the lookup that
-    # restyles it needs to know it is a mark. A substitution's output is
-    # a mark when its input is one (a decomposition's first output is
-    # the base, the rest are the accents it carries)
-    for i in order:
-        kind, subtables = _unwrap(gsub.LookupList.Lookup[i])
-        for st in subtables:
-            if kind == 1:
-                pairs = list(st.mapping.items())
-            elif kind == 3:
-                pairs = [(s, a[0]) for s, a in st.alternates.items() if a]
-            elif kind == 2:
-                for src, seq in st.mapping.items():
-                    if src not in gmap:
-                        continue
-                    for k, dst in enumerate(seq):
-                        graft(dst, k > 0 or gmap[src] in marks)
-                continue
-            elif kind == 4:
-                for src, rules in st.ligatures.items():
-                    if src not in gmap:
-                        continue
-                    for lig in rules:
-                        graft(lig.LigGlyph, gmap[src] in marks)
-                continue
-            else:
-                continue        # a chain context draws nothing itself
-            for src, dst in pairs:
-                if src in gmap:
-                    graft(dst, gmap[src] in marks)
 
     # which lookups survive the copy, before they are numbered: a rule
     # can name a glyph this donor does not have (the italic donor has no
@@ -2100,12 +2127,15 @@ def widen_fullwidth(font, cell, skip=()):
 #   line, not gain the same 280 units as the full block), and the
 #   vertical dashed rules, whose pattern must scale with them
 #   rule — the rest of the box drawing: extruded, so a stem or a double
-#   rule keeps its weight
+#   rule keeps its weight. The diagonals ╱ ╲ ╳ are scaled instead, as
+#   they are sideways: extruding a slant would grow a tail, and the
+#   one-cell default is already 1200 tall in a 600 cell — a steeper
+#   diagonal is the design for a line, not a distortion of it
 #   tile — the shades, whose dots a 40% stretch would draw as ovals: the
 #   pattern is repeated a whole em up and down and cut to the band,
 #   which is what the cell above and the cell below would have shown
 VTILING_SCALE = ((0x2506, 0x2507), (0x250A, 0x250B), (0x254E, 0x254F),
-                 (0x2580, 0x2590), (0x2594, 0x259F))
+                 (0x2571, 0x2573), (0x2580, 0x2590), (0x2594, 0x259F))
 VTILING_TILE = ((0x2591, 0x2593),)
 VTILING_RULE = ((0x2500, 0x257F),)
 
@@ -3566,6 +3596,9 @@ def build_face(job):
     latin = TTFont(latin_path)
     base = TTFont(Path(env["SHS_DIR"]) / shs_file)
     n_scp, replaced, default_map, marks = graft_halfwidth(base, latin)
+    # what ccmp composes before the variant features are read, so a
+    # variant rule on a composed glyph has a glyph to name
+    n_ccmp = graft_scp_ccmp(base, latin, default_map, marks)
     variant_maps, variant_names = import_scp_variants(base, latin, default_map, marks)
     copy_line_metrics(base, latin)
     # the outlines' real slant lives in the Latin donor (SCP Italic's)
@@ -3577,7 +3610,7 @@ def build_face(job):
     # ccmp lookups' nested lookup indices are absolute, so nothing may
     # renumber the list once they are in (drop_features below touches
     # the FeatureList only)
-    n_ccmp = import_scp_ccmp(base, latin, default_map, marks)
+    n_ccmp += import_scp_ccmp(base, latin, default_map, marks)
     classify_marks(base, marks)   # the grafted marks, the variants, ccmp's
     # and where each of them sits: after classify_marks, which is what
     # tells a shaper they are marks at all, and after the ccmp import,
