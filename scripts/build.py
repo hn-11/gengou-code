@@ -3234,6 +3234,11 @@ def _guard_subtables(font, gsub, seq_map, lig_lookup):
     beyond the input sequence is undefined by OpenType. Monaspace's own
     calt is built the way this is: input length == ligature length."""
     seqs = {tuple(k) for k in seq_map}
+    # a set is for the membership tests below; the rules are emitted in a
+    # fixed order so two builds of the same face produce the same GSUB
+    # bytes (they used to differ by a permutation of the 16 rule sets —
+    # shaping-identical over 67,239 probes, but not diffable)
+    ordered = sorted(seqs, key=lambda seq: (-len(seq), seq))
     builder = otl.ChainContextSubstBuilder(font, None)
     Rule = otl.ChainContextualRule
     seen = set()   # a and c (or b and d) can derive the same guard twice
@@ -3257,11 +3262,11 @@ def _guard_subtables(font, gsub, seq_map, lig_lookup):
     # ligature starts, and every guard is tried before every trigger, so
     # it WOULD pre-empt it: '===' shaped as three plain glyphs the moment
     # '==' was guarded against a following '='. Those two keep the skip.
-    for seq in sorted(seqs, key=len, reverse=True):
+    for seq in ordered:
         ignore((seq[0],), seq, ())                                # a
         if seq + (seq[-1],) not in seqs:
             ignore((), seq, (seq[-1],))                           # b
-        for other in seqs:
+        for other in ordered:
             # every ligature whose tail is this one, not only those that
             # overlap it by a single glyph: '=!=' ends with '!=', and
             # without this '==!=' shaped as '=' '=' '≠'
@@ -3271,7 +3276,7 @@ def _guard_subtables(font, gsub, seq_map, lig_lookup):
                 ignore(other[:-1], seq, ())                       # c
             if other[0] == seq[-1] and seq + other[1:] not in seqs:
                 ignore((), seq, other[1:])                        # d
-    for seq in sorted(seqs, key=len, reverse=True):
+    for seq in ordered:
         builder.rules.append(Rule([], [{g} for g in seq], [],
                                   [[_LookupRef(lig_lookup)]]
                                   + [None] * (len(seq) - 1)))
