@@ -2387,9 +2387,10 @@ def shift_mark_placements(font, moved):
     return done
 
 
-def realign_halfwidth_marks(font, cell, moved):
+def realign_halfwidth_marks(font, moved, widened):
     """Put the full-width combining marks back where they were over a
-    HALF-width base. Returns the number of glyphs the rule covers.
+    base the widening did not move. Returns the number of glyphs the
+    rule covers.
 
     widen_fullwidth moves them with the cell they ride on — but only
     the full-width cell grew. The half-width layer (the Latin, and the
@@ -2398,14 +2399,24 @@ def realign_halfwidth_marks(font, cell, moved):
     into the kana's own strokes: 25 of the 116 Halfwidth-kana-and-
     voicing pairs went from touching nowhere to sharing up to 4,651
     square units of ink. A contextual rule gives those 100 units back
-    when the glyph before the mark is one cell wide; everything else
-    keeps the move."""
+    when the base did not move; everything else keeps it.
+
+    "Did not move" is `widened` — the glyphs widen_fullwidth actually
+    touched — and not "one cell wide", which is what this asked at
+    first. The Latin layer also owns 63 multi-cell ligature glyphs
+    (`==`, `===`, `!==`, their cv99 designs: 1200, 1800 and 2400 units),
+    and a ligature that lands on a whole number of full widths is in
+    the widening's own `skip` set, so its advance is the same in both
+    families — but it is not one cell, so all 488 ligature-and-mark
+    pairs kept the move and the ring around ＝＝ came out 100 units off
+    its own cells. Advance alone cannot tell them apart: 1200 is a
+    widened full-width glyph in Term and an untouched ligature."""
     if not moved or "GPOS" not in font:
         return 0
     hmtx = font["hmtx"]
     gid = font.getGlyphID
     halves = sorted((name for name in font.getGlyphOrder()
-                     if hmtx[name][0] == cell), key=gid)
+                     if hmtx[name][0] > 0 and name not in widened), key=gid)
     if not halves:
         return 0
 
@@ -2433,12 +2444,13 @@ def realign_halfwidth_marks(font, cell, moved):
     # subtable per depth: in ｶ ゛ ⃝ the glyph before the circle is the
     # dakuten, and three of them deep is as far as this goes
     gdef = base_gdef(font)
-    classes = dict(getattr(getattr(gdef, "MarkAttachClassDef", None),
-                           "classDefs", None) or {})
-    ours_class = max(classes.values(), default=0) + 1
-    for name in moved:
-        classes[name] = ours_class
+    ours_class = 0
     if gdef is not None:
+        classes = dict(getattr(getattr(gdef, "MarkAttachClassDef", None),
+                               "classDefs", None) or {})
+        ours_class = max(classes.values(), default=0) + 1
+        for name in moved:
+            classes[name] = ours_class
         if gdef.MarkAttachClassDef is None:
             gdef.MarkAttachClassDef = otTables.MarkAttachClassDef()
         gdef.MarkAttachClassDef.classDefs = classes
@@ -2461,7 +2473,10 @@ def realign_halfwidth_marks(font, cell, moved):
     chain = _new_lookup_obj(8, rules[0])
     chain.SubTable = rules
     chain.SubTableCount = len(rules)
-    chain.LookupFlag = ours_class << 8      # skip every other mark
+    # skip every other mark. Without a GDEF there is no class to filter
+    # on, and naming one anyway would make a shaper skip EVERY mark —
+    # the input marks included, which is the whole rule
+    chain.LookupFlag = ours_class << 8
     gpos.LookupList.Lookup.append(chain)
     gpos.LookupList.LookupCount = len(gpos.LookupList.Lookup)
     # under 'dist', not 'mark': a shaper runs 'mark' in a vertical run
@@ -2618,7 +2633,7 @@ def widen_fullwidth(font, cell, skip=()):
         td.CharStrings[name] = cs        # a plain CFF has no charStringsIndex
     shift_anchors(font, moved_by)
     shift_mark_placements(font, marks_moved)
-    realign_halfwidth_marks(font, cell, marks_moved)
+    realign_halfwidth_marks(font, marks_moved, moved_by)
     note_redrawn(font, redrawn)
     print(f"  full-width widened to {2 * cell}: {shifted} shifted with their hints, "
           f"{len(redrawn)} redrawn ({tiled} of them lengthened to keep tiling)")

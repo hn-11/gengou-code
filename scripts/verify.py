@@ -15,11 +15,13 @@ import build  # noqa: E402
 from build import FULLWIDTH, _unwrap, _unwrap_pos  # noqa: E402
 from verifylib import (  # noqa: E402
     Checker,
+    check_stat,
     check_style_bits,
     check_tables,
     glyph_has_hint,
     hmtx_mismatches,
     make_shaper,
+    weight_name,
 )
 
 FONT = Path(sys.argv[1]) if len(sys.argv) > 1 else (
@@ -262,8 +264,9 @@ def main():
     else:
         print("skip  version stamp (SUMI_VERSION unset)")
     # the weight the face calls itself, in the number Windows sorts by
-    weight = subfamily_name(tf).replace(" Italic", "") or "Regular"
-    if weight in build.WEIGHT_CLASS:
+    weight = weight_name(subfamily_name(tf))
+    if check(weight in build.WEIGHT_CLASS,
+             f"subfamily {subfamily_name(tf)!r} names a weight ({weight!r})"):
         check(tf["OS/2"].usWeightClass == build.WEIGHT_CLASS[weight],
               f"OS/2 usWeightClass {tf['OS/2'].usWeightClass} "
               f"(want {build.WEIGHT_CLASS[weight]} for {weight})")
@@ -345,10 +348,7 @@ def main():
     cff_top = tf["CFF "].cff[tf["CFF "].cff.fontNames[0]]
     check(hasattr(cff_top, "ROS"),
           "the face is still CID-keyed (CFF ROS)")
-    if "STAT" in tf:
-        stat = tf["STAT"].table
-        axes = [a.AxisTag for a in stat.DesignAxisRecord.Axis]
-        check("wght" in axes, f"STAT names the weight axis ({axes})")
+    check_stat(tf, check, weight_name(subfamily_name(tf)), is_italic(tf))
     # vhea's extents as well as hhea's: the same pass writes both
     if "vhea" in tf and "vmtx" in tf:
         vhea, vmtx = tf["vhea"], tf["vmtx"].metrics
@@ -1171,6 +1171,42 @@ def main():
             around[base] = (round(off), tuple(round(v) for v in boxes[1]))
     check(not around, f"an enclosing mark stays around its character "
                       f"(off centre: {around})")
+
+    # and it lands the same way over EVERY base the Term widening left
+    # alone, not only over a one-cell one. The Latin layer owns 63
+    # multi-cell ligature glyphs (== is 1200 units, === and !== 1800,
+    # their cv99 designs too) whose advance is the same in both
+    # families — the widening skips them — but the rule that gives
+    # Term's 100 units back asked whether the base was ONE CELL wide,
+    # so all 488 ligature-and-mark pairs kept the move and the ring
+    # came out 100 units left of the cells it encloses. Advance alone
+    # cannot tell a skipped ligature from a widened full-width glyph:
+    # both are 1200 in Term
+    def mark_offset(text):
+        """Where the last glyph's ink centre sits relative to the pen
+        the base run leaves it at — GPOS placement included."""
+        infos, positions = shape_infos(text, {"calt": True, "liga": True})
+        pen = BoundsPen(arrow_gs)
+        arrow_gs[glyph_order[infos[-1].codepoint]].draw(pen)
+        if pen.bounds is None or positions[-1].x_advance:
+            return None
+        return round((pen.bounds[0] + pen.bounds[2]) / 2
+                     + positions[-1].x_offset)
+
+    after_lig = {}
+    for mark in ("\u20dd", "\u3099"):
+        if ord(mark[0]) not in cmap:
+            continue
+        want = mark_offset("A" + mark)     # one cell, the settled case
+        for seq in ("==", "===", "!==", "::", "=>", "..."):
+            if any(ord(c) not in cmap for c in seq):
+                continue
+            got = mark_offset(seq + mark)
+            if want is None or got != want:
+                after_lig[seq + mark] = (got, want)
+    check(not after_lig, f"a full-width mark lands the same after a "
+                         f"multi-cell ligature as after a letter "
+                         f"(off: {after_lig})")
 
     # and it stays around it DOWN a column too. Source Han Sans centres
     # these marks on the vertical column with a placement in 'vert',

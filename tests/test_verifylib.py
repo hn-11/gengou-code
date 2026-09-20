@@ -82,3 +82,92 @@ def test_hmtx_mismatches_reports_widths_and_bearings():
     assert bearings == [("A", 20, 0)]
     # the boxes come back too, so a caller need not draw them again
     assert bounds["A"] == (20, -30, 520, 700) and "space" not in bounds
+
+
+def test_weight_name_reads_the_wws_subfamily():
+    """build.set_names writes the WWS pair, so the Regular italic's
+    subfamily is plain "Italic" — a bare replace of " Italic" leaves
+    that one as "Italic", which is in no weight table, and every check
+    keyed on the weight skipped every italic face."""
+    assert verifylib.weight_name("Regular") == "Regular"
+    assert verifylib.weight_name("Italic") == "Regular"
+    assert verifylib.weight_name("Bold Italic") == "Bold"
+    assert verifylib.weight_name("SemiBold") == "SemiBold"
+    assert verifylib.weight_name("") == "Regular"
+
+
+def _stat_font(weights, italic, *, ital_flags=0x2, linked=1):
+    from conftest import make_font
+    from fontTools import ttLib
+    from fontTools.otlLib import builder as otl
+    font = make_font([".notdef", "a"], {ord("a"): "a"}, {"a": 600})
+    values = []
+    for weight in weights:
+        value = {"value": {"Light": 300, "Regular": 400, "Bold": 700}[weight],
+                 "name": weight}
+        if weight == "Regular":
+            value.update(flags=0x2, linkedValue=700)
+        values.append(value)
+    ital = ({"value": 1, "name": "Italic"} if italic else
+            {"value": 0, "name": "Regular", "flags": ital_flags,
+             "linkedValue": linked})
+    otl.buildStatTable(font, [{"tag": "wght", "name": "Weight", "values": values},
+                              {"tag": "ital", "name": "Italic", "values": [ital]}],
+                       elidedFallbackName="Regular", macNames=False)
+    assert isinstance(font, ttLib.TTFont)
+    return font
+
+
+def test_check_stat_wants_this_face_s_own_value(capsys):
+    """A static face carries its OWN wght value: build.add_stat takes one
+    weight name for a reason (a static listing the family's whole set
+    confuses Windows' family model), and nothing read the result — a
+    Regular whose STAT said 900, or a face listing every weight,
+    passed."""
+    check = verifylib.Checker()
+    verifylib.check_stat(_stat_font(["Regular"], False), check, "Regular", False)
+    assert not check.failed
+    check = verifylib.Checker()
+    verifylib.check_stat(_stat_font(["Regular"], False), check, "Bold", False)
+    assert check.failed                       # the value is not this face's
+    check = verifylib.Checker()
+    verifylib.check_stat(_stat_font(["Light", "Regular", "Bold"], False),
+                         check, "Regular", False)
+    assert check.failed                       # the whole family's values
+    check = verifylib.Checker()
+    verifylib.check_stat(_stat_font(["Regular"], True), check, "Regular", False)
+    assert check.failed                       # an upright face saying Italic
+    check = verifylib.Checker()
+    verifylib.check_stat(_stat_font(["Regular"], False, ital_flags=0),
+                         check, "Regular", False)
+    assert check.failed                       # upright ital value not elidable
+
+
+def test_check_gdef_marks_wants_every_combining_mark_classed(capsys):
+    """build.classify_unicode_marks exists because the donor leaves the
+    double tie bars unclassed, and a mark a shaper reads as a base
+    positions as one. Deleting the call rebuilt and verified clean."""
+    from conftest import make_font
+    from fontTools.ttLib import newTable
+    from fontTools.ttLib.tables import otTables
+    cmap = {ord("a"): "a", 0x0301: "acute", 0x0361: "tie"}
+    font = make_font([".notdef", "a", "acute", "tie"], cmap,
+                     {"a": 600, "acute": 0, "tie": 0})
+    check = verifylib.Checker()
+    verifylib.check_gdef_marks(font, check, cmap)
+    assert check.failed                       # no GDEF at all
+
+    gdef = newTable("GDEF")
+    gdef.table = otTables.GDEF()
+    gdef.table.Version = 0x00010000
+    gdef.table.GlyphClassDef = otTables.GlyphClassDef()
+    gdef.table.GlyphClassDef.classDefs = {"a": 1, "acute": 3, "tie": 3}
+    font["GDEF"] = gdef
+    check = verifylib.Checker()
+    verifylib.check_gdef_marks(font, check, cmap)
+    assert not check.failed
+
+    del gdef.table.GlyphClassDef.classDefs["tie"]
+    check = verifylib.Checker()
+    verifylib.check_gdef_marks(font, check, cmap)
+    assert check.failed

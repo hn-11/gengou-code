@@ -17,17 +17,19 @@ import build_latin  # noqa: E402
 from verify import CASES  # noqa: E402
 from verifylib import (  # noqa: E402
     Checker,
+    check_gdef_marks,
+    check_stat,
     check_style_bits,
     check_tables,
     glyph_has_hint,
     hmtx_mismatches,
     make_shaper,
+    weight_name,
 )
 
 FONT = Path(sys.argv[1]) if len(sys.argv) > 1 else (
     ROOT / "dist" / "latin" / "SumiMoji-Regular.otf")
 CELL = build.CELL
-
 
 def main():
     tf = TTFont(str(FONT))
@@ -44,8 +46,24 @@ def main():
     ps_family = build_latin.PS_FAMILY + ("NFM" if is_nf else "")
     check((name.getDebugName(6) or "").startswith(ps_family + "-"),
           f"PostScript name {name.getDebugName(6)!r}")
-    check_style_bits(tf, check, name.getDebugName(2) or "", "Italic" in
-                     (name.getDebugName(17) or name.getDebugName(2) or ""))
+    subfamily = name.getDebugName(17) or name.getDebugName(2) or ""
+    italic = "Italic" in subfamily
+    check_style_bits(tf, check, name.getDebugName(2) or "", italic)
+    # every nameID a font manager, a PDF and the Windows family model
+    # read. verify.py has required these on the JP faces since v3;
+    # stripping all seven from a Latin face passed every check here
+    for nid in (1, 2, 3, 4, 5, 6, 8, 9, 11, 13, 14):
+        check(bool(name.getDebugName(nid)), f"nameID {nid} is set")
+    # the weight the face calls ITSELF, in the number Windows sorts by:
+    # the PANOSE check below derives what it wants FROM usWeightClass,
+    # so the pair stayed self-consistent at any value — a Regular
+    # stamped 700 passed, and it is build.set_names' single line
+    weight = weight_name(subfamily)
+    if check(weight in build.WEIGHT_CLASS, f"subfamily names a weight ({weight!r})"):
+        check(tf["OS/2"].usWeightClass == build.WEIGHT_CLASS[weight],
+              f"OS/2 usWeightClass {tf['OS/2'].usWeightClass} "
+              f"(want {build.WEIGHT_CLASS[weight]} for {weight})")
+        check_stat(tf, check, weight, italic)
     want_version = os.environ.get("SUMI_VERSION")
     if want_version:
         major, minor = want_version.split(".")[:2]
@@ -123,6 +141,7 @@ def main():
         check(tag not in tags, f"GSUB has no {tag}")
     for tbl in ("vhea", "vmtx", "VORG", "DSIG"):
         check(tbl not in tf, f"no {tbl} table")
+    check_gdef_marks(tf, check, cmap)
     gpos = {fr.FeatureTag for fr in tf["GPOS"].table.FeatureList.FeatureRecord} \
         if "GPOS" in tf else set()
     check("mark" in gpos and "kern" not in gpos,

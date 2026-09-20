@@ -6,6 +6,7 @@ harmonize_latin.py share.
 
 import math
 import sys
+import unicodedata
 from pathlib import Path
 
 import uharfbuzz as hb
@@ -178,16 +179,41 @@ def check_style_bits(tf, check, subfamily, italic):
 def check_tables(tf, check, bounds, hmtx, cmap, codepages=False):
     """The numbers a rasterizer clips and lays out by, read back from
     the outlines: head's bounding box, hhea's four extents, OS/2's
-    embedding permission, vendor id, character-index range and range
-    bits, post's underline, and every Unicode cmap subtable.
+    embedding permission, version and family bits, vendor id,
+    character-index range and range bits, post's underline, and every
+    Unicode cmap subtable.
 
     The build turns fontTools' own recalculation off (recalcBBoxes =
     False) and works these out in one pass, so they are only as right
     as that pass — and nothing read them: zeroing head's box, hhea's
     extents or the range bits all passed, on the JP faces until round
     42 and on the Latin ones until this round, where the 4-cell
-    ligatures then lay outside the declared box."""
-    head, hhea, os2 = tf["head"], tf["hhea"], tf["OS/2"]
+    ligatures then lay outside the declared box.
+
+    `bounds`/`hmtx` are None for a variable font, whose box is the union
+    over its masters rather than one location's ink: that file checks
+    its own box against every instance, and everything else here is the
+    same for it."""
+    head, os2 = tf["head"], tf["OS/2"]
+    check(head.unitsPerEm == 1000,
+          f"head unitsPerEm {head.unitsPerEm} (want 1000)")
+    # version 4 is what makes fsSelection bits 7-9 (USE_TYPO_METRICS,
+    # WWS, OBLIQUE) readable at all, and WWS is what tells Windows the
+    # family/subfamily names already are the WWS pair — without it a
+    # weight lands in its own family menu entry
+    check(os2.version >= 4, f"OS/2 version {os2.version} (want >= 4)")
+    check(os2.fsSelection & 0x100,
+          f"OS/2 WWS bit set (fsSelection={os2.fsSelection:#06x})")
+    check(os2.usWidthClass == 5,
+          f"OS/2 usWidthClass {os2.usWidthClass} (want 5, medium)")
+    if bounds is not None and hmtx is not None:
+        _check_outline_metrics(tf, check, bounds, hmtx)
+    _check_os2_cmap(tf, check, cmap, codepages)
+
+
+def _check_outline_metrics(tf, check, bounds, hmtx):
+    """head's bounding box and hhea's four extents against the ink."""
+    head, hhea = tf["head"], tf["hhea"]
     inked = list(bounds.values())
     want_box = (min(b[0] for b in inked), min(b[1] for b in inked),
                 max(b[2] for b in inked), max(b[3] for b in inked))
@@ -206,6 +232,12 @@ def check_tables(tf, check, bounds, hmtx, cmap, codepages=False):
             ("xMaxExtent", hhea.xMaxExtent, max(extents))):
         check(abs(got - want) <= 1,
               f"hhea {label} is the outlines' ({got} vs {round(want)})")
+
+
+def _check_os2_cmap(tf, check, cmap, codepages):
+    """OS/2's permission, identity and repertoire bits, post's underline,
+    and every Unicode cmap subtable."""
+    os2 = tf["OS/2"]
     check(os2.fsType == 0, f"OS/2 fsType is installable ({os2.fsType})")
     check(os2.achVendID == "SUMI", f"OS/2 vendor id ({os2.achVendID!r})")
     check(tf["post"].underlinePosition and tf["post"].underlineThickness,
@@ -251,3 +283,86 @@ def check_tables(tf, check, bounds, hmtx, cmap, codepages=False):
     check(not disagree, f"every Unicode cmap subtable maps the same "
                         f"({len(subtables)} subtables; off: "
                         f"{[(k, v[:2], len(v)) for k, v in disagree.items()]})")
+
+
+def _axis_values(tf, tag):
+    """A STAT table's AxisValue records for one design axis tag."""
+    stat = tf["STAT"].table
+    idx = next((i for i, a in enumerate(stat.DesignAxisRecord.Axis)
+                if a.AxisTag == tag), None)
+    array = getattr(stat, "AxisValueArray", None)
+    values = getattr(array, "AxisValue", None) or []
+    return idx, [av for av in values if getattr(av, "AxisIndex", None) == idx]
+
+
+def weight_name(subfamily):
+    """The weight a face's subfamily names. build.set_names writes the
+    WWS pair, so the upright Regular is "Regular" and its italic is
+    plain "Italic" — a bare `.replace(" Italic", "")` leaves that one as
+    "Italic", which is in no weight table, and every check keyed on the
+    weight silently skipped every italic face."""
+    return (subfamily.replace(" Italic", "").replace("Italic", "Regular")
+            or "Regular")
+
+
+def check_stat(tf, check, weight, italic):
+    """A STATIC face's STAT: its OWN wght value and nothing else, and the
+    ital value for its own slope.
+
+    build.add_stat takes one weight name per static face for a reason
+    (its docstring: a static font listing the whole family's values
+    confuses Windows' family model) — but nothing read the result.
+    Rewriting Regular's value to 900, or dropping the ital value
+    altogether, passed every verifier: the JP files checked that the
+    wght axis was NAMED, the Latin ones that a STAT was present."""
+    if "STAT" not in tf:
+        return
+    name = tf["name"]
+    wght_axis, wght_values = _axis_values(tf, "wght")
+    ital_axis, ital_values = _axis_values(tf, "ital")
+    check(wght_axis is not None and ital_axis is not None,
+          "STAT declares the wght and ital design axes")
+    want = build.WEIGHT_CLASS[weight]
+    got = [(av.Value, name.getDebugName(av.ValueNameID)) for av in wght_values]
+    check(got == [(want, weight)],
+          f"STAT names this face's weight and no other ({got}, want "
+          f"[({want}, {weight!r})])")
+    # Format 3 on the upright: elidable, and linked to the italic face
+    # so a word processor's I button finds it
+    want_ital = [(1, "Italic")] if italic else [(0, "Regular")]
+    got_ital = [(av.Value, name.getDebugName(av.ValueNameID))
+                for av in ital_values]
+    check(got_ital == want_ital,
+          f"STAT ital value is this face's slope ({got_ital}, want {want_ital})")
+    if not italic and ital_values:
+        av = ital_values[0]
+        check(av.Flags & 0x2 and getattr(av, "LinkedValue", None) == 1,
+              f"STAT upright ital value is elidable and links to Italic "
+              f"(Flags={av.Flags:#04x}, LinkedValue="
+              f"{getattr(av, 'LinkedValue', None)})")
+
+
+def check_gdef_marks(tf, check, cmap):
+    """GDEF is there and every combining mark in the cmap is class 3.
+
+    build.classify_unicode_marks exists because the donor leaves two of
+    them (U+035F, U+0361 — the double tie bars) unclassed, and a mark a
+    shaper reads as a base glyph positions as one. verify.py required
+    GDEF on the JP faces; the Latin faces and the variable fonts, where
+    the same call was one line in the build, required nothing — deleting
+    it rebuilt, verified and unit-tested clean.
+
+    The JP faces are not held to this: Source Han Sans leaves nine of
+    its own marks unclassed (U+0304, U+20DD, U+20DE, U+302A-U+302D,
+    U+3099, U+309A), and classing them changes nothing there — no
+    lookup in those faces sets IgnoreMarks or a mark filter the class
+    would reach, and every sequence measured shapes identically either
+    way. Their GDEF presence is checked in verify.py."""
+    check("GDEF" in tf, "GDEF present")
+    gdef = getattr(tf.get("GDEF"), "table", None)
+    classes = getattr(getattr(gdef, "GlyphClassDef", None), "classDefs", None) or {}
+    unclassed = sorted(f"U+{cp:04X}" for cp, g in cmap.items()
+                       if unicodedata.category(chr(cp)) in ("Mn", "Me")
+                       and classes.get(g) != 3)
+    check(not unclassed, f"every combining mark is GDEF class 3 "
+                         f"({len(unclassed)} are not: {unclassed[:5]})")

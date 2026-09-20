@@ -2114,3 +2114,70 @@ def test_shift_subtable_anchors_moves_the_mark_and_leaves_the_base():
     assert moved == 1
     assert [r.MarkAnchor.XCoordinate for r in sub.MarkArray.MarkRecord] == [-590, 20]
     assert [r.BaseAnchor[0].XCoordinate for r in sub.BaseArray.BaseRecord] == [300, 300]
+
+
+def _gpos_skeleton():
+    """An empty GPOS with the three lists _add_feature walks."""
+    gpos = newTable("GPOS")
+    gpos.table = otTables.GPOS()
+    gpos.table.LookupList = otTables.LookupList()
+    gpos.table.LookupList.Lookup = []
+    gpos.table.LookupList.LookupCount = 0
+    gpos.table.FeatureList = otTables.FeatureList()
+    gpos.table.FeatureList.FeatureRecord = []
+    gpos.table.FeatureList.FeatureCount = 0
+    langsys = otTables.LangSys()
+    langsys.FeatureIndex, langsys.FeatureCount = [], 0
+    langsys.ReqFeatureIndex = 0xFFFF
+    script = otTables.Script()
+    script.DefaultLangSys, script.LangSysRecord = langsys, []
+    script.LangSysCount = 0
+    record = otTables.ScriptRecord()
+    record.ScriptTag, record.Script = "DFLT", script
+    gpos.table.ScriptList = otTables.ScriptList()
+    gpos.table.ScriptList.ScriptRecord = [record]
+    gpos.table.ScriptList.ScriptCount = 1
+    return gpos
+
+
+def test_realign_halfwidth_marks_backtracks_on_every_base_the_widening_left():
+    """The correction fires after a base whose advance the Term widening
+    did not change — which is not the same as "one cell wide". The Latin
+    layer's 63 multi-cell ligature glyphs (== is 1200 units, === 1800)
+    are in the widening's own skip set, so they are the same advance in
+    both families; asking for one cell missed all 488 ligature-and-mark
+    pairs, and the enclosing ring came out 100 units left of the cells
+    it encloses. Advance cannot tell them apart: a widened full-width
+    glyph is 1200 in Term too."""
+    font = _cff_font_with_widths({"half": 600, "lig": 1200, "cjk": 1200,
+                                  "mark": 0})
+    font["GPOS"] = _gpos_skeleton()
+    covered = build.realign_halfwidth_marks(font, {"mark": -100},
+                                            {"cjk": 100})
+    assert covered == 2                       # half and lig, not cjk
+    lookups = font["GPOS"].table.LookupList.Lookup
+    back, chain = lookups[-2], lookups[-1]
+    assert back.SubTable[0].Value.XPlacement == 100        # the move, undone
+    bases = set(chain.SubTable[0].BacktrackCoverage[-1].glyphs)
+    assert bases == {"half", "lig"}
+    # every depth reads the same set of bases behind its run of marks
+    assert [len(sub.BacktrackCoverage) for sub in chain.SubTable] == [1, 2, 3, 4]
+    assert all(set(sub.BacktrackCoverage[-1].glyphs) == bases
+               for sub in chain.SubTable)
+    # and the marks get an attachment class of their own, so an
+    # intervening accent does not break the chain
+    ours = font["GDEF"].table.MarkAttachClassDef.classDefs["mark"] \
+        if "GDEF" in font else chain.LookupFlag >> 8
+    assert chain.LookupFlag >> 8 == ours
+    assert {fr.FeatureTag for fr in font["GPOS"].table.FeatureList.FeatureRecord} \
+        == {"dist"}
+
+
+def test_realign_halfwidth_marks_does_nothing_without_marks_or_bases():
+    font = _cff_font_with_widths({"cjk": 1200, "mark": 0})
+    font["GPOS"] = _gpos_skeleton()
+    assert build.realign_halfwidth_marks(font, {}, {"cjk": 100}) == 0
+    # every glyph widened: nothing is left to backtrack on
+    assert build.realign_halfwidth_marks(font, {"mark": -100},
+                                         {"cjk": 100, "mark": -100}) == 0
+    assert font["GPOS"].table.LookupList.Lookup == []

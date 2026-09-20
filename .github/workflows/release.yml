@@ -41,6 +41,30 @@ env:
   # the runs that publish: a v* tag, or a dispatch without dry-run
   PUBLISH: ${{ github.event_name == 'push' && github.ref_type == 'tag' || github.event_name == 'workflow_dispatch' && !inputs.dry-run }}
 jobs:
+  # the release notes this run would publish, before six jobs spend
+  # fifteen minutes building 32 faces: the package job used to read
+  # CHANGELOG.md at its very last step, so a dispatch for a tag with no
+  # section in it (the weekly sync's patch bump, while an unreleased
+  # section sat at the top of the changelog) built everything and then
+  # failed. Dry runs skip it — they publish nothing and cut no tag.
+  preflight:
+    if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[release-dry]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: CHANGELOG.md has a section for this tag
+        run: |
+          if [ "$PUBLISH" != true ]; then
+            echo "dry run: publishing nothing, no section needed"
+            exit 0
+          fi
+          grep -qx "## ${SUMI_VERSION_TAG}" CHANGELOG.md || {
+            echo "::error::CHANGELOG.md has no '## ${SUMI_VERSION_TAG}' section"
+            exit 1
+          }
+          echo "release notes for ${SUMI_VERSION_TAG} found"
+
   # a family's weights, both styles, per job (six jobs): its Latin donors,
   # its JP faces, and the Nerd Fonts grafts — the JP faces' own, plus a
   # share of the ten Sumi Moji ones, grafted while the JP faces build:
@@ -48,7 +72,7 @@ jobs:
   # Bold jobs (two faces each, the lightest) also build one variable
   # font each, for the package job to pick up
   faces:
-    if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[release-dry]')
+    needs: preflight
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:

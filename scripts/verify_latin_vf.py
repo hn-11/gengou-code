@@ -21,7 +21,14 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 import build  # noqa: E402
 import build_latin_vf  # noqa: E402
-from verifylib import Checker, check_style_bits, make_shaper  # noqa: E402
+from verifylib import (  # noqa: E402
+    Checker,
+    check_gdef_marks,
+    check_style_bits,
+    check_tables,
+    make_shaper,
+    static_faces,
+)
 
 FONT = Path(sys.argv[1]) if len(sys.argv) > 1 else (
     ROOT / "dist" / "latin" / "SumiMoji[wght].otf")
@@ -85,10 +92,28 @@ def main():
     instances = tf["fvar"].instances
     styles = [name.getDebugName(i.subfamilyNameID) for i in instances]
     check(len(instances) == len(WEIGHTS), f"{len(instances)} named instances (want {len(WEIGHTS)}): {styles}")
+    # ... and they are NAMED: only the count was asserted, so a VF whose
+    # menu read "Weight 300" passed — and then failed to find the
+    # matching static face below, which was a silent skip too
+    want_styles = [("Italic" if w == "Regular" else w + " Italic")
+                   if "Italic" in (name.getDebugName(2) or "") else w
+                   for w in WEIGHTS]
+    check(styles == want_styles,
+          f"named instances are the family's styles ({styles}, want {want_styles})")
     want_coords = [float(build.WEIGHT_CLASS[w]) for w in WEIGHTS]
     got_coords = [i.coordinates.get("wght") for i in instances]
     check(got_coords == want_coords,
           f"named instances at usWeightClass wghts {got_coords} (want {want_coords})")
+
+    # the default instance must carry nameID 6 itself
+    # (build_latin_vf.name_default_instance_by_font, for
+    # opentype/varfont/valid_default_instance_nameids): nothing read it
+    default_inst = [i for i in instances
+                    if i.coordinates.get("wght") == axis.defaultValue]
+    check(len(default_inst) == 1
+          and getattr(default_inst[0], "postscriptNameID", None) == 6,
+          f"the default instance's PostScript name is nameID 6 "
+          f"({[getattr(i, 'postscriptNameID', None) for i in default_inst]})")
 
     check("STAT" in tf, "STAT present")
     if "STAT" in tf:
@@ -112,6 +137,19 @@ def main():
         check(len(elidable) == 1
               and name.getDebugName(elidable[0].ValueNameID) == "Regular",
               "Regular is the elidable wght value")
+        # and it is THIS file's slope: only the count was read, so the
+        # upright font declaring itself italic passed
+        want_ital = 1 if "Italic" in (name.getDebugName(2) or "") else 0
+        got_ital = [(av.Value, name.getDebugName(av.ValueNameID))
+                    for av in ital_values]
+        check(got_ital == [(want_ital, "Italic" if want_ital else "Regular")],
+              f"STAT ital value is this file's slope ({got_ital})")
+        if not want_ital and ital_values:
+            av = ital_values[0]
+            check(av.Flags & 0x2 and getattr(av, "LinkedValue", None) == 1,
+                  f"STAT upright ital value is elidable and links to Italic "
+                  f"(Flags={av.Flags:#04x}, "
+                  f"LinkedValue={getattr(av, 'LinkedValue', None)})")
 
     fam, sub = name.getDebugName(1), name.getDebugName(2)
     ps6, ps25 = name.getDebugName(6), name.getDebugName(25)
@@ -138,6 +176,13 @@ def main():
     check((os2.sTypoAscender, os2.sTypoDescender, os2.sTypoLineGap)
           == (hhea.ascent, hhea.descent, hhea.lineGap) and os2.fsSelection & 0x80,
           "typo metrics == hhea metrics, USE_TYPO_METRICS set")
+    # GDI clips to these. Deleting build_latin.fit_win_metrics from the
+    # VF build left 984/273 against a 1060/-454 box — 76u of ascender
+    # and 181u of descender cut off — and every check here still passed
+    check(os2.usWinAscent >= tf["head"].yMax
+          and os2.usWinDescent >= -tf["head"].yMin,
+          f"win metrics cover the bbox ({os2.usWinAscent}/{os2.usWinDescent} "
+          f"vs {tf['head'].yMax}/{-tf['head'].yMin})")
     # head / hhea extents must hold every instance, not just the default
     # one a CFF2 glyph set draws (build_latin_vf.py unions the masters):
     # the union of the whole glyph set at both axis ends and the default.
@@ -157,6 +202,26 @@ def main():
     # failed three checks
     vf_cmap = tf.getBestCmap()
     check(len(vf_cmap) >= 800, f"{len(vf_cmap)} codepoints mapped")
+    check(not any(0x3000 <= cp <= 0x9FFF or 0xFF00 <= cp <= 0xFFEF
+                  for cp in vf_cmap),
+          "no CJK / full-width codepoints")
+    # the tables verify_latin.py has gated since round 43 and this file
+    # never read: a VF with embedding restricted, the vendor id blanked,
+    # the range bits or the char-index range zeroed, or both format-4
+    # cmap subtables deleted, passed here — and these two files ARE
+    # SumiMoji.zip. head's box is checked below instead, against every
+    # instance: a VF's box is the union over its masters, not one
+    # location's ink
+    check_tables(tf, check, None, None, vf_cmap, codepages=True)
+    for tbl in ("vhea", "vmtx", "VORG", "DSIG"):
+        check(tbl not in tf, f"no {tbl} table")
+    vf_gpos = {fr.FeatureTag for fr in tf["GPOS"].table.FeatureList.FeatureRecord} \
+        if "GPOS" in tf else set()
+    check("mark" in vf_gpos and "kern" not in vf_gpos,
+          f"GPOS keeps SCP's mark positioning, no kern ({sorted(vf_gpos)})")
+    check_gdef_marks(tf, check, vf_cmap)
+    letters = {g for cp, g in vf_cmap.items()
+               if 0x30 <= cp <= 0x39 or 0x41 <= cp <= 0x5A or 0x61 <= cp <= 0x7A}
     # ... and they DRAW: the count is a cmap count, so a VF with 1,626
     # of its 1,632 glyphs emptied passed this file, which is the only
     # gate the two variable fonts have
@@ -200,8 +265,20 @@ def main():
                            "zero", "cv01", "ss11") if t not in tags]
     check(not missing, f"GSUB carries the feature surface the statics do "
                        f"(missing: {missing})")
+    # WHERE the ink lands, at every location and not only the default
+    # one: verify_latin.py has held the statics to this since v3, and
+    # the only ink test here was "it draws at all", at the default.
+    # A master translated a cell sideways is point-compatible, so
+    # varLib merges it happily, head/hhea are computed from the same
+    # corrupted masters and hold it, and the SCP exactness check probes
+    # SCP's own glyphs — a build that moved every Monaspace ligature
+    # 600u right above Regular passed this file and the whole suite,
+    # rendering `!=` into the next column at Bold
+    lean = build.CELL // 2
+    spill, centres = {}, {}
     for w in (axis.minValue, axis.defaultValue, axis.maxValue):
         gs = tf.getGlyphSet(location={"wght": w})
+        offs = []
         for g in tf.getGlyphOrder():
             pen = BoundsPen(gs)
             gs[g].draw(pen)
@@ -211,6 +288,25 @@ def main():
                 f(a, b) for f, a, b in zip((min, min, max, max), union, pen.bounds))
             right = metrics[g][0] - pen.bounds[2]
             rsb = right if rsb is None else min(rsb, right)
+            adv = metrics[g][0]
+            # rounded, as the static faces store it: the blend here is
+            # unrounded, and U+035F's ink reaches exactly -CELL//2 —
+            # -300.135 at Bold, which is the same outline
+            left, right_ink = round(pen.bounds[0]), round(pen.bounds[2])
+            if adv > 0 and (left < -lean or right_ink > adv + lean):
+                spill.setdefault(round(w), []).append((g, adv, left, right_ink))
+            if g in letters:
+                offs.append((pen.bounds[0] + pen.bounds[2]) / 2 - adv / 2)
+        centres[round(w)] = sum(offs) / len(offs) if offs else None
+    check(not spill, f"every glyph's ink is inside its advance at every "
+                     f"location, give or take {lean}u of lean "
+                     f"({ {k: (len(v), v[:2]) for k, v in spill.items()} })")
+    off_centre = {w: round(m, 1) for w, m in centres.items()
+                  if m is None or abs(m) > 25}
+    check(not off_centre, f"the letters sit centred in the cell at every "
+                          f"location (mean ink-centre offsets "
+                          f"{ {w: None if m is None else round(m, 1) for w, m in centres.items()} }; "
+                          f"bound 25u, off: {off_centre})")
     # the box is the integer union over the MASTERS; an instance can sit a
     # hair past it (16.16 deltas, the merge's 0.01 rounding tolerance —
     # 0.002u measured); 0.05u leaves headroom for that and still catches
@@ -246,6 +342,7 @@ def main():
     # master can't erode, see build_latin_vf.py), so its bar is not
     # comparable; its SCP-side glyphs still are.
     floor_bar = build.bar_thickness(tf.getGlyphSet(location={"wght": axis.minValue}), equals)
+    any_static = bool(static_faces(ROOT / "dist" / "latin", "SumiMoji"))
     for inst_desc in instances:
         style = name.getDebugName(inst_desc.subfamilyNameID) or "?"
         loc = dict(inst_desc.coordinates)
@@ -284,8 +381,12 @@ def main():
             check(close(bi, br, 1), f"[{style}] instanced 'A' bounds {bi} vs static "
                                     f"{static_name} 'A' bounds {br} (want within 1u)")
         else:
-            print(f"  (skip bar/bounds compare: {static_path} not found — "
-                  f"run build_latin.py first)")
+            # a silent skip in the release package job, where all ten
+            # statics ARE there, means the only per-weight comparison
+            # this file has was lost, not that it did not apply
+            check(not any_static,
+                  f"bar/bounds compare: {static_name} is missing while the "
+                  f"rest of the family is built")
     # exactness against SCP itself, at the named weights AND between them:
     # our blend at user U must equal SCP's blend at the SCP wght our avar
     # maps U to (see build_latin_vf.scp_design_axis / user_axis), to 1u
