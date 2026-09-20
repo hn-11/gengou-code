@@ -1751,3 +1751,159 @@ def test_sync_lsb_sets_bearings_from_the_outlines():
     assert metrics["A"] == (600, 20) and metrics["B"] == (700, -40)
     assert metrics["space"] == (600, 7)
     assert build.sync_lsb(font) == 0
+
+
+def test_fit_to_grid_stretches_a_tiling_glyph_into_its_step():
+    """A character drawn to butt against the next one must fill the step
+    the grid rounds it up to, not sit centred in it: Source Han Sans's
+    two-em dash is 1626 units of ink in a 1672 advance and the step is
+    2000, so centring left a 420-unit hole in a run of them."""
+    font = _cff_font_with_widths({"emdash": 824, "plain": 824}, x0=12)
+    build.set_cmap(font, {0x2E3A: "emdash"}, add_new=True)
+    assert build.fit_to_grid(font, 600) == 2
+    gs = font.getGlyphSet()
+    hmtx = font["hmtx"].metrics
+    assert hmtx["emdash"][0] == hmtx["plain"][0] == 1000
+    dash = build._bounds(gs, "emdash")
+    plain = build._bounds(gs, "plain")
+    # stretched: the ink grew with the advance and the bearing with it
+    assert round(dash[2] - dash[0]) == round(100 * 1000 / 824)
+    assert hmtx["emdash"][1] == pytest.approx(dash[0], abs=1)
+    # the ordinary glyph beside it is the same 100 units, only moved
+    assert round(plain[2] - plain[0]) == 100
+
+
+def _vtiling_font():
+    """A face with the three glyphs tile_vertically reads: the one-cell
+    vertical rule whose ink band is the target (U+2502, as the Latin
+    donor draws it), a full-width block that is the em (U+2588), and a
+    full-width triangle that reaches the same em but presents no rule at
+    its top."""
+    order = [".notdef", "vrule", "block", "tri"]
+    shapes = {
+        ".notdef": [(0, 0), (1, 0), (1, 1)],
+        "vrule": [(280, -400), (320, -400), (320, 1000), (280, 1000)],
+        "block": [(0, -120), (1000, -120), (1000, 880), (0, 880)],
+        "tri": [(0, -120), (1000, -120), (1000, 880)],
+    }
+    charstrings = {}
+    for g, points in shapes.items():
+        pen = T2CharStringPen(0, None)
+        pen.moveTo(points[0])
+        for pt in points[1:]:
+            pen.lineTo(pt)
+        pen.closePath()
+        charstrings[g] = pen.getCharString()
+    fb = FontBuilder(1000, isTTF=False)
+    fb.setupGlyphOrder(order)
+    fb.setupCharacterMap({0x2502: "vrule", 0x2588: "block", 0x25E2: "tri"})
+    fb.setupCFF("T", {}, charstrings, {})
+    fb.setupHorizontalMetrics({".notdef": (0, 0), "vrule": (600, 280),
+                               "block": (1000, 0), "tri": (1000, 0)})
+    fb.setupHorizontalHeader(ascent=984, descent=-273)
+    fb.setupNameTable({"familyName": "T", "styleName": "R"})
+    fb.setupOS2()
+    fb.setupPost()
+    font = fb.font
+    font["vmtx"] = newTable("vmtx")
+    # origin = top side bearing + yMax: 120 + 880 for both full widths
+    font["vmtx"].metrics = {".notdef": (1000, 0), "vrule": (1000, 0),
+                            "block": (1000, 120), "tri": (1000, 120)}
+    return font
+
+
+def test_tile_vertically_lengthens_a_rule_and_leaves_a_pattern():
+    """The full-width rules are Source Han Sans's, drawn to its 1000-unit
+    em, and the line is 1257: under fwid a column of │ broke at every
+    line. They are extruded to the band the one-cell default occupies —
+    but only where the ink reaches the em AND presents a rule there, so
+    a triangle, whose cross-section changes as it goes, is left alone."""
+    font = _vtiling_font()
+    assert build.tile_vertically(font) == 1
+    gs = font.getGlyphSet()
+    block = build._bounds(gs, "block")
+    assert (round(block[1]), round(block[3])) == (-400, 1000)
+    assert (round(block[0]), round(block[2])) == (0, 1000)   # x untouched
+    assert build._bounds(gs, "tri")[3] == 880                # not a rule
+    # the origin is a bearing plus the glyph's own yMax, so the bearing
+    # has to give back what the ink gained above it
+    assert build.vmtx_origin(font, "block") == 1000
+    assert font["vmtx"].metrics["block"][1] == 0
+
+
+def test_tile_vertically_needs_the_band_and_the_em():
+    """Both references come from the cmap; a face without them is left
+    alone rather than guessed at."""
+    font = _vtiling_font()
+    build.set_cmap(font, {0x2502: ".notdef"})
+    assert build.tile_vertically(font) == 0
+
+
+def _lookup(kind, subtable):
+    lk = otTables.Lookup()
+    lk.LookupType = kind
+    lk.LookupFlag = 0
+    lk.SubTable = [subtable]
+    lk.SubTableCount = 1
+    return lk
+
+
+def _coverage(glyphs):
+    cov = otTables.Coverage()
+    cov.glyphs = list(glyphs)
+    return cov
+
+
+def test_ccmp_remap_rewrites_a_substitution_and_drops_what_we_lack():
+    """The donor's lookups are copied in OUR glyph names; a rule naming a
+    glyph the graft never made is dropped, and a lookup that loses all
+    of them says so."""
+    st = otTables.SingleSubst()
+    st.mapping = {"i": "dotlessi", "q": "qvariant"}
+    lookup = _lookup(1, st)
+    gmap = {"i": "cid1", "dotlessi": "cid2"}
+    assert build._ccmp_remap(lookup, gmap, {}, "abcdefgh".index)
+    assert lookup.SubTable[0].mapping == {"cid1": "cid2"}
+
+    st2 = otTables.SingleSubst()
+    st2.mapping = {"q": "qvariant"}
+    dead = _lookup(1, st2)
+    assert not build._ccmp_remap(dead, gmap, {}, "abcdefgh".index)
+    assert dead.SubTable == []
+
+
+def test_ccmp_remap_sorts_a_coverage_and_renumbers_its_callee():
+    """A coverage is searched in glyph-id order, and the donor's order is
+    not ours; a chain context calls its lookup by index, which the copy
+    moves."""
+    st = otTables.ChainContextSubst()
+    st.Format = 3
+    st.BacktrackCoverage = []
+    st.InputCoverage = [_coverage(["b", "a"])]
+    st.LookAheadCoverage = [_coverage(["c"])]
+    rec = otTables.SubstLookupRecord()
+    rec.SequenceIndex, rec.LookupListIndex = 0, 4
+    st.SubstLookupRecord = [rec]
+    st.SubstCount = 1
+    lookup = _lookup(6, st)
+    gmap = {"a": "za", "b": "yb", "c": "xc"}
+    gid = {"za": 7, "yb": 3, "xc": 9}.get
+    assert build._ccmp_remap(lookup, gmap, {4: 12}, gid)
+    assert lookup.SubTable[0].InputCoverage[0].glyphs == ["yb", "za"]
+    assert lookup.SubTable[0].SubstLookupRecord[0].LookupListIndex == 12
+
+
+def test_ccmp_remap_drops_a_context_whose_callee_did_not_survive():
+    """A chain context substitutes nothing itself: with its only callee
+    gone it matches and does nothing, so it goes too."""
+    st = otTables.ChainContextSubst()
+    st.Format = 3
+    st.BacktrackCoverage = []
+    st.InputCoverage = [_coverage(["a"])]
+    st.LookAheadCoverage = []
+    rec = otTables.SubstLookupRecord()
+    rec.SequenceIndex, rec.LookupListIndex = 0, 4
+    st.SubstLookupRecord = [rec]
+    st.SubstCount = 1
+    lookup = _lookup(6, st)
+    assert not build._ccmp_remap(lookup, {"a": "za"}, {}, {"za": 1}.get)

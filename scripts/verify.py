@@ -43,6 +43,14 @@ WIN_METRICS = (1160, 288)
 # line and overline, the wave dash, a quadrant, and the box-drawing and
 # block elements a terminal draws frames and bars with
 TILING = "\uFF3F\uFFE3\u3030\u25E2\u2500\u2501\u253C\u252C\u2588\u2584"
+# ... and the ones that tile DOWN a column: a vertical rule, its heavy
+# and double forms, and the full block
+VTILING = "\u2502\u2503\u2551\u2588"
+# base + combining mark sequences the Latin donor's ccmp composes:
+# the dotless i and j, the precomposed g̃, SCP's Vietnamese
+# circumflex-breve, and the Cyrillic ї it decomposes first
+CCMP_PROBES = (("i", "\u0307"), ("j", "\u0301"), ("g", "\u0303"),
+               ("\u00ea", "\u0306"), ("\u0457", "\u0301"))
 
 # suffix in the base family name -> expected (half-width, full-width) advances
 FAMILY_METRICS = {
@@ -596,6 +604,75 @@ def main():
                     round(box[0]), round(box[2]), adv)
     check(not seam, f"every tiling character spans its whole advance "
                     f"({2 * len(TILING)} probes; off: {seam})")
+
+    # and the same thing DOWN the page. A line is 1257 units tall here
+    # (Source Code Pro's metrics on a face whose Japanese is drawn to a
+    # 1000-unit em), so a full-width rule that stops at its own em
+    # leaves 257 units of white at every line: a column of fwid │ broke
+    # at each one and a run of fwid █ came out striped, while the
+    # one-cell defaults — which the Latin donor draws -400..1000 — did
+    # not (build.tile_vertically)
+    vseam = {}
+    for ch in VTILING:
+        for feats in ({}, {"fwid": True}):
+            infos, _ = shape_infos(ch, feats)
+            pen = BoundsPen(arrow_gs)
+            arrow_gs[glyph_order[infos[0].codepoint]].draw(pen)
+            box = pen.bounds
+            if box is None or box[1] > hhea.descent or box[3] < hhea.ascent:
+                vseam[ch, bool(feats)] = None if box is None else (
+                    round(box[1]), round(box[3]))
+    check(not vseam, f"every vertical rule spans the whole line "
+                     f"({hhea.ascent}..{hhea.descent}; "
+                     f"{2 * len(VTILING)} probes; off: {vseam})")
+
+    # the dashes that exist to butt together. Source Han Sans draws ⸺
+    # 1626 units wide in a 1672 advance — a 92-unit joint — and the grid
+    # step rounds that to two full widths: centred there the joint was
+    # 420, and 820 in Term (build.fit_to_grid stretches them instead).
+    # A sixteenth of the advance is the bound; the design is a
+    # twentieth, the centred version four times over it
+    joints = {}
+    for ch in "⸺⸻":
+        if ord(ch) not in cmap:
+            continue
+        name = cmap[ord(ch)]
+        adv = hmtx[name][0]
+        pen = BoundsPen(arrow_gs)
+        arrow_gs[name].draw(pen)
+        box = pen.bounds
+        joint = None if box is None else box[0] + adv - box[2]
+        if joint is None or joint > adv // 16:
+            joints[ch] = joint if joint is None else round(joint)
+    check(not joints, f"the two-em and three-em dashes butt together "
+                      f"(joint over a sixteenth of the advance: {joints})")
+
+    # the Latin donor's 'ccmp' — on by default in every shaper, and
+    # nothing carried it across the graft for six versions: 'i' before a
+    # combining dot kept its own and drew a second one 84 units away,
+    # 'j' collided with ten accents, and g̃ ê̆ ї́ never composed
+    # (build.import_scp_ccmp). Each probe either loses a glyph to a
+    # composition or has its base substituted, and what is left does not
+    # overlap the accent
+    ccmp = {}
+    for base, mark in CCMP_PROBES:
+        if ord(base) not in cmap:
+            continue       # SCP Italic has no Cyrillic ї to decompose
+        infos, _ = shape_infos(base + mark, {})
+        names = [glyph_order[i.codepoint] for i in infos]
+        if len(names) > 1 and names[0] == cmap[ord(base)]:
+            ccmp[base + mark] = "not composed"
+            continue
+        if len(names) == 2:
+            boxes = []
+            for name in names:
+                pen = BoundsPen(arrow_gs)
+                arrow_gs[name].draw(pen)
+                boxes.append(pen.bounds)
+            if boxes[0] and boxes[1] and boxes[0][3] > boxes[1][1]:
+                ccmp[base + mark] = (round(boxes[0][3]), round(boxes[1][1]))
+    check(not ccmp, f"the donor's ccmp composes ({len(CCMP_PROBES)} probes; "
+                    f"off: {ccmp})")
 
     # ... and nothing ELSE grew with the advance. A Source Han Sans glyph
     # is drawn inside its 1000 em, so in Term, where the advance is 1200,

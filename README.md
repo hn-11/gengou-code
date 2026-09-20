@@ -347,6 +347,10 @@ Source Code Pro VF / Monaspace VF の Releases から取得する。
   一致範囲を1文字だけにしてネストした LigatureSubst に残りを委ねる形は
   一致範囲外の消費が OpenType 未定義動作で DirectWrite が非対応だった
   ため）、ss01〜08 はグループ別ルックアップ、cv99 が .alt 切替
+- 欧文ドナーの `ccmp`（既定オン）は JP 面にも丸ごと移す（`import_scp_ccmp`
+  がグリフ名と入れ子ルックアップ番号を書き換えて写し、機能が描くのに
+  接ぎ木に無いグリフを足す——正体 61 字・斜体 46 字）。`i` + U+0307 は
+  点のない `ı` に替わり、`g̃` `ê̆` `ї́` は合成される
 - 行間は Source Code Pro の値（hhea = typo = 984 / −273 / 0、
   `USE_TYPO_METRICS`）。win は Source Han Sans の宣言値（1160 / 288）。
   等幅メタデータ（`post.isFixedPitch` / PANOSE bProportion=9 /
