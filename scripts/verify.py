@@ -1008,29 +1008,50 @@ def main():
     # place in the donor too — but without the feature, or without the
     # GDEF classes its lookup flag reads, NONE of them move and the two
     # accents draw on top of one another
-    lifted = above = probes = 0
-    for base in "xz":
-        for first, second in zip(ACCENTS, ACCENTS[1:] + ACCENTS[:1]):
-            text = base + first + second
-            if any(ord(c) not in cmap for c in text):
-                continue
-            infos, positions = shape_infos(text, {})
-            if len(infos) != 3:
-                continue          # composed: nothing left to stack
-            probes += 1
-            lifted += positions[2].y_offset > 0
-            feet = []
-            for info, pos in zip(infos, positions):
-                pen = BoundsPen(arrow_gs)
-                arrow_gs[glyph_order[info.codepoint]].draw(pen)
-                feet.append(None if pen.bounds is None
-                            else pen.bounds[1] + pos.y_offset)
-            above += None not in feet and feet[2] >= feet[1]
-    # all but two: Source Code Pro leaves a flat accent over a round one
-    # where it is, and the upright donor does it once, the italic twice
-    check(probes and above >= probes - 2,
+    def stacked(shape, gs, order, chars):
+        """(pairs where the second accent sits no lower than the first,
+        pairs probed, pairs the shaper lifted)."""
+        lifted = above = probes = 0
+        for base in "xz":
+            for first, second in zip(ACCENTS, ACCENTS[1:] + ACCENTS[:1]):
+                text = base + first + second
+                if any(ord(c) not in chars for c in text):
+                    continue
+                infos, positions = shape(text, {})
+                if len(infos) != 3:
+                    continue      # composed: nothing left to stack
+                probes += 1
+                lifted += positions[2].y_offset > 0
+                feet = []
+                for info, pos in zip(infos, positions):
+                    pen = BoundsPen(gs)
+                    gs[order[info.codepoint]].draw(pen)
+                    feet.append(None if pen.bounds is None
+                                else pen.bounds[1] + pos.y_offset)
+                above += None not in feet and feet[2] >= feet[1]
+        return above, probes, lifted
+
+    above, probes, lifted = stacked(shape_infos, arrow_gs, glyph_order, cmap)
+    # against the DONOR at this weight, not a constant: Source Code Pro
+    # leaves a flat accent over a round one where it is, and how often
+    # it does that moves with the weight and the slope — 11 of 13 in the
+    # italic at wght 400, 9 at 700, 12 in the upright. The constant this
+    # started as (probes - 2) was read off Regular and failed every
+    # italic face from Medium up, on faces that reproduce the donor
+    # exactly
+    want = probes - 2
+    donor_weight = weight_name(subfamily_name(tf))
+    donor_path = os.environ.get("SCP_VF_I" if italic else "SCP_VF_U")
+    if donor_weight in WEIGHT_CLASS and donor_path and Path(donor_path).is_file():
+        loc = {"wght": WEIGHT_CLASS[donor_weight]}
+        donor = TTFont(donor_path)
+        want = stacked(make_shaper(donor_path, loc),
+                       donor.getGlyphSet(location=loc), donor.getGlyphOrder(),
+                       donor.getBestCmap())[0]
+    check(probes and above >= want,
           f"a second accent sits no lower than the first "
-          f"({above} of {probes} stacked, {lifted} of them lifted)")
+          f"({above} of {probes} stacked, {lifted} of them lifted; "
+          f"the donor stacks {want})")
 
     # the lift is read through GDEF: 'mkmk' asks which marks it may
     # stack on by the mark attachment class in its lookup flag, and a
@@ -1092,16 +1113,25 @@ def main():
         return abs(pathops.op(paths[0], paths[1],
                               pathops.PathOp.INTERSECTION).area)
 
+    # a bold stroke touches on its own: Source Han Sans Bold shares
+    # 2,844 square units between ﾈ and its dakuten and 4,647 with the
+    # handakuten, where Normal shares 1,077 and 1,569 — so "no ink at
+    # all" is a Regular-only bound, and it failed every weight from
+    # Medium up. Ours share at most 176 (the half-width kana is a whole
+    # cell here, not Source Han Sans's 500), and the regression this
+    # catches shared up to 4,651
+    budget = build.CELL * build.CELL // 400
     voiced = {}
     for kana in "\uff76\uff88\uff73":
         for mark in "\u3099\u309a":
             if ord(kana) not in cmap or ord(mark) not in cmap:
                 continue
             area = ink_overlap(kana + mark)
-            if area > 1:
+            if area > budget:
                 voiced[kana + mark] = round(area)
     check(not voiced, f"a voicing mark clears the half-width kana it "
-                      f"marks (shared ink: {voiced})")
+                      f"marks (over {budget} square units of shared ink: "
+                      f"{voiced})")
 
     # the Serbian and Northern Sami forms are copied in with the Greek;
     # Source Han Sans JP has no LangSys for either, so they were
@@ -1166,9 +1196,13 @@ def main():
         if None in boxes:
             around[base] = None
             continue
+        # 5 units, not 2: Source Han Sans's own 一 sits 2.5 left of
+        # centre in its cell at ExtraLight (the ring 40..960 against
+        # 50..955, identical upstream), and the regression this catches
+        # is 100
         off = (boxes[1][0] + boxes[1][1]) / 2 - (boxes[0][0] + boxes[0][1]) / 2
-        if abs(off) > 2 or boxes[1][0] > boxes[0][0] or boxes[1][1] < boxes[0][1]:
-            around[base] = (round(off), tuple(round(v) for v in boxes[1]))
+        if abs(off) > 5 or boxes[1][0] > boxes[0][0] or boxes[1][1] < boxes[0][1]:
+            around[base] = (round(off, 1), tuple(round(v) for v in boxes[1]))
     check(not around, f"an enclosing mark stays around its character "
                       f"(off centre: {around})")
 
@@ -1232,8 +1266,8 @@ def main():
             column[base] = None
             continue
         off = (boxes[1][0] + boxes[1][1]) / 2 - (boxes[0][0] + boxes[0][1]) / 2
-        if abs(off) > 2:
-            column[base] = (round(off), tuple(round(v) for v in boxes[1]))
+        if abs(off) > 5:      # as above: upstream's own 一 is 2.5 off
+            column[base] = (round(off, 1), tuple(round(v) for v in boxes[1]))
     check(not column, f"an enclosing mark stays around its character "
                       f"down a column (off centre: {column})")
 
@@ -1274,13 +1308,20 @@ def main():
             arrow_gs[glyph_order[infos[1].codepoint]].draw(pen)
             if pen.bounds is None:
                 continue
-            column = FULLWIDTH / 2      # the vertical column is ±500
+            # the vertical column is ±500, and Source Han Sans's own
+            # tone marks sit right against its edge: at Bold U+302C
+            # reaches 513 and the dakuten 505 upstream, identically, so
+            # the bound is the stroke's own growth and not zero. The
+            # regression it catches is 100 units
+            column = FULLWIDTH / 2
+            slack = FULLWIDTH // 20
             lo = pen.bounds[0] + positions[1].x_offset
             hi = pen.bounds[2] + positions[1].x_offset
-            if lo < -column - 2 or hi > column + 2:
+            if lo < -column - slack or hi > column + slack:
                 outside[base + mark] = (round(lo), round(hi))
     check(not outside, f"a mark stays on the column after a half-width "
-                       f"base (outside ±{FULLWIDTH // 2}: {outside})")
+                       f"base (outside ±{FULLWIDTH // 2 + FULLWIDTH // 20}: "
+                       f"{outside})")
 
     # every mark a feature substitutes for a positioned one is
     # positioned too: cv11's breve was grafted twice, and the copy the

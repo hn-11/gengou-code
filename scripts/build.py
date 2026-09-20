@@ -2373,16 +2373,25 @@ def shift_mark_placements(font, moved):
             ours = [n for n in names if n in moved]
             if not ours:
                 continue
-            if len(ours) != len(names):
-                raise ValueError(
-                    "a GPOS placement covers both moved marks and other "
-                    f"glyphs ({names[:4]}...); it would need splitting")
             if not sub.ValueFormat & 0x1:
                 continue
             step = moved[ours[0]]
-            values = sub.Value if sub.Format == 2 else [sub.Value]
-            for value in values:
-                value.XPlacement = getattr(value, "XPlacement", 0) - step
+            if sub.Format == 2:
+                # one ValueRecord per covered glyph: move only ours
+                for name, value in zip(names, sub.Value):
+                    if name in moved:
+                        value.XPlacement = getattr(value, "XPlacement", 0) - step
+                done += 1
+                continue
+            if len(ours) != len(names):
+                # one shared ValueRecord for glyphs that no longer move
+                # together: it would have to be split in two
+                rest = [n for n in names if n not in moved]
+                raise ValueError(
+                    "a GPOS placement covers both moved marks and other "
+                    f"glyphs (moved: {ours[:4]}, not: {rest[:4]}); it "
+                    "would need splitting")
+            sub.Value.XPlacement = getattr(sub.Value, "XPlacement", 0) - step
             done += 1
     return done
 
@@ -2515,17 +2524,33 @@ def fullwidth_marks(font):
     way graft_halfwidth draws ours one CELL left, so widening the cell
     to 1200 has to take them 100 units further left — not right. Told
     from the grafted Latin marks by `_built`: those are ours, the Latin
-    cell is 600 in both families, and they stay put."""
+    cell is 600 in both families, and they stay put.
+
+    What says "drawn in the full-width cell" is where the ink's CENTRE
+    falls, not a hair's breadth either side of the cell's own edges. The
+    first version of this allowed 2 units, and Source Han Sans's strokes
+    thicken with the weight: at Medium the ideographic tone marks reach
+    -1007 and +7, at Bold the voicing marks +5 and +7, so four of the
+    eight fell out of the set at Medium and six at Bold. Those marks
+    kept the 1000-unit cell in Term (the enclosing ring 100 units off
+    the character it encloses, at three of the five weights), and the
+    half-set then tripped shift_mark_placements, which is where the CI
+    build stopped. Source Han Sans's own Latin marks, which the graft
+    may not have replaced, are drawn to the RIGHT of the origin — even
+    U+0304, the widest, is centred on it — so the centre tells them
+    apart at any weight."""
     hmtx = font["hmtx"]
     gs = font.getGlyphSet()
     built = getattr(font, "_built", frozenset())
+    slack = FULLWIDTH // 20
     out = set()
     for cp, name in font.getBestCmap().items():
         if (name in built or hmtx[name][0] != 0
                 or unicodedata.category(chr(cp)) not in ("Mn", "Me")):
             continue
         box = _bounds(gs, name)
-        if box is not None and box[0] >= -FULLWIDTH - 2 and box[2] <= 2:
+        if (box is not None and box[0] >= -FULLWIDTH - slack
+                and box[2] <= slack and (box[0] + box[2]) / 2 < 0):
             out.add(name)
     return out
 

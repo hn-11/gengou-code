@@ -2181,3 +2181,84 @@ def test_realign_halfwidth_marks_does_nothing_without_marks_or_bases():
     assert build.realign_halfwidth_marks(font, {"mark": -100},
                                          {"cjk": 100, "mark": -100}) == 0
     assert font["GPOS"].table.LookupList.Lookup == []
+
+
+def _mark_font(boxes):
+    """A font whose cmap'd combining marks draw the given boxes at
+    advance 0. `boxes` is {codepoint: (x0, x1)}."""
+    names = {cp: f"m{i}" for i, cp in enumerate(boxes)}
+    font = _cff_font_with_widths({n: 0 for n in names.values()})
+    font["cmap"].tables[0].cmap = {cp: names[cp] for cp in boxes}
+    cff = font["CFF "].cff
+    td = cff[cff.fontNames[0]]
+    for cp, (x0, x1) in boxes.items():
+        pen = T2CharStringPen(0, None)
+        pen.moveTo((x0, 0))
+        pen.lineTo((x1, 0))
+        pen.lineTo((x1, 100))
+        pen.closePath()
+        td.CharStrings[names[cp]] = pen.getCharString(private=td.Private)
+    return font, names
+
+
+def test_fullwidth_marks_reads_where_the_ink_is_centred_not_the_cell_edges():
+    """Source Han Sans's strokes thicken with the weight: at Medium the
+    ideographic tone marks reach -1007 and +7, at Bold the voicing marks
+    +5 and +7. A flat two units of tolerance dropped four of the eight
+    at Medium and six at Bold — those kept the 1000-unit cell in Term,
+    and the half-set then broke the build in shift_mark_placements. What
+    says "drawn in the full-width cell" is which side of the origin the
+    ink's centre falls on; the donor's own Latin marks are drawn to the
+    right of it, U+0304 centred on it."""
+    font, names = _mark_font({
+        0x302A: (-1013, -807),     # Bold's tone mark, 13u past the cell
+        0x3099: (-263, 5),         # Bold's dakuten, 5u past the origin
+        0x20DD: (-972, -28),       # the enclosing ring
+        0x0300: (98, 511),         # the donor's grave: right of the origin
+        0x0304: (-163, 163),       # the donor's macron: centred on it
+        0x0041: (0, 500),          # not a mark at all
+    })
+    got = build.fullwidth_marks(font)
+    assert got == {names[0x302A], names[0x3099], names[0x20DD]}
+    # ... and ours, drawn one CELL left, are told apart by _built alone
+    font._built = frozenset({names[0x20DD]})
+    assert build.fullwidth_marks(font) == {names[0x302A], names[0x3099]}
+
+
+def test_shift_mark_placements_moves_only_the_marks_in_a_shared_subtable():
+    """A Format 2 SinglePos carries one value per covered glyph, so a
+    subtable covering both moved marks and other glyphs needs no
+    splitting — only a Format 1 one, whose single value they share,
+    does."""
+    font = _cff_font_with_widths({"mark": 0, "other": 600})
+    font["GPOS"] = _gpos_skeleton()
+
+    def value(x):
+        v = otTables.ValueRecord()
+        v.XPlacement = x
+        return v
+
+    sub = otTables.SinglePos()
+    sub.Format = 2
+    sub.Coverage = otTables.Coverage()
+    sub.Coverage.glyphs = ["mark", "other"]
+    sub.Value = [value(500), value(70)]
+    sub.ValueFormat = 0x1
+    lookup = otTables.Lookup()
+    lookup.LookupType, lookup.SubTable = 1, [sub]
+    font["GPOS"].table.LookupList.Lookup = [lookup]
+    assert build.shift_mark_placements(font, {"mark": -100}) == 1
+    assert [v.XPlacement for v in sub.Value] == [600, 70]
+
+    flat = otTables.SinglePos()
+    flat.Format = 1
+    flat.Coverage = otTables.Coverage()
+    flat.Coverage.glyphs = ["mark", "other"]
+    flat.Value = value(500)
+    flat.ValueFormat = 0x1
+    lookup.SubTable = [flat]
+    with pytest.raises(ValueError, match="would need splitting"):
+        build.shift_mark_placements(font, {"mark": -100})
+    flat.Coverage.glyphs = ["mark"]
+    assert build.shift_mark_placements(font, {"mark": -100}) == 1
+    assert flat.Value.XPlacement == 600
