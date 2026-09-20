@@ -69,8 +69,7 @@ python scripts/verify.py dist/SumiMojiJP-Regular.otf
 ファミリー別に 1 ジョブずつ（Regular Upright の 2 ジョブは JP 面への Nerd
 Fonts の接ぎ木も検証）、可変フォントと Sumi Moji への接ぎ木を 1 ジョブ、
 並列に組んで 1 分程度。リリース
-`release.yml` は `CHANGELOG.md` にそのタグの節があるかを見る `preflight`
-ジョブ、ファミリー × ウェイト群の 6 ジョブ、そのあと `package`
+`release.yml` はファミリー × ウェイト群の 6 ジョブのあと `package`
 ジョブが `harmonize_latin.py` → zip →
 GitHub Release を作り、5 分程度。所要時間を測るだけなら Run workflow の dry-run に
 チェックを入れるか、コミットメッセージに `[release-dry]` と書いたコミットを
@@ -167,3 +166,9 @@ Issue は起票しません。PR 自体が同じ情報に加えて「そのピ�
 ください（上流更新は `upstream-sync.yml` が PR で扱うため、Issue の
 テンプレートはありません）。Pull Request は変更内容と動作確認方法（実行した
 `verify.py` の対象面など）を簡潔に記載してください。
+
+リリースノートは GitHub がマージ済み PR から生成するので、変更履歴
+ファイルはありません（v5.0.0 までの手書きの履歴は各リリースのページと、
+`git show v5.0.0:CHANGELOG.md` に残っています）。**PR のタイトルがその
+まま公開されるノートの 1 行**になるので、何が変わるのかが分かる題を
+付けてください。

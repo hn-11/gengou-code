@@ -46,7 +46,7 @@ FONT = Path(sys.argv[1]) if len(sys.argv) > 1 else (
 # (text, expected glyph count) shaped with calt+liga on: a plain ligature
 # ("a -> b"), a context guard holding ("->>" alone: no trailing/leading
 # context to trigger the guard's OWN longer match, so plain '-' '>' '>'),
-# and a 4-cell true ligature ("<!--", added in 3.3 — see CHANGELOG).
+# and a 4-cell true ligature ("<!--", added in 3.3).
 LIG_CASES = [("a -> b", 5), ("->>", 3), ("<!--", 1)]
 WEIGHTS = [w for w, _ in build.FACES]
 

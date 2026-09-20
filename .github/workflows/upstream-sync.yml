@@ -56,15 +56,9 @@ jobs:
 
       # The release this run cuts if the sync lands. Computed up front so the
       # PR body can name it. There is no version file in this repo - the git
-      # tag *is* the version (font revision comes from the base font).
-      #
-      # A patch bump off the last tag is the default, but CHANGELOG.md wins
-      # when its topmost section names a NEWER version: release.yml fails the
-      # package job when the tag it is given has no `## <tag>` section, so a
-      # sync that ran while an unreleased section was sitting at the top of
-      # the changelog (v5.0.0 written, v4.0.0 the last tag) built all 32
-      # faces and then died on the last step - and if a `## v4.0.1` section
-      # had existed, it would have shipped the v5.0.0 work under a patch tag.
+      # tag *is* the version (font revision comes from the base font), and an
+      # upstream refresh is a patch: the fonts are rebuilt from newer sources
+      # with nothing in this repo changed but the pins.
       - name: Compute next version
         id: version
         run: |
@@ -73,16 +67,9 @@ jobs:
             echo "no v* tag to bump from" >&2
             exit 1
           fi
-          bumped=$(echo "${latest#v}" | awk -F. '{printf "v%d.%d.%d", $1, $2, $3 + 1}')
-          pending=$(grep -m1 -oE '^## v[0-9]+\.[0-9]+\.[0-9]+' CHANGELOG.md | awk '{print $2}')
-          next=$bumped
-          if [ -n "$pending" ] \
-             && [ "$(printf '%s\n%s\n' "$latest" "$pending" | sort -V | tail -1)" = "$pending" ] \
-             && [ "$pending" != "$latest" ]; then
-            next=$pending
-          fi
+          next=$(echo "${latest#v}" | awk -F. '{printf "v%d.%d.%d", $1, $2, $3 + 1}')
           echo "next=$next" >> "$GITHUB_OUTPUT"
-          echo "last tag $latest, changelog ${pending:-none}, patch bump $bumped -> $next"
+          echo "$latest -> $next"
 
       # --- repo-specific ---
       - name: Refresh upstream
@@ -93,31 +80,6 @@ jobs:
           python scripts/bump_pins.py > /tmp/summary.md
           cat /tmp/summary.md
 
-      # ... and whether there are release notes to publish under it. This
-      # decides whether the run CUTS a release, and never whether it
-      # syncs: the fallback tag is a patch bump off the last one, and
-      # nobody writes that section until a release is being prepared, so
-      # failing here would leave the pins unbumped for a missing section
-      # that is missing by design. The PR still opens and says so; a
-      # human writes the notes and dispatches the release.
-      - name: Release notes for the tag this sync would cut
-        id: notes
-        if: steps.refresh.outputs.changed == 'true'
-        run: |
-          next="${{ steps.version.outputs.next }}"
-          body=$(awk -v tag="## $next" '
-            $0 == tag {flag=1; next}
-            flag && /^## / {flag=0}
-            flag
-          ' CHANGELOG.md | tr -d '[:space:]')
-          if [ -z "$body" ]; then
-            echo "::warning::CHANGELOG.md has no '## $next' section; syncing the pins without cutting a release"
-            echo "have=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "release notes for $next found"
-            echo "have=true" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Compose PR body
         if: steps.refresh.outputs.changed == 'true'
         run: |
@@ -127,14 +89,8 @@ jobs:
             cat /tmp/summary.md
             echo
             echo "CI builds the Regular faces from these pins and runs the"
-            echo "shaping regression before this can merge."
-            if [ "${{ steps.notes.outputs.have }}" = true ]; then
-              echo "On merge this workflow cuts \`${{ steps.version.outputs.next }}\`."
-            else
-              echo "No release: \`CHANGELOG.md\` has no"
-              echo "\`## ${{ steps.version.outputs.next }}\` section. Write one and run the"
-              echo "Release workflow by hand when these pins should ship."
-            fi
+            echo "shaping regression before this can merge; on merge this"
+            echo "workflow cuts \`${{ steps.version.outputs.next }}\`."
             echo
             echo "If the new upstream degrades glyphs, close this PR - the"
             echo "pins stay where they are and the next weekly run reopens it."
@@ -224,7 +180,7 @@ jobs:
       # suppresses workflow triggers from the default token), so the release is
       # dispatched instead - release.yml creates the tag itself on dispatch.
       - name: Release
-        if: steps.pr.outputs.pull-request-number != '' && steps.notes.outputs.have == 'true'
+        if: steps.pr.outputs.pull-request-number != ''
         run: |
           gh workflow run release.yml --ref main -f tag="${{ steps.version.outputs.next }}"
           echo "dispatched release ${{ steps.version.outputs.next }}"

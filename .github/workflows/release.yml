@@ -41,38 +41,6 @@ env:
   # the runs that publish: a v* tag, or a dispatch without dry-run
   PUBLISH: ${{ github.event_name == 'push' && github.ref_type == 'tag' || github.event_name == 'workflow_dispatch' && !inputs.dry-run }}
 jobs:
-  # the release notes this run would publish, before six jobs spend
-  # fifteen minutes building 32 faces: the package job used to read
-  # CHANGELOG.md at its very last step, so a dispatch for a tag with no
-  # section in it (the weekly sync's patch bump, while an unreleased
-  # section sat at the top of the changelog) built everything and then
-  # failed. Dry runs skip it — they publish nothing and cut no tag.
-  preflight:
-    if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[release-dry]')
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: CHANGELOG.md has a section for this tag
-        run: |
-          if [ "$PUBLISH" != true ]; then
-            echo "dry run: publishing nothing, no section needed"
-            exit 0
-          fi
-          # the body, not just the heading: the package job fails on an
-          # empty release_notes.md, and a heading with nothing under it
-          # would still burn six jobs before it got there
-          body=$(awk -v tag="## ${SUMI_VERSION_TAG}" '
-            $0 == tag {flag=1; next}
-            flag && /^## / {flag=0}
-            flag
-          ' CHANGELOG.md | tr -d '[:space:]')
-          if [ -z "$body" ]; then
-            echo "::error::CHANGELOG.md has no '## ${SUMI_VERSION_TAG}' section (with notes under it)"
-            exit 1
-          fi
-          echo "release notes for ${SUMI_VERSION_TAG} found"
-
   # a family's weights, both styles, per job (six jobs): its Latin donors,
   # its JP faces, and the Nerd Fonts grafts — the JP faces' own, plus a
   # share of the ten Sumi Moji ones, grafted while the JP faces build:
@@ -80,7 +48,7 @@ jobs:
   # Bold jobs (two faces each, the lightest) also build one variable
   # font each, for the package job to pick up
   faces:
-    needs: preflight
+    if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[release-dry]')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -215,19 +183,6 @@ jobs:
             [ "$got" = "$n" ] || { echo "::error::$zip has $got fonts, want $n"; exit 1; }
           done
           ls -l dist/*.zip
-      - name: Extract changelog section for this tag
-        run: |
-          awk -v tag="## ${SUMI_VERSION_TAG}" '
-            $0 == tag {flag=1; next}
-            flag && /^## / {flag=0}
-            flag
-          ' CHANGELOG.md > release_notes.md
-          # an awk that matches nothing writes an empty file, and the
-          # release would publish with no notes at all
-          if [ "$PUBLISH" = true ] && [ ! -s release_notes.md ]; then
-            echo "::error::CHANGELOG.md has no '## ${SUMI_VERSION_TAG}' section"
-            exit 1
-          fi
       - if: env.PUBLISH == 'true'
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
@@ -235,8 +190,11 @@ jobs:
           # at the built commit. Tag pushes keep working unchanged.
           tag_name: ${{ env.SUMI_VERSION_TAG }}
           target_commitish: ${{ github.sha }}
+          # the notes are the merged pull requests since the last tag:
+          # this project keeps no hand-written changelog (the ones up to
+          # v5.0.0 are on their own release pages, and the file they came
+          # from is in the history at `git show v5.0.0:CHANGELOG.md`)
           generate_release_notes: true
-          body_path: release_notes.md
           files: |
             dist/SumiMojiJP.zip
             dist/SumiMojiJPTerm.zip
