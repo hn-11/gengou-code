@@ -5,10 +5,14 @@ harmonize_latin.py share.
 """
 
 import math
+import sys
 from pathlib import Path
 
 import uharfbuzz as hb
 from fontTools.pens.boundsPen import BoundsPen
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import build  # noqa: E402
 
 # every Type 2 hint operator; a glyph carrying any of them counts as hinted
 HINT_OPS = frozenset({"hstem", "vstem", "hstemhm", "vstemhm", "hintmask", "cntrmask"})
@@ -169,3 +173,81 @@ def check_style_bits(tf, check, subfamily, italic):
         check(bool(fsel & 0x40) and not (fsel & 0x61 & ~0x40),
               f"fsSelection REGULAR bit set, BOLD/ITALIC clear "
               f"(fsSelection={fsel:#06x})")
+
+
+def check_tables(tf, check, bounds, hmtx, cmap, codepages=False):
+    """The numbers a rasterizer clips and lays out by, read back from
+    the outlines: head's bounding box, hhea's four extents, OS/2's
+    embedding permission, vendor id, character-index range and range
+    bits, post's underline, and every Unicode cmap subtable.
+
+    The build turns fontTools' own recalculation off (recalcBBoxes =
+    False) and works these out in one pass, so they are only as right
+    as that pass — and nothing read them: zeroing head's box, hhea's
+    extents or the range bits all passed, on the JP faces until round
+    42 and on the Latin ones until this round, where the 4-cell
+    ligatures then lay outside the declared box."""
+    head, hhea, os2 = tf["head"], tf["hhea"], tf["OS/2"]
+    inked = list(bounds.values())
+    want_box = (min(b[0] for b in inked), min(b[1] for b in inked),
+                max(b[2] for b in inked), max(b[3] for b in inked))
+    got_box = (head.xMin, head.yMin, head.xMax, head.yMax)
+    check(all(abs(a - b) <= 1 for a, b in zip(got_box, want_box)),
+          f"head's bounding box is the ink's ({got_box} vs "
+          f"{tuple(round(v) for v in want_box)})")
+    widths = [hmtx[n][0] for n in tf.getGlyphOrder()]
+    extents = [hmtx[n][1] + (b[2] - b[0]) for n, b in bounds.items()]
+    right = [hmtx[n][0] - hmtx[n][1] - (b[2] - b[0]) for n, b in bounds.items()]
+    for label, got, want in (
+            ("advanceWidthMax", hhea.advanceWidthMax, max(widths)),
+            ("minLeftSideBearing", hhea.minLeftSideBearing,
+             min(hmtx[n][1] for n in bounds)),
+            ("minRightSideBearing", hhea.minRightSideBearing, min(right)),
+            ("xMaxExtent", hhea.xMaxExtent, max(extents))):
+        check(abs(got - want) <= 1,
+              f"hhea {label} is the outlines' ({got} vs {round(want)})")
+    check(os2.fsType == 0, f"OS/2 fsType is installable ({os2.fsType})")
+    check(os2.achVendID == "SUMI", f"OS/2 vendor id ({os2.achVendID!r})")
+    check(tf["post"].underlinePosition and tf["post"].underlineThickness,
+          f"post underline ({tf['post'].underlinePosition}, "
+          f"{tf['post'].underlineThickness})")
+    check(os2.usFirstCharIndex == min(cmap)
+          and os2.usLastCharIndex == min(max(cmap), 0xFFFF),
+          f"OS/2 first/last char index are the cmap's "
+          f"({os2.usFirstCharIndex:#x}, {os2.usLastCharIndex:#x})")
+    stored = tuple(getattr(os2, f"ulUnicodeRange{i}") for i in range(1, 5))
+    os2.recalcUnicodeRanges(tf)
+    again = tuple(getattr(os2, f"ulUnicodeRange{i}") for i in range(1, 5))
+    check(stored == again, f"OS/2 Unicode ranges match the cmap "
+                           f"({[hex(v) for v in stored]} vs "
+                           f"{[hex(v) for v in again]})")
+    if codepages:
+        # a face that declares no 932/JIS disappears from GDI's font
+        # list for Japanese
+        pages = (os2.ulCodePageRange1, os2.ulCodePageRange2)
+        build.recalc_codepage_range(tf)
+        check(pages == (os2.ulCodePageRange1, os2.ulCodePageRange2),
+              f"OS/2 code page ranges match the cmap "
+              f"({[hex(v) for v in pages]} vs "
+              f"{[hex(os2.ulCodePageRange1), hex(os2.ulCodePageRange2)]})")
+    # every Unicode cmap subtable agrees, not just the one HarfBuzz
+    # picks: build.set_cmap writes them all, and the format 4 tables
+    # the GDI paths read went unchecked — repointing every entry below
+    # U+2000, or dropping both subtables, passed
+    subtables = [t for t in tf["cmap"].tables
+                 if t.isUnicode() and t.format != 14]   # 14 is IVS
+    check(any(t.platformID == 3 and t.format in (0, 4, 6) for t in subtables),
+          f"a BMP cmap subtable is there "
+          f"({[(t.platformID, t.platEncID, t.format) for t in subtables]})")
+    disagree = {}
+    for table in subtables:
+        for cp, name in cmap.items():
+            if cp > 0xFFFF and table.format in (0, 4, 6):
+                continue
+            got = table.cmap.get(cp)
+            if got != name:
+                disagree.setdefault((table.platformID, table.platEncID), []) \
+                    .append((hex(cp), got, name))
+    check(not disagree, f"every Unicode cmap subtable maps the same "
+                        f"({len(subtables)} subtables; off: "
+                        f"{[(k, v[:2], len(v)) for k, v in disagree.items()]})")

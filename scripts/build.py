@@ -2425,10 +2425,23 @@ def realign_halfwidth_marks(font, cell, moved):
     first = len(gpos.LookupList.Lookup)
     gpos.LookupList.Lookup.append(_new_lookup_obj(1, back))
 
-    # one subtable per depth: a mark advances 0, so in ｶ ゛ ⃝ the glyph
-    # before the circle is the dakuten, not the kana, and a single
-    # backtrack would leave every mark after the first behind. Three
-    # marks deep is as far as this goes
+    # every OTHER mark is skipped while matching: the lookup filters on
+    # the attachment class these eight get to themselves, so a Latin
+    # accent between the base and the mark — 'B' + U+0300 + U+20DD, and
+    # 1,908 sequences like it — no longer breaks the chain. What is
+    # left to enumerate is a run of these eight themselves, one
+    # subtable per depth: in ｶ ゛ ⃝ the glyph before the circle is the
+    # dakuten, and three of them deep is as far as this goes
+    gdef = base_gdef(font)
+    classes = dict(getattr(getattr(gdef, "MarkAttachClassDef", None),
+                           "classDefs", None) or {})
+    ours_class = max(classes.values(), default=0) + 1
+    for name in moved:
+        classes[name] = ours_class
+    if gdef is not None:
+        if gdef.MarkAttachClassDef is None:
+            gdef.MarkAttachClassDef = otTables.MarkAttachClassDef()
+        gdef.MarkAttachClassDef.classDefs = classes
     rules = []
     for depth in range(4):
         rule = otTables.ChainContextPos()
@@ -2448,6 +2461,7 @@ def realign_halfwidth_marks(font, cell, moved):
     chain = _new_lookup_obj(8, rules[0])
     chain.SubTable = rules
     chain.SubTableCount = len(rules)
+    chain.LookupFlag = ours_class << 8      # skip every other mark
     gpos.LookupList.Lookup.append(chain)
     gpos.LookupList.LookupCount = len(gpos.LookupList.Lookup)
     # under 'dist', not 'mark': a shaper runs 'mark' in a vertical run
@@ -2459,6 +2473,11 @@ def realign_halfwidth_marks(font, cell, moved):
     _add_feature(gpos, "dist", [first + 1])
     sort_feature_list(gpos)
     return len(halves)
+
+
+def base_gdef(font):
+    """The font's GDEF table, or None."""
+    return getattr(font.get("GDEF"), "table", None)
 
 
 def _new_lookup_obj(kind, subtable):

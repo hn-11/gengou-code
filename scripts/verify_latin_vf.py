@@ -177,6 +177,17 @@ def main():
                  if tf.getGlyphOrder()[i.codepoint] not in drawn]
     check(not ligs, f"every ligature draws ({len(build.LIGATURES)} probes; "
                     f"blank: {ligs[:5]})")
+    want_version = os.environ.get("SUMI_VERSION")
+    if want_version:
+        major, minor = want_version.split(".")[:2]
+        check(abs(tf["head"].fontRevision - float(f"{major}.{minor}")) < 5e-4
+              and (tf["name"].getDebugName(5) or "").startswith(
+                  f"Version {want_version}"),
+              f"stamped {want_version} (fontRevision "
+              f"{tf['head'].fontRevision:.3f}, "
+              f"{tf['name'].getDebugName(5)!r})")
+    else:
+        print("skip  version stamp (SUMI_VERSION unset)")
     check_style_bits(tf, check, tf["name"].getDebugName(2) or "",
                      "Italic" in (tf["name"].getDebugName(17)
                                   or tf["name"].getDebugName(2) or ""))

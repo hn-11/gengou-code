@@ -18,6 +18,7 @@ from verify import CASES  # noqa: E402
 from verifylib import (  # noqa: E402
     Checker,
     check_style_bits,
+    check_tables,
     glyph_has_hint,
     hmtx_mismatches,
     make_shaper,
@@ -73,6 +74,7 @@ def main():
     check(hmtx[tf.getGlyphOrder()[0]][0] == CELL, ".notdef is one cell")
     widths, bearings, bounds = hmtx_mismatches(tf)
     check(not widths, f"CFF charstring widths agree with hmtx ({widths[:3]})")
+    check_tables(tf, check, bounds, tf["hmtx"].metrics, cmap)
     check(not bearings, f"hmtx bearings are the outlines' xMin ({len(bearings)} off, "
                         f"e.g. {bearings[:3]})")
 

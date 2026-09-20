@@ -16,6 +16,7 @@ from build import FULLWIDTH, _unwrap, _unwrap_pos  # noqa: E402
 from verifylib import (  # noqa: E402
     Checker,
     check_style_bits,
+    check_tables,
     glyph_has_hint,
     hmtx_mismatches,
     make_shaper,
@@ -245,11 +246,6 @@ def main():
         check(donor in n0, f"nameID 0 credits {donor}")
     for nid in (1, 2, 3, 4, 5, 6, 8, 9, 11, 13, 14, 16, 17):
         check(bool(name.getDebugName(nid)), f"nameID {nid} is set")
-    check(tf["OS/2"].achVendID == "SUMI",
-          f"OS/2 vendor id ({tf['OS/2'].achVendID!r})")
-    check(tf["post"].underlinePosition and tf["post"].underlineThickness,
-          f"post underline ({tf['post'].underlinePosition}, "
-          f"{tf['post'].underlineThickness})")
     # the version the face is stamped with, against the one the build
     # was asked for: one dist/ with two versions in it passed every
     # gate, and a release step that misses SUMI_VERSION makes exactly
@@ -332,69 +328,27 @@ def main():
     check(not bearings, f"hmtx bearings are the outlines' xMin "
                         f"({len(bearings)} off: {bearings[:5]})")
 
-    # the numbers a rasterizer clips and lays out by. build.py turns
-    # fontTools' own recalculation off (recalcBBoxes = False) and works
-    # them out in one pass, so they are only as right as that pass —
-    # and nothing read them: zeroing head's box, hhea's extents or the
-    # OS/2 range bits all passed
-    head, hhea2, os2b = tf["head"], tf["hhea"], tf["OS/2"]
-    inked = list(bounds.values())
-    want_box = (min(b[0] for b in inked), min(b[1] for b in inked),
-                max(b[2] for b in inked), max(b[3] for b in inked))
-    got_box = (head.xMin, head.yMin, head.xMax, head.yMax)
-    check(all(abs(a - b) <= 1 for a, b in zip(got_box, want_box)),
-          f"head's bounding box is the ink's ({got_box} vs "
-          f"{tuple(round(v) for v in want_box)})")
-    widths = [hmtx[n][0] for n in tf.getGlyphOrder()]
-    extents = [hmtx[n][1] + (b[2] - b[0]) for n, b in bounds.items()]
-    right = [hmtx[n][0] - hmtx[n][1] - (b[2] - b[0]) for n, b in bounds.items()]
-    for label, got, want in (
-            ("advanceWidthMax", hhea2.advanceWidthMax, max(widths)),
-            ("minLeftSideBearing", hhea2.minLeftSideBearing,
-             min(hmtx[n][1] for n in bounds)),
-            ("minRightSideBearing", hhea2.minRightSideBearing, min(right)),
-            ("xMaxExtent", hhea2.xMaxExtent, max(extents))):
-        check(abs(got - want) <= 1,
-              f"hhea {label} is the outlines' ({got} vs {round(want)})")
-    check(os2b.fsType == 0, f"OS/2 fsType is installable ({os2b.fsType})")
-    check(os2b.usFirstCharIndex == min(cmap) and os2b.usLastCharIndex ==
-          min(max(cmap), 0xFFFF),
-          f"OS/2 first/last char index are the cmap's "
-          f"({os2b.usFirstCharIndex:#x}, {os2b.usLastCharIndex:#x})")
-    stored = tuple(getattr(os2b, f"ulUnicodeRange{i}") for i in range(1, 5))
-    os2b.recalcUnicodeRanges(tf)
-    again = tuple(getattr(os2b, f"ulUnicodeRange{i}") for i in range(1, 5))
-    check(stored == again, f"OS/2 Unicode ranges match the cmap "
-                           f"({[hex(v) for v in stored]} vs "
-                           f"{[hex(v) for v in again]})")
-    # and the code pages beside them: a face that declares no 932/JIS
-    # disappears from GDI's font list for Japanese
-    pages = (os2b.ulCodePageRange1, os2b.ulCodePageRange2)
-    build.recalc_codepage_range(tf)
-    check(pages == (os2b.ulCodePageRange1, os2b.ulCodePageRange2),
-          f"OS/2 code page ranges match the cmap ({[hex(v) for v in pages]} "
-          f"vs {[hex(os2b.ulCodePageRange1), hex(os2b.ulCodePageRange2)]})")
-    # every Unicode cmap subtable agrees, not just the one HarfBuzz
-    # picks: build.set_cmap writes them all, and the format 4 tables
-    # the GDI paths read went unchecked — repointing every entry below
-    # U+2000 to 日, or dropping both subtables, passed
-    subtables = [t for t in tf["cmap"].tables
-                 if t.isUnicode() and t.format != 14]   # 14 is variation sequences
-    bmp = [t for t in subtables if t.format in (0, 4, 6)]
-    check(any(t.platformID == 3 for t in bmp),
-          f"a BMP cmap subtable is there ({[(t.platformID, t.platEncID, t.format) for t in subtables]})")
-    disagree = {}
-    for table in subtables:
-        for cp, name in cmap.items():
-            if cp > 0xFFFF and table.format in (0, 4, 6):
-                continue
-            got = table.cmap.get(cp)
-            if got != name:
-                disagree.setdefault((table.platformID, table.platEncID), []) \
-                    .append((hex(cp), got, name))
-    check(not disagree, f"every Unicode cmap subtable maps the same "
-                        f"({len(subtables)} subtables; off: "
-                        f"{[(k, v[:2], len(v)) for k, v in disagree.items()]})")
+    check_tables(tf, check, bounds, hmtx, cmap, codepages=True)
+    # the tables a JP face is not a JP face without. Both sets were
+    # behind an `if`: deleting vhea, vmtx and VORG dropped five checks
+    # and passed, and the STAT table the grafts are built to preserve
+    # was read by nothing at all
+    for tag in ("vhea", "vmtx", "VORG", "STAT", "GDEF"):
+        check(tag in tf, f"the face carries {tag}")
+    ivs = [t for t in tf["cmap"].tables if t.format == 14]
+    named = {g for t in ivs for sel in t.uvsDict.values()
+             for _cp, g in sel if g}
+    check(ivs and named <= set(tf.getGlyphOrder()),
+          f"the variation-sequence cmap is there and names glyphs the "
+          f"face has ({len(named)} glyphs over "
+          f"{sum(len(t.uvsDict) for t in ivs)} selectors)")
+    cff_top = tf["CFF "].cff[tf["CFF "].cff.fontNames[0]]
+    check(hasattr(cff_top, "ROS"),
+          "the face is still CID-keyed (CFF ROS)")
+    if "STAT" in tf:
+        stat = tf["STAT"].table
+        axes = [a.AxisTag for a in stat.DesignAxisRecord.Axis]
+        check("wght" in axes, f"STAT names the weight axis ({axes})")
     # vhea's extents as well as hhea's: the same pass writes both
     if "vhea" in tf and "vmtx" in tf:
         vhea, vmtx = tf["vhea"], tf["vmtx"].metrics
@@ -515,6 +469,22 @@ def main():
                 unhinted.append(text.strip("ab "))
     check(not unhinted, f"the glyphs this build redrew carry hints "
                         f"(unhinted: {unhinted})")
+    # and the zones they are hinted AGAINST. add_latin_fd gives the
+    # grafted Latin its own FontDict and latin_blue_zones measures the
+    # face's own x-height and cap; swapping in Source Han Sans's
+    # (540/733 against an actual 486/656) snaps every stem to the wrong
+    # place at small sizes, and nothing read the Private dict
+    if hasattr(hint_td, "FDArray") and ord("H") in cmap:
+        fd = hint_td.FDSelect[tf.getGlyphID(cmap[ord("H")])]
+        private = hint_td.FDArray[fd].Private
+        blues = list(getattr(private, "BlueValues", ()) or ())
+        os2m = tf["OS/2"]
+        wanted = [os2m.sxHeight, os2m.sCapHeight]
+        near = [any(abs(b - v) <= 14 for b in blues) for v in wanted]
+        check(all(near) and getattr(private, "StdHW", 0),
+              f"the Latin FontDict's zones are this face's "
+              f"(BlueValues {blues}, x-height {os2m.sxHeight}, "
+              f"cap {os2m.sCapHeight}, StdHW {getattr(private, 'StdHW', None)})")
 
 
     # the two-cell forms under fwid: the arrow redrawn from the ligature,
@@ -1236,17 +1206,19 @@ def main():
     # half-width base reads the glyph in front, and a mark is 0 wide,
     # so with one backtrack only the FIRST mark of a stack was put back
     stacked_marks = {}
-    for base in "\uff76\uff88":
-        if ord(base) not in cmap or 0x20DD not in cmap or 0x3099 not in cmap:
-            continue
-        alone = placed(base + "\u20dd")
-        after = placed(base + "\u3099\u20dd")
-        if len(alone) != 2 or len(after) != 3 or None in alone + after:
-            continue
-        if max(abs(a - b) for a, b in zip(alone[1], after[2])) > 2:
-            stacked_marks[base] = (tuple(round(v) for v in alone[1]),
-                                   tuple(round(v) for v in after[2]))
-    check(not stacked_marks, f"a mark lands the same behind one mark as "
+    for base in "\uff76\uff88AB":
+        for between in ("\u3099", "\u0301", "\u3099\u0301", "\u0300\u0301"):
+            if any(ord(c) not in cmap for c in base + between + "\u20dd"):
+                continue
+            alone = placed(base + "\u20dd")
+            after = placed(base + between + "\u20dd")
+            if len(alone) != 2 or None in alone or None in after:
+                continue
+            if max(abs(a - b) for a, b in zip(alone[1], after[-1])) > 2:
+                stacked_marks[base + between] = (
+                    tuple(round(v) for v in alone[1]),
+                    tuple(round(v) for v in after[-1]))
+    check(not stacked_marks, f"a mark lands the same behind other marks as "
                              f"behind none (off: {stacked_marks})")
 
     # ... and a mark after a HALF-width base stays on the column too.
@@ -1448,6 +1420,8 @@ def main():
                     pairs.extend((src, alts[0])
                                  for src, alts in st.alternates.items() if alts)
         reach = set(cmap.values())
+        reach.update(g for t in tf["cmap"].tables if t.format == 14
+                     for sel in t.uvsDict.values() for _cp, g in sel if g)
         while True:
             more = {dst for src, dst in pairs if src in reach} - reach
             if not more:
