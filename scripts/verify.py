@@ -235,7 +235,7 @@ def main():
     # WHERE the ink lands, not just how wide it is: a width test says
     # nothing about position, and translating every kanji a whole column
     # to the right left it reporting a clean face. The bound is half a
-    # cell either side, which the widest italic lean uses 221 of
+    # cell either side, which the widest italic lean uses 224 of
     lean = exp_half // 2
     spill = [(name, hmtx[name][0], round(box[0]), round(box[2]))
              for name, box in bounds.items()
@@ -275,8 +275,9 @@ def main():
     # well-formed, correctly named, correctly sized asset that rendered
     # all Japanese as whitespace and passed every gate. `bounds` holds
     # the glyphs that draw (hmtx_mismatches skips a blank one), so this
-    # counts ink. Source Han Sans JP gives 17,355 codepoints, 12,746 of
-    # them kanji; the floors sit well under that, because a subset that
+    # counts ink. The face maps 17,355 codepoints — Source Han Sans
+    # JP's 16,742 and Sumi Moji's 1,335 — 12,746 of them kanji in the
+    # unified block; the floors sit well under that, because a subset that
     # shrank on purpose is a decision and one that shrank by accident is
     # this
     def drawn(lo, hi):
@@ -601,25 +602,36 @@ def main():
     # any of them outside the tiling blocks with more than 1000 of ink
     # was stretched — which is how Ⅷ, ㌄ and a Bold 孰 shipped 20% wide
     # for two rounds while the ten tiling probes above stayed green. The
-    # glyphs examined are the ones a reader can reach: the cmap, and one
-    # fwid substitution on. That takes in every full-width character and
-    # its two-cell form and leaves out the Latin donor's two-cell
-    # ligatures, which are 1200 wide in both families and reached only
-    # through liga/calt. (A CID threshold cannot do this: Source Han
-    # Sans's own CIDs are sparse and run to 65497, and a first cut that
-    # used one never looked at 60% of the kanji.)
+    # glyphs examined are the ones a reader can reach: the cmap, closed
+    # over every one-to-one and alternate substitution in the font. A
+    # single fwid hop is not enough — the vertical forms ｜ and ⎰ take
+    # under vert, the old shapes under jp78/jp83, and every aalt
+    # alternate are 1200 wide too, and a pre-round-33 Term Bold stretched
+    # six of them where the check saw four. The closure leaves out the
+    # Latin donor's two-cell ligatures, which are 1200 wide in both
+    # families and reached only through ligature lookups. (A CID
+    # threshold cannot do any of this: Source Han Sans's own CIDs are
+    # sparse and run to 65497, and a first cut that used one never
+    # looked at 60% of the kanji.)
     if exp_full > 1000:
-        from build import _subst_pairs, _unwrap, tiling_glyphs
+        from build import _unwrap, tiling_glyphs
         tiling = tiling_glyphs(tf)
+        pairs = []
+        for lookup in tf["GSUB"].table.LookupList.Lookup:
+            kind, subtables = _unwrap(lookup)
+            if kind == 1:
+                for st in subtables:
+                    pairs.extend(st.mapping.items())
+            elif kind == 3:
+                for st in subtables:
+                    pairs.extend((src, alts[0])
+                                 for src, alts in st.alternates.items() if alts)
         reach = set(cmap.values())
-        gsub_t = tf["GSUB"].table
-        for fr in gsub_t.FeatureList.FeatureRecord:
-            if fr.FeatureTag != "fwid":
-                continue
-            for li in fr.Feature.LookupListIndex:
-                kind, subtables = _unwrap(gsub_t.LookupList.Lookup[li])
-                reach.update(dst for src, dst in _subst_pairs(kind, subtables, "fwid")
-                             if src in cmap.values())
+        while True:
+            more = {dst for src, dst in pairs if src in reach} - reach
+            if not more:
+                break
+            reach |= more
         grown = [(name, round(box[2] - box[0])) for name, box in bounds.items()
                  if name in reach and hmtx[name][0] == exp_full
                  and name not in tiling and box[2] - box[0] > 1000 + 10]
