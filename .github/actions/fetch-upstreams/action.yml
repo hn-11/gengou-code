@@ -28,8 +28,9 @@ outputs:
 runs:
   using: composite
   steps:
-    # --- pins live here, and only here ---
-    - shell: bash
+    # --- pins live here, and only here (CONTRIBUTING names this step) ---
+    - name: Pin upstream releases
+      shell: bash
       run: |
         echo "SHS_TAG=2.005R" >> "$GITHUB_ENV"
         echo "SCP_TAG=2.042R-u%2F1.062R-i%2F1.026R-vf" >> "$GITHUB_ENV"
@@ -42,7 +43,10 @@ runs:
       with:
         path: upstreams
         # Key derives from the pins above so a bump busts the cache automatically.
-        key: upstreams-${{ env.SHS_TAG }}-${{ env.SCP_VF_ZIP }}-${{ env.MONA_TAG }}-${{ env.NF_TAG }}
+        # SCP_TAG as well as SCP_VF_ZIP: bump_pins.py derives the zip name
+        # from the tag's -vf component alone, so a release that moves only
+        # the upright or italic one left the key — and the cache — unchanged
+        key: upstreams-${{ env.SHS_TAG }}-${{ env.SCP_TAG }}-${{ env.SCP_VF_ZIP }}-${{ env.MONA_TAG }}-${{ env.NF_TAG }}
     - if: steps.up.outputs.cache-hit != 'true'
       shell: bash
       run: |
@@ -64,9 +68,24 @@ runs:
       id: paths
       shell: bash
       run: |
-        echo "nf_symbols=$(find upstreams/nf -name 'SymbolsNerdFontMono-Regular.ttf' | head -1)" >> "$GITHUB_OUTPUT"
-        echo "nf_license=$(find upstreams/nf -name 'LICENSE' | head -1)" >> "$GITHUB_OUTPUT"
-        echo "shs_dir=$(dirname "$(find upstreams/shs -name 'SourceHanSansJP-Regular.otf' | head -1)")" >> "$GITHUB_OUTPUT"
-        echo "scp_vf_u=$(find upstreams/scp -name 'SourceCodeVF-Upright.otf' | head -1)" >> "$GITHUB_OUTPUT"
-        echo "scp_vf_i=$(find upstreams/scp -name 'SourceCodeVF-Italic.otf' | head -1)" >> "$GITHUB_OUTPUT"
-        echo "mona_vf=$(find upstreams/mona -name 'Monaspace Neon Var.ttf' | head -1)" >> "$GITHUB_OUTPUT"
+        # no zip's layout is ours to rely on: say so here, not with
+        # `cp ""` in the package job an hour later — and shs_dir needs
+        # saying most of all, because `dirname ""` is '.', which exists,
+        # so build.py's env check would wave an empty find straight
+        # through and fail six jobs later on ./SourceHanSansJP-*.otf
+        nf_symbols=$(find upstreams/nf -name 'SymbolsNerdFontMono-Regular.ttf' | sort | head -1)
+        nf_license=$(find upstreams/nf -iname 'LICENSE*' | sort | head -1)
+        shs_regular=$(find upstreams/shs -name 'SourceHanSansJP-Regular.otf' | head -1)
+        scp_vf_u=$(find upstreams/scp -name 'SourceCodeVF-Upright.otf' | head -1)
+        scp_vf_i=$(find upstreams/scp -name 'SourceCodeVF-Italic.otf' | head -1)
+        mona_vf=$(find upstreams/mona -name 'Monaspace Neon Var.ttf' | head -1)
+        for v in nf_symbols nf_license shs_regular scp_vf_u scp_vf_i mona_vf; do
+          tags="SHS $SHS_TAG, SCP $SCP_TAG, Monaspace $MONA_TAG, Nerd Fonts $NF_TAG"
+          [ -n "${!v}" ] || { echo "::error::$v not found in the upstream zips ($tags)"; exit 1; }
+        done
+        echo "nf_symbols=$nf_symbols" >> "$GITHUB_OUTPUT"
+        echo "nf_license=$nf_license" >> "$GITHUB_OUTPUT"
+        echo "shs_dir=$(dirname "$shs_regular")" >> "$GITHUB_OUTPUT"
+        echo "scp_vf_u=$scp_vf_u" >> "$GITHUB_OUTPUT"
+        echo "scp_vf_i=$scp_vf_i" >> "$GITHUB_OUTPUT"
+        echo "mona_vf=$mona_vf" >> "$GITHUB_OUTPUT"

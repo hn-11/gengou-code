@@ -69,8 +69,9 @@ python scripts/verify.py dist/SumiMojiJP-Regular.otf
 ファミリー別に 1 ジョブずつ（Regular Upright の 2 ジョブは JP 面への Nerd
 Fonts の接ぎ木も検証）、可変フォントと Sumi Moji への接ぎ木を 1 ジョブ、
 並列に組んで 1 分程度。リリース
-`release.yml` はファミリー × ウェイト群の 6 ジョブのあと `package`
-ジョブが可変フォントを組み、`harmonize_latin.py` → zip →
+`release.yml` は `CHANGELOG.md` にそのタグの節があるかを見る `preflight`
+ジョブ、ファミリー × ウェイト群の 6 ジョブ、そのあと `package`
+ジョブが `harmonize_latin.py` → zip →
 GitHub Release を作り、5 分程度。所要時間を測るだけなら Run workflow の dry-run に
 チェックを入れるか、コミットメッセージに `[release-dry]` と書いたコミットを
 ブランチに push する。どちらもビルドと梱包まで走って Release は作らない）。複数の面をまとめて検証するときは
@@ -133,7 +134,7 @@ NF_SYMBOLS=... python scripts/nerdpatch.py [面のパス | 名前の一部]
 
 上流の固定タグは `.github/actions/fetch-upstreams/action.yml` の
 「Pin upstream releases」ステップ（`SHS_TAG` / `SCP_TAG` / `SCP_VF_ZIP` /
-`MONA_TAG`）に一元化されており、`ci.yml` / `release.yml` は
+`MONA_TAG` / `NF_TAG`）に一元化されており、`ci.yml` / `release.yml` は
 このアクションを共有しています。
 
 通常は手で更新する必要はありません。`upstream-sync.yml`（毎週月曜 実行、

@@ -52,7 +52,6 @@ FEATURE_SETS = [
     ("ss02 only", {"calt": False, "liga": False, "ss02": True}),
     ("hwid", {"hwid": True}),
     ("fwid", {"fwid": True}),
-    ("ss09", {"ss09": True}),
     ("zero", {"zero": True}),
     ("cv01", {"cv01": True}),
 ]
@@ -389,7 +388,14 @@ def main():
     n_files = len(pairs) + len(only_golden) + len(only_candidate)
     print(f"GOLDEN: {n_files} files, {total.checks} checks, "
           f"{total.failures} failures")
-    sys.exit(1 if total.failures else 0)
+    if total.failures:
+        sys.exit(1)
+    # a gate that compared nothing is not a pass: a typo in --only, a
+    # wrong directory or an empty one printed the same '0 failures' as a
+    # clean run and exited 0
+    if not total.checks:
+        sys.exit("GOLDEN: nothing was compared — check the directories "
+                 "and --only")
 
 
 if __name__ == "__main__":

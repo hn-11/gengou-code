@@ -34,6 +34,15 @@ def run(path):
 
 
 def main():
+    # a literal path is a named face and must be there; only a pattern is
+    # allowed to sweep up nothing. A caller that names a face means that
+    # face verified, and a silently dropped argument reported a missing
+    # one as a full pass — which is how the release job, then naming a
+    # single Nerd Fonts face, could have checked no patched face at all
+    missing = [a for a in sys.argv[1:]
+               if not glob.has_magic(a) and not Path(a).exists()]
+    if missing:
+        sys.exit(f"no such font: {' '.join(missing)}")
     paths = [p for arg in sys.argv[1:] for p in (sorted(glob.glob(arg)) or
                                                  ([arg] if Path(arg).exists() else []))]
     # a variable font (SumiMoji[wght].otf) is verify_latin_vf.py's, not a

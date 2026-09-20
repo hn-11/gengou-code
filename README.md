@@ -37,14 +37,46 @@ Pro の名前付きインスタンスで、和文は `=` のバー厚が合う S
 Source Han Sans の Light（49u）と Heavy（120u）、Source Code Pro の
 ExtraLight（28u）と Black（120u）は相手がいないので作らない。
 
+行の高さは `hhea` = `typo`（984 / −273、1.257 em）で、`USE_TYPO_METRICS`
+を立ててある。`usWinAscent` / `usWinDescent` は Source Han Sans の
+1160 / 288 のまま: これはクリッピング境界でもあり、Source Han Sans の
+インクは 984 を超えるので typo に合わせると GDI 系で欠ける。代わりに
+GDI 系（旧 conhost、メモ帳、Office の GDI 経路）だけは行が 1448u になる。
+この面のインクは 1808 / −1048 まであり、bbox を全部覆うと GDI の行が
+2856u（typo の 2.3 倍）になるので覆っていない。欧文レイヤーの罫線素片
+（−400）とブロック要素（−454）も 288 の外にあり、GDI 系だけは下端が
+切れうる（`docs/sumi-moji-plan.md` に測定値と代案）。
+
 ## 幅の方針
 
 **Sumi Moji が持つ文字はすべて 1 セル**。Latin、ギリシャ、キリル、
 アクセント付き文字、罫線素片、`←` `→` `↑` `↓` `⇐` `⇒` `⇔` `≠` `≤` `≥` `…`
 も 1 セルで、英語のターミナルフォントと同じ。Source Han Sans にしかない
-文字（漢字・かな・`①` `※` など）は Source Han Sans の全角のまま。Source
-Han Sans が比例幅で持つ半角カナ（500）や Hangul 字母（920）などは
-セルまたは全角に中央配置してグリッドに乗せる。
+文字（漢字・かな・`①` `※` など）は Source Han Sans の全角のまま。
+Unicode の半角ブロック（`ﾡ` など）はターミナルが 1 桁しか空けないので、
+Source Han Sans が全角の互換字母と同じグリフを割り当てていても 1 セル版を
+作って差し替える。Source Han Sans が比例幅で持つ半角カナ（500）などは、
+その送り幅がいちばん近いグリッド（セルか全角の倍数）に中央配置する。
+斜体は Source Code Pro Italic にギリシャ・キリルが無いので、この 2 つの
+文字体系だけ Source Han Sans の比例幅の字形が残る（基準ウェイトで
+送り幅 285〜1005、最重量では 329〜1064）。
+どちらも東アジア文字幅は曖昧（A）でターミナルは 1 桁しか空けないから、
+`narrow_letters` が全部 1 セルに揃える。送り幅を 1 セルにして中央に置く
+だけで、インクがセルに収まらない字（基準ウェイトで 28 字、最重量で
+44 字。`Ж` `Ю` `Щ` `Ш` `Ф` `Ъ` `Ы` など）だけ、セルから左右 8u ずつ
+空けたところまで詰める。8u は Source Code Pro が `w` `W` に与えている
+サイドベアリングで、詰めると線が細くなるぶん、詰める字は必要な字だけに
+してある。等幅フォントが幅広の字にするのと同じ扱いで、Source Code Pro
+自身の `M` も 600。
+
+例外は、Unicode の東アジア文字幅が Wide なのに 1 セルで出る 13 字
+（`☕` `🎵` `🎶` `💩` `🔒` `🤖` と Hangul 声調記号 2 字、注音の入声 5 字）。
+どれも片方のドナーにしか無く（前 6 字は Source Code Pro の 600、注音 5 字は
+Source Han Sans の 600、声調記号 2 字は Source Han Sans の 250 を
+`fit_to_grid` が 1 セルに置く）、ターミナルは 2 桁分を空けるので
+左寄りに見える。
+Source Code Pro / Source Han Sans にこれより広い字形が無いため、
+`fwid` の代替も用意していない。
 
 JIS 流の全角字形は `fwid` で戻せる。矢印 7 種は合字グリフ（`->` `=>`
 `<=>` の鏡像・回転）から Source Han Sans のインク長に合わせて切り出した
@@ -55,6 +87,11 @@ JIS 流の全角字形は `fwid` で戻せる。矢印 7 種は合字グリフ�
 // VS Code で矢印や罫線を全角に
 "editor.fontLigatures": "'fwid'"
 ```
+
+横方向の送りを動かす機能は入れていない。Source Han Sans の `kern`
+（横組みでは既定 ON。`あ`+`て` をセルより 20u 詰める）と、代替メトリクスの
+`halt` / `palt` / `pwid` はビルド時に落としてある。縦組みの機能
+（`vert` `vrt2` `vkrn` `vhal` `vpal`）は残してあり、縦書きは従来どおり。
 
 曖昧幅（EAW=A）を 2 セルとして数えるターミナルでは `①` が右隣に食み出す。
 これは HackGen と同じ挙動で、Windows Terminal なら
@@ -76,21 +113,37 @@ Source Code Pro のまま。
 同じ記号が単独字と合字とで違う骨格を持つと隣り合わせたときに継ぎ目が
 見えてしまうため（`#` と `#[`、`-` と `->`、`/` と `//` など）。最初に
 移した `=` `<` `>` `|` `~` は形そのものが合字と違っていた（`=` と `==` で
-バーの間隔が SCP 170u / Monaspace 219u、`<` と `<=` で大きさと角度、`|` と
+バーの間隔が SCP 152u / Monaspace 197u、`<` と `<=` で大きさと角度、`|` と
 `||` で上下の伸び、`~` と `~>` で振幅）。残りの記号はおおむね縦のサイズ
 違いで、Monaspace の cap 高・x-height が SCP より高いぶん `!` `&` `?` `:`
 `;` は 16〜67u 持ち上がり、括弧類や `#` `@` `$` は 60〜150u 高く最大 96u
 幅も広い — いずれもセル内に収まり、ターミナルサイズでは2ピクセル未満の
-差。`-` は `=` より 124u 短いが、これは Monaspace 自身がそういう字形の
+差。`-` は `=` より 110u 短いが、これは Monaspace 自身がそういう字形の
 ため。SCP の `cv14`/`cv15`/`cv16`（タイポグラフィックなハイフン・
 アスタリスク・スラッシュ付きドル記号）を有効にすると、`-` `*` `$` は
-SCP の字形に戻る。
+SCP の字形に戻る。なお欧文単独ファミリー（Sumi Moji）でハイフンを
+差し替える `cv14`（および `salt` `ss11`）を有効にすると、`->` `<-`
+`-->` `<--` `<->` `<-->` `<!--` `-~` `~-` の 9 つの合字は出なくなる
+——ドナー自身の異体字ルックアップが合字の連鎖より前に並ぶため。
+和文ファミリー（Sumi Moji JP / JP Term）では
+`import_scp_variants` が後ろに足すので合字が残り、両者の挙動は
+ここだけ食い違う。
+
+結合記号のうち `U+031A` `U+031B` `U+0334` `U+0344`（イタリックでは
+`U+0310` も）は、Source Code Pro が本来付く字（`U+25CC`、オーバーレイ
+なら `L` `l`、ホーンなら `O` `U` `o`）にしかアンカーを持たない。
+欧文ファミリーはドナーの字形をそのまま使うので、それ以外の字の上では
+シェーパーが動かさず、記号は次のセルに描かれる（ドナー自身と同じ挙動）。
+和文ファミリーは接ぎ木が結合記号を 1 セル左に描くため、同じ組み合わせ
+でも土台の上に乗る。
 
 線の太さは**面ごとに** Source Code Pro のインスタンスの `=` のバー厚を
 実測し、Monaspace VF の wght を二分探索で一致させたインスタンスから
-取り込む。Italic 面には slnt 軸で傾斜も追随させ（SCP Italic の −12° に
-対し Monaspace の slnt は −11° が下限なので、残り 1° はアウトラインを
-シアーして合わせる）、ベースラインは両フォントの `=` の縦中心を揃える。
+取り込む。Italic 面には slnt 軸で傾斜も追随させ（SCP Italic は −11°
+——`post.italicAngle` も実測のステム角 11.38° もそう——で、Monaspace の
+slnt の下限と一致するため、シアーは掛からない。コード中の −12° は角度を
+申告しないドナーへのフォールバック）、ベースラインは両フォントの `=` の
+縦中心を揃える。
 Monaspace VF の wght 下限（200）は `=` バー厚 53u で SCP Light の 37u に
 届かないため、Light では Monaspace 由来のアウトラインを片側 8u 内側に
 削って（pathops でストローク幅 2d を差し引く）太さを合わせている。
@@ -141,14 +194,27 @@ Font Mono` / `Sumi Moji Nerd Font Mono`（PostScript 名 `SumiMojiJPNFM-*`
 だけのフォント `Symbols Nerd Font Mono`（各リリースの
 NerdFontsSymbolsOnly.zip。font-patcher の全記号集合と群ごとの寸法を空の
 フォントに適用したもの）から fontTools で接ぎ木する。`--complete --mono`
-でパッチしたのと同じ記号・同じ相対寸法になり、FontForge の往復（CID 構造
-の平坦化、STAT の消失、メタデータの復元）が要らず、1 面 10 秒程度。
-寸法はセル幅 / 記号フォントの em（600 / 2048）で一律に縮め、記号フォント
-の行ボックスをこちらの行ボックスの中央に置く。Powerline の範囲
-（U+E0A0〜E0D7、行の上下いっぱいに敷き詰める区切り）だけは幅をセル、
-高さを行の全高に引き伸ばす。アイコンはヒント無し（font-patcher の出力も
-同じ）。記号のライセンス（Nerd Fonts の MIT と各出典）は NF の zip に
-`LICENSE-NerdFonts` として同梱する。
+でパッチしたのと同じ記号集合・同じ 1 セル送りになり、FontForge の往復
+（CID 構造の平坦化、STAT の消失、メタデータの復元）が要らず、1 面 10 秒
+程度。寸法だけは本家と差があり、`docs/sumi-moji-plan.md` に測定値がある
+（本家は縦長の箱 600 × 856 に収めるが、こちらは記号フォント自身の正方
+セルのまま 600 × 600）。
+寸法は font-patcher 自身の群ごとの規則に合わせる（`icon_transform`）。
+
+| 群 | font-patcher の指定 | 寸法 |
+| --- | --- | --- |
+| 通常のアイコン | `pa` | セル幅 / 記号フォントの em（600 / 2048）で一律。行ボックスの中央に置く。この縮尺でセルや行の外に出てしまうものだけ、セルと行に収めて中央へ |
+| 引き伸ばす群（`SEPARATORS` と `PROGRESS`。Powerline の区切り 32 字と進捗バー 6 字） | `^xy` | インクをセル幅と行の全高いっぱいに引き伸ばす。記号フォントが付けている食み出し（font-patcher の `overlap`）は比率のまま残す。両端が食み出しているもの（進捗バーの中間）は両側とも残す |
+| 行ボックスに対して描くその他（U+E0A0〜E0A3 のブランチ・鍵など、U+E0CE〜E0D1 の行番号・桁番号） | `^pa` | 縦横比を保ったまま、セル幅と行の全高のうち先に当たるほうに収める（桁番号 U+E0CE は幅で決まって行の 45%、ブランチ U+E0A0 は行いっぱい） |
+
+記号フォント自体は正方形のセル（2048 × 2048）向けなので、区切りは
+font-patcher の `xy-ratio`（0.7 など）で頭打ちになった幅（2048 中 1447）
+しか持たない。こちらのセルは 600 × 1257 と縦長で頭打ちに掛からないため、
+インクはセルいっぱいに広がる。Source Code Pro 自身が持つ Powerline
+（U+E0A0〜E0A2、E0B0〜E0B3）は記号フォントのもので置き換える。
+アイコンはヒント無し（font-patcher の出力も同じ）。Nerd Fonts 自身のライセンス（MIT）は NF の zip に `LICENSE-NerdFonts`
+として同梱する。各アイコンセットのライセンスは Nerd Fonts のリポジトリに
+あり、zip には入らない。
 
 ## Sumi Moji（欧文のみ）
 
@@ -259,12 +325,14 @@ python scripts/golden.py <前の dist> dist                  # 2つのビルド�
 NF_SYMBOLS=... python scripts/nerdpatch.py                 # Nerd Fonts 版
 ```
 
-`SCP_VF_U` / `SCP_VF_I` / `MONA_VF` は `build_latin.py` だけが使い、
-それぞれ Source Code Pro VF / Monaspace VF の Releases から取得する。
+`SCP_VF_U` / `SCP_VF_I` / `MONA_VF` は欧文を組む 2 つのスクリプト
+（`build_latin.py` と `build_latin_vf.py`）が使い、それぞれ
+Source Code Pro VF / Monaspace VF の Releases から取得する。
 `build.py` は Source Code Pro / Monaspace の VF に直接触らず、代わりに
 `SHS_DIR`（Source Han Sans JP）と `LATIN_DIR`（既定 `dist/latin`、
-`build_latin.py` の出力先）を見る。`verify.py` は `SCP_VF_U` / `SCP_VF_I`
-があれば `=` のバーを Source Code Pro のインスタンスと突き合わせる。
+`build_latin.py` の出力先）を見る。`verify.py` と `verify_latin_vf.py` は
+`SCP_VF_U` / `SCP_VF_I` があれば `=` のバーを Source Code Pro の
+インスタンスと突き合わせる。
 `SUMI_VERSION`（例 `5.0.0`）を立てると name テーブルにその版番号を刻む
 （リリースワークフローがタグから渡す。未設定なら上流のリビジョンをそのまま
 残す）。
@@ -274,7 +342,8 @@ NF_SYMBOLS=... python scripts/nerdpatch.py                 # Nerd Fonts 版
 `SUMI_SKIP_AUTOHINT=1` を立てるとスキップできる。Term の全角グリフ約1.7万個
 は描き直さず charstring の中で 100 ユニット右へ動かす（`shift_charstring`）
 ので、Source Han Sans 自身のヒントがそのまま残り、ヒント付けは各面で
-描き直した 1,300〜1,800 グリフだけで済む。ヒント付与後は cffsubr（AFDKO の
+描き直したおよそ 2,250〜2,650 グリフ（欧文レイヤー、`fwid` の全角形、グリッドに
+乗せ直した比例幅の残り、Term で伸ばした罫線など）だけで済む。ヒント付与後は cffsubr（AFDKO の
 `tx`、`requirements.txt` に同梱）で CFF をサブルーチン化している。
 
 ## 仕組み
@@ -295,6 +364,18 @@ NF_SYMBOLS=... python scripts/nerdpatch.py                 # Nerd Fonts 版
   一致範囲を1文字だけにしてネストした LigatureSubst に残りを委ねる形は
   一致範囲外の消費が OpenType 未定義動作で DirectWrite が非対応だった
   ため）、ss01〜08 はグループ別ルックアップ、cv99 が .alt 切替
+- 欧文ドナーの `locl` も移す（`import_scp_locl`）。ギリシャ文字は
+  ギリシャのアクセント（トノス）を取り、気息記号が合成される。登録は
+  ドナーと同じスクリプト・言語の組にだけ行う
+- 欧文ドナーの GPOS（`mark` / `mkmk` / `ccmp`）も移す（`import_scp_marks`）。
+  Source Code Pro は結合記号の位置を GPOS に置いているので、これが無いと
+  アクセントが `b d f h k l` の上伸部を突き抜ける
+- 欧文ドナーの `ccmp`（既定オン）は JP 面にも丸ごと移す（`import_scp_ccmp`
+  がグリフ名と入れ子ルックアップ番号を書き換えて写し、機能が描くのに
+  接ぎ木に無いグリフを足す——正体 62 字・斜体 46 字。フィーチャに載せる
+  のはドナーのフィーチャが挙げていたルックアップだけで、連鎖文脈が呼ぶ
+  側は文脈ごしにしか走らない）。`i` + U+0307 は点のない `ı` に替わり、
+  `g̃` `ê̆` `ї́` は合成される
 - 行間は Source Code Pro の値（hhea = typo = 984 / −273 / 0、
   `USE_TYPO_METRICS`）。win は Source Han Sans の宣言値（1160 / 288）。
   等幅メタデータ（`post.isFixedPitch` / PANOSE bProportion=9 /

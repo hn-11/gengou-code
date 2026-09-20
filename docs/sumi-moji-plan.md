@@ -37,13 +37,95 @@ SHCJ は上流から外れた。
   グリフか同フォントの `fwid` 形）。`hwid` / `ss09` の幅切り替えは不要に
   なり廃止。Source Han Sans の比例幅の残り（半角カナ 500、Hangul 字母
   920、ﬀ、⸻）はセルか全角の倍数に中央配置（`fit_to_grid`）。
+- **東アジア文字幅が Wide の 13 字（`☕` `🎵` `🎶` `💩` `🔒` `🤖`、Hangul
+  声調記号 2 字、注音の入声 5 字）は 1 セルのまま**。どれも片方のドナー
+  にしか無く（前 6 字は Source Code Pro の 600、注音 5 字は Source Han
+  Sans の 600、声調記号 2 字は Source Han Sans の 250 を `fit_to_grid` が
+  1 セルに置く）、どちらにもこれより広い字形が無いため。ターミナルは
+  2 桁分を空けるので左寄りに見える。2 セルに広げるかは未決（README の
+  「幅の方針」に明記）。
+- **東アジア文字幅が Neutral の 142 字が全角のまま**（Unicode 14.0 での
+  実測。この分類は Unicode の版で動くので、新しい `unicodedata` で数え
+  れば増える。`␣` U+2423、`⌘`
+  `⚠` `⏎` `➡` `✚` `ﬃ` `ﬄ` など、Source Han Sans しか持たない記号）。
+  ターミナルは 1 桁しか空けないので隣に食い込む。曖昧幅（A）と違い
+  ターミナル側の設定では直せない。v4 では Source Han Code JP が 1 セルの
+  `␣` を持っていたが、Source Code Pro には無い。1 セルに詰めるには縮小が
+  要り（v5 で廃止した）、方針（「Source Han Sans にしかない文字は全角の
+  まま」）とも衝突するので、要判断。
+- **NF 版のファミリー名が GDI の 31 文字に収まらない**。
+  `Sumi Moji JP Term Nerd Font Mono` は 32 文字、非 RIBBI の
+  `... Nerd Font Mono SemiBold` は 41 文字で、JP の NF 20 面のうち 16 面、
+  欧文の 10 面のうち 2 面が `LOGFONT.lfFaceName`（31 文字）に入らない。
+  DirectWrite の Windows Terminal や macOS / Linux では問題ないが、
+  旧 conhost・メモ帳・Office の GDI 経路ではファミリー名で引けない。
+  nameID 1 だけ短い別名にする手はあるが（本家 font-patcher の
+  `--windows` 相当）、ピッカーによって別名で出るのと引き換え。
+  Nerd Fonts 本家の命名を優先して現状維持、要判断。
+- **`drop_features` は FeatureRecord を消すだけで、参照されなくなった
+  Lookup を残す**。`kern` / `halt` / `palt` の Lookup が JP 各面に 36 KB
+  ぶん残っている（GPOS 46,320 → 9,874 bytes 相当。数値は Regular 実測で、
+  ラウンド 38〜41 が移した mark / mkmk / ccmp ぶん両辺とも 4,564 bytes
+  増えている）。索引の張り替えを伴うので、圧縮後の実利（30 面で
+  0.2 MB 程度）と天秤にかけて未着手。
+- **リリースの faces ジョブは欧文の静的面を 2 回ずつ作っている**
+  （base と Term が同じドナーを使うため、10 面ぶんを 20 回）。欧文を
+  別ジョブにして artifact で渡せば省けるが、アップロード / ダウンロード
+  の往復と引き換えなので未着手。
+- **接ぎ木後の `update_bbox` は全グリフを描き直している**（JP 面で約 5 秒）。
+  接ぎ木中にアイコンの bbox を集めて元の面の head/hhea と合成すれば省ける
+  が、hhea の extent 系を部分的な bbox から正確に出す必要があり、今の
+  1 面 45 秒に対する取り分は小さいので未着手。
 - **Nerd Fonts 版の命名は本家の流儀**: アイコンを 1 セルに収めるので
   `<Family> Nerd Font Mono` / `<PSFamily>NFM`。v5.1 で font-patcher と
   FontForge を捨て、本家の `Symbols Nerd Font Mono` から fontTools で
-  接ぎ木する（同じ記号集合・同じ相対寸法、1 面 10 秒、CID 構造もメタ
-  データもそのまま）。本家の立場は「フォールバック ＞ パッチ／合成」で、
+  接ぎ木する（同じ記号集合・同じ 1 セル送り、1 面 10 秒、CID 構造もメタ
+  データもそのまま。寸法の差は下の項）。本家の立場は「フォールバック ＞ パッチ／合成」で、
   合成でも記号集合と寸法を本家に合わせ、名前に Nerd Font を含め、出典の
   ライセンスを添える——この 3 点を満たしている。
+- **NF 版のアイコンは正方セルに収めている（本家パッチは 600 x 856）**。
+  font-patcher は `--mono` のアイコンを セル幅 x `iconheight` に収める。
+  `iconheight` は `(capHeight x 2 + 行の高さ) / 3` で、この面では
+  `(656 x 2 + 1257) / 3 = 856`。接ぎ木元の `Symbols Nerd Font Mono` は
+  2048 x 2048 の正方セルに収めて作られているので、セル / em の一様縮小
+  （600 / 2048）では箱が 600 x 600 になり、縦長のアイコン 3,496 字
+  （引き伸ばす群——区切りと進捗バー——を除いた 10,363 字中）が本家パッチ
+  より最大 1.43 倍小さい。font-patcher 独自の
+  縦パディングが効く群（重い山括弧 U+276C〜2771 など）では最大 2.1 倍。アイコンごとに
+  収め直すと、複数のアイコンを同じ倍率で束ねる font-patcher の
+  ScaleGroups が崩れる（束の中の小さいアイコンが 3.1 倍に膨らむ）ので、
+  正確に合わせるには本家の群テーブルを移植するしかなく、それは
+  `nerdpatch.py` が避けている複雑さそのもの。現状は「ターミナルに
+  `Symbols Nerd Font Mono` をフォールバックとして足したときと同じ相対
+  寸法」で、セルからはみ出す側には決して倒れない。要判断。
+- **結合文字が縦組みで次のセルに落ちる**。接ぎ木した結合文字 53 字
+  （U+0300〜U+036F）は、アウトラインを 1 セルぶん左に寄せて送り幅 0 に
+  する方法で置いている。横組みの位置はドナー自身の GPOS を移して
+  （`import_scp_marks`。アンカーは新設ではなく Source Code Pro のもの）
+  解決した——`k` + U+0301 は `x_offset -122` / `y_offset +229` に付く——が、
+  縦組みでは「1 セル左」が「1 字ぶん下」を意味しないので、NFD の `ḱ` は
+  まだ `k` の次のセルにアクセントが落ちる。ドナー自身の縦組みでも同じ
+  位置に落ちるので、縦組み用のアンカーはこちらで新設することになる。
+  要判断。
+- **斜体面にギリシャ・キリルの拡張 135 字が無い**（`ά` `Ά` `ή` `ί` `ό`
+  `ύ` `ώ` `ϊ` `ϋ` と `Ђ`〜`Ј` などキリル拡張）。Source Code Pro Italic は
+  ギリシャ・キリルを一切持たず、Source Han Sans JP も基本ブロックしか
+  持たないので、直立面では出る文字が斜体面では tofu になる。直立面から
+  傾けて合成する手はあるが、合成斜体を混ぜない方針と衝突するので要判断。
+- **JP 面の `usWinDescent` 288 は欧文レイヤーの罫線より浅い**。
+  Source Code Pro 由来の罫線素片は −400、ブロック要素は −454 まで
+  伸びるので、cmap 上の 111 字が宣言値の外にある。`USE_TYPO_METRICS` を
+  読む描画系（DirectWrite / CoreText / HarfBuzz）は 1257u の行を使うので
+  影響しないが、GDI 系だけは下端が切れうる。この面のインクは 1808 /
+  −1048 まであり、bbox を全部覆うと GDI の行が 2856u（typo の 2.3 倍）に
+  なるため覆えない。−454 まで上げれば罫線は救えて GDI の行は 1448 →
+  1614u（+11%）。Source Han Sans 自身も 288 のまま −1048 のグリフを
+  抱えているので現状維持、要判断。
+- **上流アセットのハッシュ検証が無い**。`fetch-upstreams` は 4 つの zip を
+  `curl -sSfL` で取って展開するだけで、キャッシュキーもタグ名だけから
+  作っている。GitHub のリリース資産はタグを変えずに差し替えられるので、
+  差し替えられても気付けない。zip の SHA-256 をピンと一緒に記録し、
+  キャッシュキーにも混ぜるのが筋。未着手。
 - **SHCJ 依存の解消**: バーの目標値（Latin が固定なので不要）、半角カナ
   のドナー（Source Han Sans 自身の 500 幅を中央配置）、行間（SCP）、
   半角の集合（Sumi Moji の cmap）。`SHCJ_TTC` と `SHCJ_TAG` は消えた。
@@ -119,11 +201,18 @@ Sumi Moji JP の欧文層（Source Code Pro の文字 + Monaspace の記号・�
 
 - `calt` / `liga`: 合字 61 種 + 文脈ガード（入力列を全構成グリフでカバーする
   トリガールール、最長一致順）
-- `ss01`〜`ss08`: 合字グループ、`cv99`: .alt 字形。`ss09` は JP 専用
-  （欧文版は既定が 1 セルなので不要）
+- `ss01`〜`ss08`: 合字グループ、`cv99`: .alt 字形（`ss09` の幅切り替えは
+  v5 で廃止: 既定が 1 セル、全角は `fwid`）
 - SCP 由来: `zero` `salt` `cv01`〜`cv17` `ss11`〜`ss17`（+10 マウントは JP との
   整合のため維持）
 - GPOS は SCP 自身のもの（結合文字の `mark` / `mkmk`、`frac`、`size`）を保持。`kern` は無い（等幅）
+
+> **注記（v5）**: 以下 3.3・3.4 は v4 までの設計（4 は v5 の構成に
+> 書き直してある）。v5 で基準を
+> Source Code Pro に移した結果、行間は SCP の 984 / −273、ウェイトは
+> SCP の名前付きインスタンス 5 つ、`dist/latin/term/` と拡大処理
+> （`rescale` / `narrow_ambiguous` / `latin_onecell`）は無くなっている。
+> 現行の仕様は本ファイル冒頭の v5 節と README を参照。
 
 ### 3.3 メトリクス
 
@@ -154,23 +243,32 @@ Sumi Moji JP の欧文層（Source Code Pro の文字 + Monaspace の記号・�
 
 ## 4. ビルド構成
 
-実装済み（段階 1a・1b とも）。実際のパイプライン:
+実装済み（段階 1a・1b・2 とも）。v5 時点の実際のパイプライン:
 
 ```
-scripts/build_latin.py   # SCP VF + Monaspace VF
-                          #   -> dist/latin/SumiMoji-*.otf（配布物、35と同じ太さ）
-                          #   -> dist/latin/term/SumiMojiTerm-*.otf（内部専用、Term用の太さ）
-scripts/build.py         # SHS + SHCJ + dist/latin{,/term}
-                          #   -> dist/SumiMojiJP*.otf（JP/35/Term）
-scripts/verify_latin.py  # 欧文単体の回帰テスト（dist/latin/SumiMoji-*.otf）
-scripts/verify.py        # JP（現行）
-scripts/golden.py        # 2つの dist ディレクトリを比較（cmap・送り幅・
-                          #   シェーピング・アウトライン・メタデータ・ヒント）
+scripts/build_latin.py     # SCP VF + Monaspace VF
+                            #   -> dist/latin/SumiMoji-*.otf（配布物であり、
+                            #      JP 面のドナーでもある 10 面）
+scripts/build_latin_vf.py  # 同じマスターを varLib で合成
+                            #   -> dist/latin/SumiMoji[wght].otf
+                            #      dist/latin/SumiMoji-Italic[wght].otf
+scripts/build.py           # SHS + dist/latin
+                            #   -> dist/SumiMojiJP*.otf（JP / JP Term の 20 面）
+scripts/nerdpatch.py       # Nerd Fonts の記号フォントを接ぎ木
+                            #   -> dist/nerd{,/latin}/*NFM-*.otf
+scripts/harmonize_latin.py # 欧文ファミリーの win メトリクスを面をまたいで揃える
+scripts/verify.py          # JP 面の回帰テスト
+scripts/verify_latin.py    # 欧文静的面の回帰テスト
+scripts/verify_latin_vf.py # 可変フォントの回帰テスト
+scripts/verify_many.py     # 上の 3 つを glob で振り分けてまとめて走らせる
+scripts/golden.py          # 2つの dist ディレクトリを比較（cmap・送り幅・
+                            #   シェーピング・アウトライン・メタデータ・ヒント）
 ```
 
 `build.py` は SCP VF・Monaspace VF に直接触れなくなり、`scripts/build_latin.py`
-が先に走って `dist/latin`（および `dist/latin/term`）を作っていることを
-前提にする（`LATIN_DIR` 環境変数、既定 `dist/latin`）。VF のインスタンス化・
+が先に走って `dist/latin` を作っていることを前提にする（`LATIN_DIR`
+環境変数、既定 `dist/latin`）。Source Han Sans CJK（SHCJ）は v5 で上流から
+外れたので、このパイプラインには出てこない。VF のインスタンス化・
 太さ二分探索・合字/記号の合成・グラフト用ヘルパー（`VFSource.matched`、
 `draw_clean` / `erode_path`、`replace_from_mona`、`add_glyphs`、`add_gsub` /
 `_guard_subtables`、`import_scp_variants`、`latin_blue_zones` /
@@ -296,8 +394,9 @@ cmap・GSUB の shaping 結果が roundoff（±1〜2ユニット）を除いて�
   SCP との太さ一致に 1u 程度のずれが出うる。超える場合はマスターを増やす
   ——実測では Regular 実インスタンスのバー厚が静的版に対し ±1u 以内
   （`scripts/verify_latin_vf.py` で継続確認）
-- **Italic**: SCP Italic は −12°、Monaspace の slnt は −11° が下限。
-  残り 1° のシアーは現行どおりマスター生成時に掛ける
+- **Italic**: SCP Italic は −11°（`post.italicAngle`、実測ステム角
+  11.38°）で Monaspace の slnt の下限と一致するため、シアーは掛からない
+  ——コード中の −12° は角度を申告しないドナーへのフォールバック
 - **名前**: Sumi Moji / Sumi Moji JP で確定。商標（USPTO / J-PlatPat）は
   この環境から未確認。変更箇所の一覧は 2 節
 - **バージョン**: JP と同じタグで同時にリリースする（別バージョン番号を

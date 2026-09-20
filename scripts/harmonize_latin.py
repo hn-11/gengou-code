@@ -34,8 +34,10 @@ def main():
     for subdir, ps_family in FAMILIES:
         paths = static_faces(dist / subdir, ps_family)
         if not paths:
-            print(f"{subdir}/{ps_family}: no faces, skipped")
-            continue
+            # this is the only pass that sees a Latin family whole, and
+            # the release job does not read its output: a layout change
+            # that emptied it would have published per-face win metrics
+            sys.exit(f"{subdir}/{ps_family}: no faces to harmonize in {dist}")
         a, d = harmonize_win_metrics(paths)
         print(f"{subdir}/{ps_family}: win metrics {a}/{d} over {len(paths)} faces")
 

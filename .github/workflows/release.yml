@@ -41,6 +41,38 @@ env:
   # the runs that publish: a v* tag, or a dispatch without dry-run
   PUBLISH: ${{ github.event_name == 'push' && github.ref_type == 'tag' || github.event_name == 'workflow_dispatch' && !inputs.dry-run }}
 jobs:
+  # the release notes this run would publish, before six jobs spend
+  # fifteen minutes building 32 faces: the package job used to read
+  # CHANGELOG.md at its very last step, so a dispatch for a tag with no
+  # section in it (the weekly sync's patch bump, while an unreleased
+  # section sat at the top of the changelog) built everything and then
+  # failed. Dry runs skip it — they publish nothing and cut no tag.
+  preflight:
+    if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[release-dry]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: CHANGELOG.md has a section for this tag
+        run: |
+          if [ "$PUBLISH" != true ]; then
+            echo "dry run: publishing nothing, no section needed"
+            exit 0
+          fi
+          # the body, not just the heading: the package job fails on an
+          # empty release_notes.md, and a heading with nothing under it
+          # would still burn six jobs before it got there
+          body=$(awk -v tag="## ${SUMI_VERSION_TAG}" '
+            $0 == tag {flag=1; next}
+            flag && /^## / {flag=0}
+            flag
+          ' CHANGELOG.md | tr -d '[:space:]')
+          if [ -z "$body" ]; then
+            echo "::error::CHANGELOG.md has no '## ${SUMI_VERSION_TAG}' section (with notes under it)"
+            exit 1
+          fi
+          echo "release notes for ${SUMI_VERSION_TAG} found"
+
   # a family's weights, both styles, per job (six jobs): its Latin donors,
   # its JP faces, and the Nerd Fonts grafts — the JP faces' own, plus a
   # share of the ten Sumi Moji ones, grafted while the JP faces build:
@@ -48,7 +80,7 @@ jobs:
   # Bold jobs (two faces each, the lightest) also build one variable
   # font each, for the package job to pick up
   faces:
-    if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[release-dry]')
+    needs: preflight
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -86,12 +118,20 @@ jobs:
               Italic) faces="$faces dist/latin/SumiMoji-${w}Italic.otf" ;;
             esac
           done
+          # an empty list would mean "patch everything" — the same faces
+          # the foreground run below writes, at the same time
+          [ -n "$faces" ] || { echo "no Sumi Moji faces for LATIN_NF='$LATIN_NF'"; exit 1; }
           python scripts/nerdpatch.py $faces > nerd-latin.log 2>&1 &
           latin=$!
-          python scripts/build.py "${{ matrix.weights }} ${{ matrix.family }}"
-          python scripts/nerdpatch.py dist/*.otf
+          # neither the JP build nor the foreground graft may take the
+          # step down before the background one is waited on: its log
+          # lives only here
+          jp=0
+          python scripts/build.py "${{ matrix.weights }} ${{ matrix.family }}" \
+            && python scripts/nerdpatch.py dist/*.otf || jp=$?
           wait $latin || { cat nerd-latin.log; exit 1; }
           cat nerd-latin.log
+          [ "$jp" = 0 ] || exit "$jp"
       - if: matrix.variable
         run: python scripts/build_latin_vf.py ${{ matrix.variable }}
       # the statics and NF faces; a variable font, when this job built one,
@@ -118,6 +158,11 @@ jobs:
     needs: faces
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # the same stamp the faces job built with: this job verifies the
+      # assembled dist/ before zipping it, and without this its
+      # verifiers skipped the version check and a dist/ carrying two
+      # versions would have shipped
+      - run: echo "SUMI_VERSION=${SUMI_VERSION_TAG#v}" >> "$GITHUB_ENV"
       - uses: ./.github/actions/setup-build
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -129,9 +174,12 @@ jobs:
         run: |
           python scripts/verify_latin_vf.py "dist/latin/SumiMoji[wght].otf"
           python scripts/verify_latin_vf.py "dist/latin/SumiMoji-Italic[wght].otf"
+      # every face harmonize_latin.py rewrote, not two of the twenty:
+      # this pass is the only one that sees a Latin family whole, and it
+      # writes new win metrics into all ten statics of each
       - run: >-
           python scripts/verify_many.py
-          dist/latin/SumiMoji-Regular.otf dist/nerd/latin/SumiMojiNFM-BoldItalic.otf
+          'dist/latin/SumiMoji-*.otf' 'dist/nerd/latin/*.otf'
       - run: |
           cp LICENSE dist/LICENSE
           cp LICENSE dist/nerd/LICENSE
@@ -150,8 +198,23 @@ jobs:
           (cd latin && zip -q ../SumiMoji.zip 'SumiMoji[wght].otf' 'SumiMoji-Italic[wght].otf' LICENSE)
           (cd nerd/latin && zip -q ../../SumiMoji-NerdFont.zip *.otf LICENSE LICENSE-NerdFonts)
       # every asset, on a dry run too (a missing one is a failure here, not
-      # a warning from the release step)
-      - run: ls -l dist/*.zip
+      # a warning from the release step). By name and by content: `zip`
+      # exits 0 when its *.otf argument matches nothing, because LICENSE
+      # always matches, so `ls` alone would have shipped a zip holding
+      # two licence files and no font
+      - name: Every release asset exists and carries its fonts
+        run: |
+          want="SumiMojiJP:10 SumiMojiJPTerm:10 SumiMoji:2
+                SumiMojiJP-NerdFont:10 SumiMojiJPTerm-NerdFont:10
+                SumiMoji-NerdFont:10"
+          for spec in $want; do
+            zip="dist/${spec%%:*}.zip"
+            n="${spec##*:}"
+            [ -f "$zip" ] || { echo "::error::$zip missing"; exit 1; }
+            got=$(unzip -Z1 "$zip" | grep -c '\.otf$' || true)
+            [ "$got" = "$n" ] || { echo "::error::$zip has $got fonts, want $n"; exit 1; }
+          done
+          ls -l dist/*.zip
       - name: Extract changelog section for this tag
         run: |
           awk -v tag="## ${SUMI_VERSION_TAG}" '
@@ -159,6 +222,12 @@ jobs:
             flag && /^## / {flag=0}
             flag
           ' CHANGELOG.md > release_notes.md
+          # an awk that matches nothing writes an empty file, and the
+          # release would publish with no notes at all
+          if [ "$PUBLISH" = true ] && [ ! -s release_notes.md ]; then
+            echo "::error::CHANGELOG.md has no '## ${SUMI_VERSION_TAG}' section"
+            exit 1
+          fi
       - if: env.PUBLISH == 'true'
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:

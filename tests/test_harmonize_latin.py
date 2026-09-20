@@ -4,6 +4,7 @@ metrics pass over an assembled dist/."""
 import sys
 from pathlib import Path
 
+import pytest
 from fontTools.ttLib import TTFont
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -27,6 +28,7 @@ def test_main_harmonizes_each_family(tmp_path, capsys, monkeypatch):
     _face(latin / "SumiMoji[wght].otf", 5000, 5000)      # a VF: never touched
     _face(nerd / "SumiMojiNFM-Regular.otf", 1200, 200)
     _face(nerd / "SumiMojiNFM-Bold.otf", 1000, 400)
+    assert harmonize_latin.FAMILIES == [("latin", "SumiMoji"), ("nerd/latin", "SumiMojiNFM")]
 
     monkeypatch.setattr(sys, "argv", ["harmonize_latin.py", str(tmp_path)])
     harmonize_latin.main()
@@ -40,3 +42,16 @@ def test_main_harmonizes_each_family(tmp_path, capsys, monkeypatch):
     out = capsys.readouterr().out
     assert "latin/SumiMoji: win metrics 1100/300 over 2 faces" in out
     assert "nerd/latin/SumiMojiNFM: win metrics 1200/400 over 2 faces" in out
+
+
+def test_main_stops_on_a_family_directory_with_no_faces(tmp_path, monkeypatch):
+    """This is the only pass that sees a Latin family whole, and the
+    release job does not read its output — a layout change that left it
+    with nothing to do would have published per-face win metrics. It
+    says so and stops, rather than stepping over it."""
+    for name, _family in harmonize_latin.FAMILIES:
+        (tmp_path / name).mkdir(parents=True)
+    monkeypatch.setattr(sys, "argv", ["harmonize_latin.py", str(tmp_path)])
+    with pytest.raises(SystemExit) as stopped:
+        harmonize_latin.main()
+    assert "no faces to harmonize" in str(stopped.value)

@@ -77,7 +77,6 @@ import tempfile
 import traceback
 import unicodedata
 from pathlib import Path
-from typing import NamedTuple
 
 import pathops
 from fontTools.misc.roundTools import noRound, otRound
@@ -92,8 +91,9 @@ from fontTools.varLib import instancer
 from fontTools.varLib.instancer import instantiateVariableFont
 
 ROOT = Path(__file__).resolve().parent.parent
-SCP_CELL = 600      # Source Code Pro advance (upm 1000)
-CELL = SCP_CELL     # the half-width cell: Sumi Moji's, as it is
+# the half-width cell: Source Code Pro's own advance (upm 1000), which
+# Sumi Moji keeps as it is — one number, since v5 rescales nothing
+CELL = 600
 FULLWIDTH = 1000    # full-width advance of the CJK layer (upm 1000)
 MONA_CELL = 1240    # Monaspace advance (upm 2000)
 
@@ -134,13 +134,10 @@ def latin_face_path(latin_dir, weight, italic):
     return Path(latin_dir) / f"{ps_family}-{weight}{'Italic' if italic else ''}.otf"
 
 
-class Variant(NamedTuple):
-    term: bool   # widen full-width advances to 2 cells (widen_fullwidth)
-
-
+# {family suffix: widen the full-width advances to two cells}
 VARIANTS = {
-    "": Variant(False),      # 3:5 — Sumi Moji plus Japanese at 1000
-    "Term": Variant(True),   # 1:2 terminal grid (600:1200)
+    "": False,      # 3:5 — Sumi Moji plus Japanese at 1000
+    "Term": True,   # 1:2 terminal grid (600:1200), widen_fullwidth
 }
 
 # (output weight name, Source Han Sans static file): the Source Han Sans
@@ -157,6 +154,13 @@ VARIANTS = {
 # ExtraLight 28u / Black 120u have no partner in the other family and are
 # not built.) Monaspace bottoms out at wght 200 (bar ~53u at our scale);
 # Light's surplus is eroded away in the static faces (VFSource.matched).
+
+# the weights every face takes its width decisions from
+# (reference_steps): our Regular's donor for the advance, the heaviest
+# for the ink, which grows with the weight
+REFERENCE_SHS = "SourceHanSansJP-Normal.otf"
+INK_SHS = "SourceHanSansJP-Bold.otf"
+
 FACES = [
     ("Light", "SourceHanSansJP-ExtraLight.otf"),
     ("Regular", "SourceHanSansJP-Normal.otf"),
@@ -187,7 +191,6 @@ GROUP_NAMES = {
     "ss06": "Dots",
     "ss07": "Comments",
     "ss08": "Repetition, logic & misc",
-    "ss09": "Half-width arrows & operators",
     "cv99": "Alternate ligature designs",
 }
 
@@ -585,15 +588,34 @@ def alloc_glyph_name(font):
     return f"cid{n:05d}"
 
 
-def charstring_lsb(cs):
-    """xMin of a freshly built charstring — appended glyphs used to get
-    lsb=0, which lies to anything that trusts hmtx over the outline."""
+def charstring_box(cs):
+    """(xMin, yMin, xMax, yMax) of a freshly built charstring, or None for
+    a blank one — appended glyphs used to get lsb=0, which lies to
+    anything that trusts hmtx over the outline."""
     try:
-        bounds = cs.calcBounds(None)
+        return cs.calcBounds(None)
     except Exception as exc:
-        print(f"  WARNING: calcBounds failed for appended glyph ({exc}); lsb=0")
-        return 0
-    return otRound(bounds[0]) if bounds else 0
+        print(f"  WARNING: calcBounds failed for appended glyph ({exc})")
+        return None
+
+
+def charstring_lsb(cs):
+    """xMin of a freshly built charstring."""
+    box = charstring_box(cs)
+    return otRound(box[0]) if box else 0
+
+
+def vmtx_origin(font, glyph):
+    """The vertical origin of a glyph already in `font` — its own yMax
+    plus its top side bearing, which is what CFF's VORG states directly.
+    Cached, because it needs the glyph set."""
+    cache = getattr(font, "_vorigin", None)
+    if cache is None:
+        cache = font._vorigin = {}
+    if glyph not in cache:
+        box = _bounds(font.getGlyphSet(), glyph)
+        cache[glyph] = font["vmtx"].metrics[glyph][1] + (box[3] if box else 0)
+    return cache[glyph]
 
 
 def vmtx_donor(font, fullwidth=True):
@@ -628,18 +650,40 @@ def append_glyph(font, td, name, cs, fd_index, width, lsb=None, vdonor=None):
         td.charset.append(name)
     if fd_index is not None:     # CID-keyed; a plain CFF has no FDSelect
         td.FDSelect.gidArray.append(fd_index)
-    i = len(td.CharStrings.charStringsIndex.items)
-    td.CharStrings.charStringsIndex.append(cs)
-    td.CharStrings.charStrings[name] = i
+    if hasattr(td.CharStrings, "charStringsIndex"):
+        i = len(td.CharStrings.charStringsIndex.items)
+        td.CharStrings.charStringsIndex.append(cs)
+        td.CharStrings.charStrings[name] = i
+    else:                        # a plain, non-indexed CFF (the fixtures)
+        td.CharStrings[name] = cs
+    box = charstring_box(cs)
     font["hmtx"].metrics[name] = (
-        width, charstring_lsb(cs) if lsb is None else lsb)
+        width, (otRound(box[0]) if box else 0) if lsb is None else lsb)
     if "vmtx" in font and vdonor is not None:
-        font["vmtx"].metrics[name] = font["vmtx"].metrics[vdonor]
+        # the donor's vertical ORIGIN, not its top side bearing. tsb is
+        # measured down from each glyph's OWN yMax, so copying it moves
+        # the origin by the difference between the two: every glyph this
+        # build appends inherited U+FF61's 637 against its own yMax of
+        # 243, and stood 250-570 units low in a vertical run under any
+        # shaper that reads vmtx rather than VORG — FreeType's vertical
+        # layout does, and reads no VORG at all. The CFF VORG in the same
+        # file said 880 for all of them, so the two tables disagreed
+        font["vmtx"].metrics[name] = (
+            font["vmtx"].metrics[vdonor][0],
+            otRound(vmtx_origin(font, vdonor) - (box[3] if box else 0)))
     note_redrawn(font, [name])
-    appended = getattr(font, "_appended", None)
-    if appended is None:
-        appended = font._appended = set()
-    appended.add(name)
+    # two sets, because they answer two questions. _built is every glyph
+    # this build made, and nothing ever leaves it: their names come from
+    # Source Han Sans's own CID space, so a pass that looks a glyph up by
+    # name in a reference font (fit_to_grid) must know not to. _appended
+    # is the subset add_latin_fd re-homes into the Latin FontDict, which
+    # an appender can opt out of (narrow_halfwidth does).
+    for attr in ("_built", "_appended"):
+        have = getattr(font, attr, None)
+        if have is None:
+            have = set()
+            setattr(font, attr, have)
+        have.add(name)
     font.setGlyphOrder(order)
     if hasattr(font, "_reverseGlyphOrderDict"):
         del font._reverseGlyphOrderDict
@@ -653,12 +697,33 @@ def append_context(font, fullwidth=False):
     already lives in. Every appender uses it: in the JP faces
     add_latin_fd() later moves all appended glyphs into a copy of A's FD,
     and a width encoded against any other FD's nominalWidthX would then
-    be wrong (the ligatures were, by 510u); the Latin faces have one FD."""
+    be wrong (the ligatures were, by 510u); the Latin faces have one FD.
+
+    A plain CFF has no FDSelect at all: the index is None and the Private
+    dict the top dict's own. Every face this repo builds is CID-keyed,
+    Sumi Moji included; the branch is for a caller handed something else
+    (the unit tests' fixtures). A face with no vmtx has no donor
+    either."""
     cff = font["CFF "].cff
     td = cff[cff.fontNames[0]]
     cmap = font.getBestCmap()
-    fd_index = td.FDSelect[font.getGlyphID(cmap[ord("A")])]
-    return td, cmap, fd_index, td.FDArray[fd_index].Private, vmtx_donor(font, fullwidth)
+    a = cmap[ord("A")]
+    return (td, cmap, glyph_fd(font, td, a), glyph_private(font, td, a),
+            vmtx_donor(font, fullwidth))
+
+
+def glyph_fd(font, td, name):
+    """The FontDict index `name` lives in, or None in a plain CFF (which
+    has one Private dict and no FDSelect — the tests' fixtures; every
+    face this repo builds is CID-keyed)."""
+    return td.FDSelect[font.getGlyphID(name)] if hasattr(td, "FDArray") else None
+
+
+def glyph_private(font, td, name):
+    """The Private dict a charstring for `name` is written against: its
+    own FD's, or the top dict's in a plain CFF."""
+    fd = glyph_fd(font, td, name)
+    return td.Private if fd is None else td.FDArray[fd].Private
 
 
 def set_cmap(font, mapping, add_new=False):
@@ -713,7 +778,10 @@ def graft_halfwidth(base, latin):
         # shared by a mark and a spacing codepoint gets both renderings
         key = (src, is_mark)
         if key not in made:
-            width = 0 if is_mark else CELL
+            # the donor's own advance, not an assumed cell: every glyph
+            # Sumi Moji cmaps is one cell today, and a two-cell one it
+            # ever adds must be grafted two cells wide, not overprinted
+            width = 0 if is_mark else latin["hmtx"][src][0]
             pen = T2CharStringPen(pen_width(private, width), scp_gs)
             draw_clean([(scp_gs, src, (1, 0, 0, 1, -CELL if is_mark else 0, 0))], pen)
             name = alloc_glyph_name(base)
@@ -761,6 +829,82 @@ def _unwrap(lookup):
     subs = [st.ExtSubTable for st in lookup.SubTable]
     kind = subs[0].LookupType if subs else None
     return kind, subs
+
+
+def shift_anchors(font, shifts):
+    """Move each glyph's GPOS anchors with its outline. fit_to_grid and
+    widen_fullwidth re-centre a glyph in a new advance, and an anchor is
+    a point ON the glyph: leave it and a combining mark lands where the
+    ink used to be. Source Han Sans attaches the Bopomofo tone marks
+    this way, and widening ㄓ to two cells moved its ink 100u right while
+    the anchor stayed, putting ˫ over the letter.
+
+    `shifts` is {glyph name: how far its outline moved}. GPOS type 9
+    (Extension) is unwrapped by _unwrap_pos; types 3 (cursive), 4
+    (mark-to-base), 5 (mark-to-ligature) and 6 (mark-to-mark) carry the
+    anchors. Returns the number of anchors moved."""
+    if "GPOS" not in font or not shifts:
+        return 0
+    moved = 0
+    for lookup in font["GPOS"].table.LookupList.Lookup:
+        kind, subtables = _unwrap_pos(lookup)
+        for sub in subtables:
+            moved += _shift_subtable_anchors(kind, sub, shifts)
+    return moved
+
+
+def _unwrap_pos(lookup):
+    """(LookupType, [subtables]) for a GPOS lookup, with Extension
+    unwrapped. GPOS numbers Extension 9, where GSUB numbers it 7 (and
+    GPOS's own 7 is contextual positioning), so this is not _unwrap."""
+    if lookup.LookupType != 9:
+        return lookup.LookupType, lookup.SubTable
+    subs = [st.ExtSubTable for st in lookup.SubTable]
+    return (subs[0].LookupType if subs else None), subs
+
+
+def _shift_subtable_anchors(kind, sub, shifts):
+    def move(anchor, dx):
+        if anchor is None or not dx:
+            return 0
+        anchor.XCoordinate += dx
+        return 1
+
+    def by_coverage(coverage, records, pick):
+        n = 0
+        if coverage is None or records is None:
+            return 0
+        for name, rec in zip(coverage.glyphs, records):
+            dx = shifts.get(name)
+            if dx:
+                for anchor in pick(rec):
+                    n += move(anchor, dx)
+        return n
+
+    if kind == 3:      # cursive attachment
+        return by_coverage(getattr(sub, "Coverage", None),
+                           getattr(sub, "EntryExitRecord", None),
+                           lambda r: (r.EntryAnchor, r.ExitAnchor))
+    if kind in (4, 5, 6):
+        marks = "Mark1" if kind == 6 else "Mark"
+        n = by_coverage(getattr(sub, f"{marks}Coverage", None),
+                        getattr(getattr(sub, f"{marks}Array", None), "MarkRecord", None),
+                        lambda r: (r.MarkAnchor,))
+        if kind == 4:
+            n += by_coverage(getattr(sub, "BaseCoverage", None),
+                             getattr(getattr(sub, "BaseArray", None), "BaseRecord", None),
+                             lambda r: r.BaseAnchor)
+        elif kind == 5:
+            n += by_coverage(
+                getattr(sub, "LigatureCoverage", None),
+                getattr(getattr(sub, "LigatureArray", None), "LigatureAttach", None),
+                lambda r: [a for comp in r.ComponentRecord for a in comp.LigatureAnchor])
+        else:
+            n += by_coverage(getattr(sub, "Mark2Coverage", None),
+                             getattr(getattr(sub, "Mark2Array", None), "Mark2Record", None),
+                             lambda r: r.Mark2Anchor)
+        return n
+    return 0
 
 
 def _subst_pairs(kind, subtables, tag):
@@ -829,8 +973,20 @@ def import_scp_variants(base, scp, default_map, marks):
                 if src not in default_map:
                     continue
                 is_mark = default_map[src] in marks
+                # another import may already have drawn this one —
+                # cv11's breve is also a locl form — and grafting it
+                # again left the copy the feature selects with none of
+                # the donor's anchors, 229 units low under every
+                # ascender
+                already = default_map.get(dst)
+                if already is not None and (already in marks) == is_mark:
+                    imported.setdefault((dst, is_mark), already)
                 if (dst, is_mark) not in imported:
-                    width, dx = (0, -CELL) if is_mark else (CELL, 0)
+                    # the DEFAULT's advance, not the variant's: a
+                    # variant must not be a different width from the
+                    # glyph it replaces mid-run
+                    width, dx = ((0, -CELL) if is_mark
+                                 else (scp["hmtx"][src][0], 0))
                     pen = T2CharStringPen(pen_width(private, width), scp_gs)
                     draw_clean(
                         [(scp_gs, dst, (1, 0, 0, 1, dx, 0))], pen)
@@ -842,8 +998,728 @@ def import_scp_variants(base, scp, default_map, marks):
                     imported[dst, is_mark] = name
                     if is_mark:
                         marks.add(name)
+                    # the variant is a donor glyph of ours now, so a
+                    # later import can name it: SCP's ccmp composes the
+                    # ogonek onto cv04's serifed i, and without this the
+                    # rule has no glyph to fire on. Spacing first, as in
+                    # graft_halfwidth — the accent keeps its default
+                    if not is_mark or dst not in default_map:
+                        default_map[dst] = name
                 tag_maps.setdefault(tag, {})[default_map[src]] = imported[dst, is_mark]
     return tag_maps, tag_names
+
+
+def _ccmp_lookups(gsub):
+    """(every lookup index SCP's 'ccmp' needs, the ones the feature
+    itself names). A chain context substitutes nothing itself, it names
+    the lookup that does, so the callees have to be copied too — and a
+    shaper applies lookups in LookupList order, so that order is what
+    has to survive the copy. But only the first list is copied: a callee
+    listed in the feature as well would run with its context thrown
+    away, which is the difference between 'i' before a combining mark
+    and 'i' anywhere at all."""
+    order = set()
+    own = set()
+
+    def add(i):
+        if i in order:
+            return
+        order.add(i)
+        kind, subtables = _unwrap(gsub.LookupList.Lookup[i])
+        if kind == 6:
+            for st in subtables:
+                for rec in getattr(st, "SubstLookupRecord", None) or ():
+                    add(rec.LookupListIndex)
+
+    for fr in gsub.FeatureList.FeatureRecord:
+        if fr.FeatureTag == "ccmp":
+            for li in fr.Feature.LookupListIndex:
+                own.add(li)
+                add(li)
+    return sorted(order), own
+
+
+def _ccmp_remap(lookup, gmap, shift, gid):
+    """Rewrite one deep-copied SCP lookup in our glyph names: every
+    mapping, ligature and coverage through `gmap`, every nested lookup
+    index through `shift`. A rule naming a glyph we did not graft is
+    dropped, and a subtable that loses a whole coverage with it; returns
+    False when nothing is left of the lookup.
+
+    A coverage keeps SCP's glyph order until `gid` (our glyph ids) puts
+    it back in ours — the order a coverage table is searched in, and the
+    one thing about it that is not a set."""
+    if lookup.LookupFlag & 0x0010:   # UseMarkFilteringSet: SCP's own GDEF
+        raise ValueError("ccmp: a mark filtering set cannot be carried over")
+    kind, subtables = _unwrap(lookup)
+    keep = []
+    for entry, st in zip(lookup.SubTable, subtables):
+        if kind == 1:
+            st.mapping = {gmap[s]: gmap[d] for s, d in st.mapping.items()
+                          if s in gmap and d in gmap}
+            alive = bool(st.mapping)
+        elif kind == 2:
+            st.mapping = {gmap[s]: [gmap[d] for d in seq]
+                          for s, seq in st.mapping.items()
+                          if s in gmap and all(d in gmap for d in seq)}
+            alive = bool(st.mapping)
+        elif kind == 3:
+            alts = {gmap[s]: [gmap[d] for d in a if d in gmap]
+                    for s, a in st.alternates.items() if s in gmap}
+            st.alternates = {s: a for s, a in alts.items() if a}
+            alive = bool(st.alternates)
+        elif kind == 4:
+            ligs = {}
+            for src, rules in st.ligatures.items():
+                if src not in gmap:
+                    continue
+                kept = []
+                for lig in rules:
+                    if (lig.LigGlyph in gmap
+                            and all(c in gmap for c in lig.Component)):
+                        lig.Component = [gmap[c] for c in lig.Component]
+                        lig.LigGlyph = gmap[lig.LigGlyph]
+                        kept.append(lig)
+                if kept:
+                    ligs[gmap[src]] = kept
+            st.ligatures = ligs
+            alive = bool(ligs)
+        elif kind == 6:
+            # the glyph counts are the coverage lists' own lengths, so
+            # only a coverage that empties changes the subtable's shape
+            # — and an empty one would match everywhere
+            alive = True
+            for attr in ("BacktrackCoverage", "InputCoverage",
+                         "LookAheadCoverage"):
+                for cov in getattr(st, attr, None) or ():
+                    cov.glyphs = sorted((gmap[g] for g in cov.glyphs
+                                         if g in gmap), key=gid)
+                    alive = alive and bool(cov.glyphs)
+            recs = [rec for rec in getattr(st, "SubstLookupRecord", None) or ()
+                    if rec.LookupListIndex in shift]
+            for rec in recs:
+                rec.LookupListIndex = shift[rec.LookupListIndex]
+            st.SubstLookupRecord = recs
+            st.SubstCount = len(recs)
+            alive = alive and bool(recs)
+        else:
+            raise ValueError(f"ccmp: unsupported GSUB LookupType {kind}")
+        if alive:
+            keep.append(entry)
+    lookup.SubTable = keep
+    lookup.SubTableCount = len(keep)
+    return bool(keep)
+
+
+def graft_scp_outputs(base, scp, default_map, marks, order):
+    """Give the face the glyphs the donor's lookups `order` draw that
+    the graft had no reason to. Each is grafted the way graft_halfwidth
+    grafts the glyph it comes from — a mark (its source is one) at 0
+    advance with the ink a cell left, anything else at SCP's own
+    advance — and named in `default_map`, so a later import can wire a
+    rule that mentions it. A glyph already there is skipped, so the
+    pass can run again once another import has unlocked more sources.
+    Returns the number grafted."""
+    gsub = scp["GSUB"].table
+    td, _, fd_index, private, vdon = append_context(base)
+    scp_gs = scp.getGlyphSet()
+    grafted = 0
+
+    def graft(src, is_mark):
+        nonlocal grafted
+        if src in default_map:
+            return
+        width, dx = (0, -CELL) if is_mark else (scp["hmtx"][src][0], 0)
+        pen = T2CharStringPen(pen_width(private, width), scp_gs)
+        draw_clean([(scp_gs, src, (1, 0, 0, 1, dx, 0))], pen)
+        name = alloc_glyph_name(base)
+        append_glyph(base, td, name, pen.getCharString(private=private),
+                     fd_index, width, None, vdon)
+        default_map[src] = name
+        grafted += 1
+        if is_mark:
+            marks.add(name)
+
+    # in the donor's own lookup order, so a composed mark is grafted
+    # before the lookup that restyles it needs to know it is a mark. A
+    # substitution's output is a mark when its input is one (a
+    # decomposition's first output is the base, the rest are the
+    # accents it carries)
+    for i in order:
+        kind, subtables = _unwrap(gsub.LookupList.Lookup[i])
+        for st in subtables:
+            if kind == 1:
+                pairs = list(st.mapping.items())
+            elif kind == 3:
+                pairs = [(s, a[0]) for s, a in st.alternates.items() if a]
+            elif kind == 2:
+                for src, seq in st.mapping.items():
+                    if src not in default_map:
+                        continue
+                    for k, dst in enumerate(seq):
+                        graft(dst, k > 0 or default_map[src] in marks)
+                continue
+            elif kind == 4:
+                for src, rules in st.ligatures.items():
+                    if src not in default_map:
+                        continue
+                    for lig in rules:
+                        graft(lig.LigGlyph, default_map[src] in marks)
+                continue
+            else:
+                continue        # a chain context draws nothing itself
+            for src, dst in pairs:
+                if src in default_map:
+                    graft(dst, default_map[src] in marks)
+    return grafted
+
+
+def _locl_lookups(gsub):
+    """(every lookup index the donor's 'locl' uses, {(script tag,
+    language tag or None): the indices THAT one gets}).
+
+    Unlike ccmp, locl is not a feature to turn on everywhere, and not
+    even one set of lookups everywhere it is on: Source Code Pro gives
+    script grek the Greek accents, script cyrl one set by default and
+    another under Serbian, and Northern Sami and Skolt Sami a third
+    under their own language tags. Registering the union put the Greek tonos
+    in a Cyrillic run, where it stopped ї + U+0301 composing."""
+    order, where = set(), {}
+    locl = {i for i, fr in enumerate(gsub.FeatureList.FeatureRecord)
+            if fr.FeatureTag == "locl"}
+    for record in gsub.ScriptList.ScriptRecord:
+        for lang, langsys in ([(None, record.Script.DefaultLangSys)]
+                              + [(r.LangSysTag, r.LangSys)
+                                 for r in record.Script.LangSysRecord]):
+            if langsys is None:
+                continue
+            mine = locl.intersection(langsys.FeatureIndex)
+            if not mine:
+                continue
+            theirs = where.setdefault((record.ScriptTag, lang), set())
+            for i in mine:
+                theirs.update(gsub.FeatureList.FeatureRecord[i]
+                              .Feature.LookupListIndex)
+            order.update(theirs)
+    return sorted(order), where
+
+
+def import_scp_locl(base, scp, default_map, where_ours):
+    """Carry the donor's 'locl' — the Greek shapes of the accents, and
+    the Serbian and Sami letterforms — for the scripts and languages it
+    names, not for the whole font. Returns the number of lookups
+    copied.
+
+    Without it a Greek run gets the Latin accent: Β + U+0301 drew the
+    cap acute, 188 units wide and 138 units high, where the donor draws
+    the tonos at 132 wide. Worse, SCP's own ccmp composes the breathing
+    marks from the locl OUTPUTS, so ρ + U+0313 + U+0301 never composed
+    and the psili was drawn inside the acute — 192 Greek sequences."""
+    if "GSUB" not in scp:
+        return 0
+    gsub = scp["GSUB"].table
+    order, where = _locl_lookups(gsub)
+    ours = base["GSUB"].table
+    if not order:
+        return 0
+    gmap = dict(default_map)
+    live = list(order)
+    while True:
+        seen = {old: k for k, old in enumerate(live)}
+        kept = [old for old in live
+                if _ccmp_remap(copy.deepcopy(gsub.LookupList.Lookup[old]),
+                               gmap, seen, base.getGlyphID)]
+        if kept == live:
+            break
+        live = kept
+    if not live:
+        return 0
+    # in front, like ccmp: a locl form is what the rest of the features
+    # then work on, and SCP's own ccmp composes from these outputs
+    shift = {old: k for k, old in enumerate(live)}
+    copied = []
+    for old in live:
+        lookup = copy.deepcopy(gsub.LookupList.Lookup[old])
+        _ccmp_remap(lookup, gmap, shift, base.getGlyphID)
+        copied.append(lookup)
+    _insert_lookups_first(ours, copied)
+    # every pair the donor names, not only those the base already has
+    # a LangSys for: _add_feature_where makes the missing ones
+    _add_feature_where(ours, "locl",
+                       {pair: sorted(shift[old] for old in theirs
+                                     if old in shift)
+                        for pair, theirs in where.items()
+                        if pair[0] in {s for s, _ in where_ours}})
+    sort_feature_list(ours)
+    return len(live)
+
+
+def _new_langsys(record, lang):
+    """A LangSys for `lang` under `record`'s script, starting from the
+    script's default. The donor gives some languages their own forms
+    and the base font has no record for them — Source Han Sans JP has
+    no Serbian and no Northern Sami — so the Serbian б and the Sami eng
+    were copied in and left unreachable."""
+    made = otTables.LangSys()
+    made.LookupOrder = None
+    made.ReqFeatureIndex = 0xFFFF
+    made.FeatureIndex = []
+    default = record.Script.DefaultLangSys
+    if default is not None:
+        made.ReqFeatureIndex = default.ReqFeatureIndex
+        made.FeatureIndex = list(default.FeatureIndex)
+    made.FeatureCount = len(made.FeatureIndex)
+    entry = otTables.LangSysRecord()
+    entry.LangSysTag = lang
+    entry.LangSys = made
+    record.Script.LangSysRecord.append(entry)
+    record.Script.LangSysRecord.sort(key=lambda r: r.LangSysTag)
+    record.Script.LangSysCount = len(record.Script.LangSysRecord)
+    return made
+
+
+def _add_feature_where(table, tag, where):
+    """Make each (script, language) pair in `where` reach the lookups
+    IT is given — `_add_feature` puts one set on every LangSys, which
+    is right for ccmp and wrong for a feature whose whole point is that
+    it differs by language. A language the font has no LangSys for gets
+    one, built from the script's default.
+
+    Nothing already in the table is edited: one FeatureRecord per
+    distinct lookup list is added and swapped into the LangSys that
+    wants it. Source Han Sans shares one 'locl' record between a
+    script's default and its languages, so merging into it put the
+    Serbian б in every Cyrillic run."""
+    records = table.FeatureList.FeatureRecord
+    existing = {i for i, fr in enumerate(records) if fr.FeatureTag == tag}
+    made = {}
+    for record in table.ScriptList.ScriptRecord:
+        asked = {lang for script, lang in where if script == record.ScriptTag}
+        have = {r.LangSysTag for r in record.Script.LangSysRecord} | {None}
+        for lang in sorted(asked - have, key=str):
+            _new_langsys(record, lang)
+        for lang, langsys in ([(None, record.Script.DefaultLangSys)]
+                              + [(r.LangSysTag, r.LangSys)
+                                 for r in record.Script.LangSysRecord]):
+            wanted = where.get((record.ScriptTag, lang))
+            if langsys is None or not wanted:
+                continue
+            mine = sorted(existing.intersection(langsys.FeatureIndex))
+            keep = list(wanted)
+            for i in mine:
+                keep += [li for li in records[i].Feature.LookupListIndex
+                         if li not in keep]
+            key = tuple(sorted(keep))
+            if key not in made:
+                fr = otTables.FeatureRecord()
+                fr.FeatureTag = tag
+                fr.Feature = otTables.Feature()
+                fr.Feature.FeatureParams = None
+                fr.Feature.LookupListIndex = list(key)
+                fr.Feature.LookupCount = len(key)
+                records.append(fr)
+                made[key] = len(records) - 1
+            langsys.FeatureIndex = sorted(
+                [i for i in langsys.FeatureIndex if i not in existing]
+                + [made[key]])
+            langsys.FeatureCount = len(langsys.FeatureIndex)
+    table.FeatureList.FeatureCount = len(records)
+
+
+def scripts_with_langsys(table):
+    """{(script tag, language tag or None)} the font has a LangSys for."""
+    out = set()
+    for record in table.ScriptList.ScriptRecord:
+        if record.Script.DefaultLangSys is not None:
+            out.add((record.ScriptTag, None))
+        for r in record.Script.LangSysRecord:
+            out.add((record.ScriptTag, r.LangSysTag))
+    return out
+
+
+def graft_scp_ccmp(base, scp, default_map, marks):
+    """Give the face the glyphs SCP's 'ccmp' draws that the graft had
+    no reason to: the composed marks (circumflex and acute as one), the
+    dotted-i forms, the accents' flattened shapes for stacking.
+
+    Called twice, because the two imports need each other: the variant
+    features have rules on what ccmp composes (cv02's single-storey g̃)
+    and ccmp has rules on what the variants draw (the ogonek under
+    cv04's serifed i). Returns the number grafted."""
+    if "GSUB" not in scp:
+        return 0
+    order, _ = _ccmp_lookups(scp["GSUB"].table)
+    if not order:
+        return 0
+    return graft_scp_outputs(base, scp, default_map, marks, order)
+
+
+def _renumber_lookups(obj, by, seen=None):
+    """Add `by` to every nested lookup index under `obj`: a contextual
+    lookup names the lookup it calls by its index in the LookupList, in
+    a SubstLookupRecord that can sit under a rule set, a class set or
+    the subtable itself."""
+    if seen is None:
+        seen = set()
+    if id(obj) in seen:
+        return
+    seen.add(id(obj))
+    if isinstance(obj, (list, tuple)):
+        for item in obj:
+            _renumber_lookups(item, by, seen)
+        return
+    for attr, value in vars(obj).items() if hasattr(obj, "__dict__") else ():
+        if attr in ("SubstLookupRecord", "PosLookupRecord"):
+            for rec in value or ():
+                rec.LookupListIndex += by
+        elif isinstance(value, (list, tuple)) or hasattr(value, "__dict__"):
+            _renumber_lookups(value, by, seen)
+
+
+def _insert_lookups_first(table, lookups):
+    """Put `lookups` at the front of the LookupList, renumbering every
+    reference to the ones already there. A shaper applies a stage's
+    lookups in LookupList order whatever order the features name them,
+    so a lookup appended at the end runs last — which for ccmp means
+    after the variant features and after the ligatures, and cv04's
+    serifed i then reached the combining mark with its dot still on."""
+    by = len(lookups)
+    if not by:
+        return
+    for lookup in table.LookupList.Lookup:
+        _renumber_lookups(lookup, by)
+    for fr in table.FeatureList.FeatureRecord:
+        fr.Feature.LookupListIndex = [i + by for i in fr.Feature.LookupListIndex]
+    table.LookupList.Lookup[:0] = list(lookups)
+    table.LookupList.LookupCount = len(table.LookupList.Lookup)
+
+
+def import_scp_ccmp(base, scp, default_map, marks):
+    """Carry the Latin donor's 'ccmp' — composition and decomposition —
+    across the graft, the way import_scp_variants carries its variant
+    features. Returns the number of glyphs grafted for it.
+
+    ccmp is not a variant feature nobody asks for: it is on by default
+    in every shaper, and without it the grafted Latin keeps Source Han
+    Sans's ccmp alone, which knows nothing about Source Code Pro's
+    glyphs. What that costs is visible in one line of a terminal: 'i'
+    followed by U+0307 kept its own dot and drew a second one 84 units
+    away — a smeared double dot where the donor substitutes the dotless
+    ı and sets the accent over it. 'j' under any of ten accents, ĩ/g̃,
+    the Vietnamese ê̆ ô̆, and Ї́ ї́ went the same way: 20 sequences the
+    Latin-only faces composed and the JP faces did not.
+
+    The feature's glyphs are SCP's own and mostly unencoded — the
+    composed marks (circumflex + acute as one), the dotted-i forms, the
+    accents' flattened shapes for stacking — so each one is grafted the
+    way graft_halfwidth grafts the glyph it comes from: a mark (its
+    source is one) at 0 advance with the ink a cell left, anything else
+    at SCP's own advance. The lookups are then copied with every glyph
+    name and every nested lookup index rewritten, appended to our
+    LookupList in SCP's own order, and added to every 'ccmp' feature
+    record — Source Han Sans has one per script, and the Latin, Greek
+    and Cyrillic this touches are three of them."""
+    gsub = scp["GSUB"].table
+    order, own = _ccmp_lookups(gsub)
+    ours = base["GSUB"].table
+    records = [fr for fr in ours.FeatureList.FeatureRecord
+               if fr.FeatureTag == "ccmp"]
+    if not order or not records:
+        return 0
+    # the rules whose source is itself a variant (SCP composes the
+    # ogonek onto cv04's serifed i) could not be grafted before
+    # import_scp_variants made that glyph
+    grafted = graft_scp_ccmp(base, scp, default_map, marks)
+    gmap = dict(default_map)
+
+    # which lookups survive the copy, before they are numbered: a rule
+    # can name a glyph this donor does not have (the italic donor has no
+    # Greek), and a chain context whose only callee went with it is
+    # dead too, so the set has to settle before the indices are handed
+    # out. Nothing is expected to drop today, and a drop says so
+    live = list(order)
+    while True:
+        seen = {old: k for k, old in enumerate(live)}
+        kept = [old for old in live
+                if _ccmp_remap(copy.deepcopy(gsub.LookupList.Lookup[old]),
+                               gmap, seen, base.getGlyphID)]
+        if kept == live:
+            break
+        for old in live:
+            if old not in kept:
+                print(f"  warning: ccmp lookup {old} has no rule this face "
+                      f"can use, dropped")
+        live = kept
+    # at the FRONT of the list, where ccmp belongs: a shaper runs a
+    # stage's lookups in LookupList order, so appended ones ran after
+    # the variant features and the ligatures, and cv04's serifed i met
+    # a combining mark with its dot still on — the very defect the
+    # import exists to fix, on the variant path
+    shift = {old: k for k, old in enumerate(live)}
+    copied = []
+    for old in live:
+        lookup = copy.deepcopy(gsub.LookupList.Lookup[old])
+        _ccmp_remap(lookup, gmap, shift, base.getGlyphID)
+        copied.append(lookup)
+    _insert_lookups_first(ours, copied)
+    # the feature names what the donor's feature named, not the closure
+    listed = sorted(shift[old] for old in live if old in own)
+    for fr in records:
+        fr.Feature.LookupListIndex.extend(listed)
+        fr.Feature.LookupCount = len(fr.Feature.LookupListIndex)
+    return grafted
+
+
+# (coverage, array, record list) per GPOS mark lookup type: the coverage
+# and the array are parallel, so a glyph and its anchors move together
+_MARK_ARRAYS = {
+    4: (("MarkCoverage", "MarkArray", "MarkRecord"),
+        ("BaseCoverage", "BaseArray", "BaseRecord")),
+    5: (("MarkCoverage", "MarkArray", "MarkRecord"),
+        ("LigatureCoverage", "LigatureArray", "LigatureAttach")),
+    6: (("Mark1Coverage", "Mark1Array", "MarkRecord"),
+        ("Mark2Coverage", "Mark2Array", "Mark2Record")),
+}
+
+
+def _remap_mark_subtable(sub, kind, gmap, gid):
+    """Rewrite one mark-attachment subtable in our glyph names. A
+    coverage here is not a set: its order is the order of the array
+    beside it, so the glyph and its anchors are sorted together.
+    Returns False when a coverage comes over empty."""
+    for cov_attr, arr_attr, rec_attr in _MARK_ARRAYS[kind]:
+        cov = getattr(sub, cov_attr, None)
+        array = getattr(sub, arr_attr, None)
+        records = getattr(array, rec_attr, None) if array else None
+        if cov is None or records is None:
+            return False
+        kept = sorted(((gmap[g], rec) for g, rec in zip(cov.glyphs, records)
+                       if g in gmap), key=lambda pair: gid(pair[0]))
+        if not kept:
+            return False
+        cov.glyphs = [g for g, _ in kept]
+        setattr(array, rec_attr, [rec for _, rec in kept])
+        for count in (f"{rec_attr}Count", f"{cov_attr[:-8]}Count"):
+            if hasattr(array, count):
+                setattr(array, count, len(kept))
+    return True
+
+
+def _remap_single_pos(sub, gmap, gid, marks):
+    """Rewrite a SinglePos subtable in our glyph names, keeping the
+    placement it carries and dropping the advance.
+
+    The donor pays for its spacing marks in GPOS: one subtable takes a
+    cell off every mark's advance, and a second also pulls the two
+    double-span marks — the tie bar U+0361 and the double macron U+035F
+    — half a cell left, because they straddle the pair they join. Our
+    marks are 0 wide already, so the advance is ours to drop; the
+    placement is not, and dropping it with the rest left the tie
+    centred on the first letter, 193 units left of the line's start and
+    through the descenders U+035F is drawn to clear. Their outlines are
+    already a CELL left of the donor's, so the placement it asks for is
+    a CELL further right than the donor's. Returns False when nothing
+    is left to say."""
+    cov = getattr(sub, "Coverage", None)
+    if cov is None:
+        return False
+    keep = [g for g in cov.glyphs if g in gmap]
+    if not keep or not all(gmap[g] in marks for g in keep):
+        return False        # a placement on a base is not ours to move
+    sub.ValueFormat &= 0x3          # placements only, no advances
+    if not sub.ValueFormat:
+        return False
+
+    def carry(value):
+        for attr in ("XAdvance", "YAdvance"):
+            if hasattr(value, attr):
+                delattr(value, attr)
+        value.XPlacement = getattr(value, "XPlacement", 0) + CELL
+
+    if sub.Format == 2:
+        pairs = sorted(((gmap[g], v) for g, v in zip(cov.glyphs, sub.Value)
+                        if g in gmap), key=lambda pair: gid(pair[0]))
+        for _, value in pairs:
+            carry(value)
+        cov.glyphs = [g for g, _ in pairs]
+        sub.Value = [v for _, v in pairs]
+        sub.ValueCount = len(pairs)
+    else:
+        # one ValueRecord for the whole coverage: adjusted once
+        carry(sub.Value)
+        cov.glyphs = sorted((gmap[g] for g in keep), key=gid)
+    return True
+
+
+def _pos_records(sub):
+    """Every PosLookupRecord a contextual positioning subtable holds,
+    whichever format it is in: format 3 keeps them on the subtable,
+    formats 1 and 2 under a rule set indexed by glyph or by class."""
+    yield from getattr(sub, "PosLookupRecord", None) or ()
+    for holder in ("ChainPosClassSet", "ChainPosRuleSet",
+                   "PosClassSet", "PosRuleSet"):
+        for rules in getattr(sub, holder, None) or ():
+            for attr in ("ChainPosClassRule", "ChainPosRule",
+                         "PosClassRule", "PosRule"):
+                for rule in getattr(rules, attr, None) or ():
+                    yield from getattr(rule, "PosLookupRecord", None) or ()
+
+
+def _remap_chain_pos(sub, gmap, gid, shift):
+    """Rewrite a ChainContextPos subtable: coverages and class
+    definitions in our glyph names, the lookups it calls at their new
+    indices. A context whose callees all went is dead, and so is one
+    that loses a whole coverage — an empty one matches everywhere."""
+
+    def renumber(records):
+        recs = [rec for rec in records or () if rec.LookupListIndex in shift]
+        for rec in recs:
+            rec.LookupListIndex = shift[rec.LookupListIndex]
+        return recs
+
+    if sub.Format == 2:
+        # class-based: the rule sets are indexed BY class, so nothing
+        # here may be reordered — only the glyph keys change
+        cov = getattr(sub, "Coverage", None)
+        if cov is None:
+            return False
+        cov.glyphs = sorted((gmap[g] for g in cov.glyphs if g in gmap), key=gid)
+        if not cov.glyphs:
+            return False
+        for attr in ("BacktrackClassDef", "InputClassDef", "LookAheadClassDef"):
+            classes = getattr(sub, attr, None)
+            if classes is not None:
+                classes.classDefs = {gmap[g]: c
+                                     for g, c in classes.classDefs.items()
+                                     if g in gmap}
+        alive = False
+        for rules in getattr(sub, "ChainPosClassSet", None) or ():
+            for rule in getattr(rules, "ChainPosClassRule", None) or ():
+                rule.PosLookupRecord = renumber(rule.PosLookupRecord)
+                rule.PosCount = len(rule.PosLookupRecord)
+                alive = alive or bool(rule.PosLookupRecord)
+        return alive
+    if sub.Format != 3:
+        print(f"  warning: mark import: ChainContextPos format {sub.Format}, "
+              f"skipped")
+        return False
+    for attr in ("BacktrackCoverage", "InputCoverage", "LookAheadCoverage"):
+        for cov in getattr(sub, attr, None) or ():
+            cov.glyphs = sorted((gmap[g] for g in cov.glyphs if g in gmap),
+                                key=gid)
+            if not cov.glyphs:
+                return False
+    sub.PosLookupRecord = renumber(getattr(sub, "PosLookupRecord", None))
+    sub.PosCount = len(sub.PosLookupRecord)
+    return bool(sub.PosLookupRecord)
+
+
+def import_scp_marks(base, scp, default_map, marks):
+    """Carry the Latin donor's mark positioning across the graft, so an
+    accent sits on the letter it belongs to. Returns the number of
+    lookups copied.
+
+    Source Code Pro draws its combining marks as spacing glyphs and
+    places them entirely in GPOS: 'mark' attaches one to the base's own
+    top anchor, which is higher on an ascender than on an x-height
+    letter, 'mkmk' stacks a second on the first, and 'ccmp' lifts the
+    tie bar over an ascender and drops the double macron under a
+    descender. graft_halfwidth keeps the outline and gives it a 0
+    advance one cell left, which lands it correctly over an x, o or a —
+    and 229 units too low on b d f h k l, straight through the
+    ascender: 58 of 84 ascender-and-accent pairs drew their ink into
+    one another where the Latin-only faces drew none.
+
+    Mark attachment is copied with every glyph name rewritten and the
+    coverages re-sorted with their anchor arrays (a mark coverage is
+    positional, not a set), then every anchor ON a mark is moved the
+    same cell left as its outline was, so attachment lands exactly
+    where the donor's does. A plain placement moves the other way (it
+    is added to the outline, not measured on it), and the advances the
+    donor takes off its spacing marks are left behind — ours are 0 wide
+    already."""
+    if "GPOS" not in scp or "GPOS" not in base:
+        return 0
+    donor = scp["GPOS"].table
+    ours = base["GPOS"].table
+    gmap = dict(default_map)
+    gid = base.getGlyphID
+    wanted = {}
+    for fr in donor.FeatureList.FeatureRecord:
+        if fr.FeatureTag in ("mark", "mkmk", "ccmp"):
+            for li in fr.Feature.LookupListIndex:
+                wanted.setdefault(li, set()).add(fr.FeatureTag)
+    # a chain context positions nothing itself: it names the lookup that
+    # does, which has to come over with it
+    for li in list(wanted):
+        kind, subtables = _unwrap_pos(donor.LookupList.Lookup[li])
+        if kind != 8:
+            continue
+        for sub in subtables:
+            for rec in _pos_records(sub):
+                wanted.setdefault(rec.LookupListIndex, set())
+
+    def remap(lookup, shift):
+        kind, subtables = _unwrap_pos(lookup)
+        keep = []
+        for entry, sub in zip(lookup.SubTable, subtables):
+            if kind in _MARK_ARRAYS:
+                alive = _remap_mark_subtable(sub, kind, gmap, gid)
+            elif kind == 1:
+                alive = _remap_single_pos(sub, gmap, gid, marks)
+            elif kind == 8:
+                alive = _remap_chain_pos(sub, gmap, gid, shift)
+            else:
+                alive = False
+            if alive:
+                keep.append(entry)
+        lookup.SubTable = keep
+        lookup.SubTableCount = len(keep)
+        if keep and kind in _MARK_ARRAYS:
+            _, subs = _unwrap_pos(lookup)
+            for sub in subs:
+                _shift_subtable_anchors(kind, sub, {n: -CELL for n in marks})
+        return bool(keep)
+
+    # which lookups survive, before they are numbered
+    live = sorted(wanted)
+    while True:
+        seen = {old: k for k, old in enumerate(live)}
+        kept = [old for old in live
+                if remap(copy.deepcopy(donor.LookupList.Lookup[old]), seen)]
+        if kept == live:
+            break
+        live = kept
+    if not live:
+        return 0
+    first = len(ours.LookupList.Lookup)
+    shift = {old: first + k for k, old in enumerate(live)}
+    for old in live:
+        lookup = copy.deepcopy(donor.LookupList.Lookup[old])
+        remap(lookup, shift)
+        ours.LookupList.Lookup.append(lookup)
+    ours.LookupList.LookupCount = len(ours.LookupList.Lookup)
+    for tag in ("ccmp", "mark", "mkmk"):
+        idx = sorted(shift[old] for old in live if tag in wanted[old])
+        if idx:
+            _add_feature(ours, tag, idx)
+    sort_feature_list(ours)
+    # 'mkmk' asks GDEF which marks it may stack on (LookupFlag's mark
+    # attachment type); Source Han Sans JP declares no such classes, so
+    # the donor's travel with the lookups that read them
+    donor_classes = getattr(scp.get("GDEF"), "table", None)
+    donor_classes = getattr(donor_classes, "MarkAttachClassDef", None)
+    if donor_classes is not None and "GDEF" in base:
+        gdef = base["GDEF"].table
+        classes = dict(getattr(getattr(gdef, "MarkAttachClassDef", None),
+                               "classDefs", None) or {})
+        for name, cls in donor_classes.classDefs.items():
+            if name in gmap:
+                classes[gmap[name]] = cls
+        if gdef.MarkAttachClassDef is None:
+            gdef.MarkAttachClassDef = otTables.MarkAttachClassDef()
+        gdef.MarkAttachClassDef.classDefs = classes
+    return len(live)
 
 
 def copy_line_metrics(base, latin):
@@ -852,8 +1728,16 @@ def copy_line_metrics(base, latin):
     -273 / 0, hhea and typo alike, USE_TYPO_METRICS set), so a line of
     Sumi Moji JP is as tall as a line of Source Code Pro, not of Source
     Han Sans (1160 / -288, 15% more). Source Han Sans's own kanji body
-    (880 / -120) sits inside. usWinAscent / Descent stay Source Han
-    Sans's (1160 / 288): a GDI-era clipping bound, not a line height."""
+    (880 / -120) sits inside.
+
+    usWinAscent / Descent stay Source Han Sans's (1160 / 288). They are
+    a clipping bound as much as a line height, and Source Han Sans's own
+    ink goes well past 984 — so bringing them down to the typo metrics
+    would clip glyphs in the GDI paths that read them. The cost is that
+    those same paths (legacy conhost, Notepad, Office's GDI text) still
+    lay out a 1448u line where DirectWrite, CoreText and HarfBuzz lay
+    out 1257u; USE_TYPO_METRICS tells everything that reads it which to
+    prefer."""
     for tbl, attrs in (
         ("hhea", ("ascent", "descent", "lineGap")),
         ("OS/2", ("sTypoAscender", "sTypoDescender", "sTypoLineGap")),
@@ -1051,10 +1935,10 @@ def stretch_arrows(font, added, fullwidth, slant=0.0, chars=ARROWS_H + ARROWS_V)
     SHS's ink length. ⇐ mirrors '=>', ↑ ↓ rotate '->' and take SHS's
     height. Italic: the slant is taken out before mirroring / rotating /
     resizing and put back after, so a slanted vertical shaft stays
-    straight. `fullwidth` is {codepoint: SHS's full-width glyph}
-    (graft_halfwidth's `replaced`); the cmap is not touched. Returns
+    straight. `fullwidth` is {codepoint: the two-cell glyph}
+    (fullwidth_forms()'s); the cmap is not touched. Returns
     {codepoint: new glyph name}."""
-    td, cmap, fd_index, private, vdon = append_context(font, fullwidth=True)
+    td, _cmap, fd_index, private, vdon = append_context(font, fullwidth=True)
     gs = font.getGlyphSet()
     t = math.tan(math.radians(-slant))
     swapped = {}
@@ -1081,13 +1965,26 @@ def stretch_arrows(font, added, fullwidth, slant=0.0, chars=ARROWS_H + ARROWS_V)
         b = path.bounds
         have = (b[2] - b[0]) if axis == 0 else (b[3] - b[1])
         want = (shs[2] - shs[0]) if axis == 0 else (shs[3] - shs[1])
+        if axis == 0 and t:
+            # putting the slant back widens the ink by however far the
+            # shape leans across its own height, and SHS's ink extent is
+            # what the finished arrow must match. Take it off the shaft
+            # here: de-slanted is the only state stretch_path can cut in
+            # without breaking a slanted shaft
+            lean = _xform_path(path, (1, 0, t, 1, 0, 0)).bounds
+            want -= (lean[2] - lean[0]) - have
         path = stretch_path(path, axis, want - have)
-        b = path.bounds
+        path = _xform_path(path, (1, 0, t, 1, 0, 0))       # the slant back
         # center on the advance; keep the ligature's baseline alignment for
-        # horizontal arrows, take SHS's own vertical center for ↑ ↓
+        # horizontal arrows, take SHS's own vertical center for ↑ ↓.
+        # Measured on the SLANTED outline: the box of a sheared shape is
+        # not the shear of its box, and centring on the upright one left
+        # every italic arrow tan(11°) of its own height to the right — 67u
+        # off centre, ⇐ 56u into the next cell, and ↑ 72u away from ↓
+        b = path.bounds
         tx = adv / 2 - (b[0] + b[2]) / 2
         ty = 0 if axis == 0 else (shs[1] + shs[3]) / 2 - (b[1] + b[3]) / 2
-        path = _xform_path(path, (1, 0, t, 1, tx + t * ty, ty))
+        path = _xform_path(path, (1, 0, 0, 1, tx, ty))
         pen = T2CharStringPen(pen_width(private, adv), gs)
         path.draw(pen)
         name = alloc_glyph_name(font)
@@ -1098,47 +1995,176 @@ def stretch_arrows(font, added, fullwidth, slant=0.0, chars=ARROWS_H + ARROWS_V)
     return swapped
 
 
-def fit_to_grid(font, cell, glyph_names=None):
-    """Centre Source Han Sans's proportional leftovers on the grid: every
-    cmap'd glyph whose advance is neither 0 nor a whole number of cells
-    nor of full widths — the half-width kana and symbols at 500 (half of
-    the 1000 em, on neither grid), Hangul jamo at 920, ﬀ ﬃ ﬄ, the
-    enclosed 🄯 — goes to one cell when it fits (advance <= cell), else
-    to the next whole number of full widths (⸻ 2459 -> 3000); the outline
-    is centred in the new advance. Runs before widen_fullwidth, which
-    then takes the full-width ones along.
+def grid_step(adv, ink, cell):
+    """The grid advance for a proportional glyph: the cell, or a whole
+    number of full widths — whichever its own advance is nearest, since
+    that is what the donor says the character's width class is. Source
+    Han Sans's Greek letters run 285-804 at the Regular donor and
+    329-853 at the Bold one, its Cyrillic 454-1005 and 483-1064: most
+    of them sit a little over the cell, so rounding up would cost every
+    one a whole terminal column, and would make the same letter one
+    cell in one weight and two in the next (its advance grows with the
+    weight). The widest still land on a full width here, which is why
+    narrow_letters runs first and puts the lot on the cell.
 
-    `glyph_names` (when given) replaces the cmap scan with an explicit
-    iterable of glyph names — used to also centre hwid's own 500-advance
-    alternates (see hwid_targets()). Returns the number of glyphs
-    moved."""
+    The ink may overhang the step by up to a third of a cell — an italic
+    always overhangs — but no further: a three-em dash (⸻, 2452 wide)
+    takes three full widths rather than spilling out of two."""
+    if adv <= cell:
+        step = cell
+    else:
+        low = FULLWIDTH * (adv // FULLWIDTH) or cell
+        high = FULLWIDTH if low == cell else low + FULLWIDTH
+        step = low if adv - low <= high - adv else high
+    while ink > step + cell // 3:
+        # the cell first, then whole full widths — and always forward,
+        # even were the cell ever set at or above a full width
+        step = FULLWIDTH if step < FULLWIDTH else step + FULLWIDTH
+    return step
+
+
+_REFERENCE_STEPS = {}
+
+
+def reference_steps(path, cell, ink_path=None):
+    """{glyph name: grid step} decided once, on one weight, for the whole
+    family. A glyph's advance grows with the weight — Source Han Sans's
+    Φ runs 757..850 across the five donors, straddling the midpoint
+    between the cell and a full width — so deciding per face would make
+    the same letter one column in Light Italic and two in Bold Italic.
+    Keyed by name because every Source Han Sans weight shares its CID
+    names, and because a glyph reachable only through a feature has no
+    codepoint. A glyph on a whole number of cells gets an entry too — it
+    can be on the grid in the reference and off it in a heavier weight,
+    and both have to end up the same — but one on a full width does not:
+    the nearest step from just off a full width is that full width. The
+    reference is
+    the donor of our Regular (FACES); `ink_path` is the heaviest donor,
+    whose ink is the widest the step has to hold (Source Han Sans's ж
+    overhangs a 600 cell by 138u at Normal and 223u at Bold). Read once
+    per process."""
+    key = (str(path), str(ink_path), cell)
+    if key not in _REFERENCE_STEPS:
+        for needed in (path, ink_path):
+            if needed is not None and not Path(needed).exists():
+                raise FileNotFoundError(
+                    f"{needed}: a weight every face takes its width decisions from "
+                    f"(REFERENCE_SHS / INK_SHS). Even a one-face build needs both in "
+                    f"SHS_DIR, so that face's widths match the rest of the family")
+        ref = TTFont(path)
+        gs, hmtx = ref.getGlyphSet(), ref["hmtx"]
+        heavy = TTFont(ink_path) if ink_path is not None else None
+        heavy_gs = heavy.getGlyphSet() if heavy is not None else gs
+        steps = {}
+        for name in ref.getGlyphOrder():
+            adv = hmtx[name][0]
+            if adv <= 0:
+                continue
+            if adv % FULLWIDTH == 0:
+                # the donor's own full width, and its design. No entry:
+                # a heavier weight drawn a few units off it rounds back
+                # to the same full width anyway, and 17,000 Japanese
+                # glyphs in the map would ride to every pool worker
+                continue
+            source = heavy_gs if name in heavy_gs else gs
+            pen = BoundsPen(source)
+            source[name].draw(pen)
+            ink = (pen.bounds[2] - pen.bounds[0]) if pen.bounds else 0
+            # a whole number of cells is a step we would have picked, so
+            # it stands unless the ink says otherwise (none does today)
+            steps[name] = (adv if adv % cell == 0 and ink <= adv + cell // 3
+                           else grid_step(adv, ink, cell))
+        _REFERENCE_STEPS[key] = steps
+        ref.close()
+        if heavy is not None:
+            heavy.close()
+    return _REFERENCE_STEPS[key]
+
+
+def fit_to_grid(font, cell, steps=None):
+    """Centre Source Han Sans's proportional leftovers on the grid: every
+    glyph whose advance is neither 0 nor a whole number of cells nor of
+    full widths — the half-width kana and symbols at 500 (half of the
+    1000 em, on neither grid; the Halfwidth block's wider glyphs are
+    narrow_halfwidth's, before this), Hangul jamo at 920, ﬀ ﬃ ﬄ, the enclosed
+    🄯, and in the italic faces the Greek and Cyrillic Source Code Pro
+    Italic has none of — goes to the nearest grid step (grid_step); the
+    outline is centred in the new advance. Runs before widen_fullwidth,
+    which then takes the full-width ones along.
+
+    Every glyph, not only the cmap'd ones: a feature puts glyphs on the
+    page that no codepoint reaches, and 'locl' and 'ccmp' do it without
+    being asked (Source Han Sans's locl form of ⋯ is 1052 units wide),
+    as do hwid's own 500-advance alternates.
+
+    A tiling character is stretched into its step instead of centred
+    in it (tiling_glyphs; the two that get here are the two-em and
+    three-em dashes ⸺ ⸻, which exist to butt together). Source Han
+    Sans draws ⸺ 1580 units of ink wide in a 1672 advance, so the step
+    rounds it to 2000 — and centred there, a run of them broke every
+    420 units where the design leaves 92.
+
+    `steps` (when given) is reference_steps()' {glyph name: step}, so
+    every weight of the family agrees on a glyph's width; a name it does
+    not have falls back to this face's own advance. Returns the number
+    of glyphs moved."""
     cff = font["CFF "].cff
     td = cff[cff.fontNames[0]]
     gs = font.getGlyphSet()
     hmtx = font["hmtx"]
-    done = set()
+    tiling = tiling_glyphs(font)
+    drawn, shifted = {}, {}
     moved = 0
-    if glyph_names is None:
-        glyph_names = font.getBestCmap().values()
-    for name in glyph_names:
-        if name is None or name in done:
-            continue
-        done.add(name)
+    # a glyph this build made carries a name alloc_glyph_name took from
+    # Source Han Sans's own CID space, so it can collide with a reference
+    # name that means something else entirely — and _built, not
+    # _appended, is the whole of them: narrow_halfwidth's condensed
+    # copies opt out of the Latin FontDict but are just as much ours.
+    # Ours are on the grid by construction and take the fallback path
+    built = getattr(font, "_built", frozenset())
+    pinned = getattr(font, "_pinned_cell", frozenset())
+    for name in font.getGlyphOrder():
         adv, lsb = hmtx.metrics[name]
-        if adv <= 0 or adv % cell == 0 or adv % FULLWIDTH == 0:
+        if adv <= 0:
             continue
-        new = cell if adv <= cell else -(-adv // FULLWIDTH) * FULLWIDTH
+        # the family's answer first: a glyph can land on a step in one
+        # weight and off it in the next, and both must end up the same
+        # ... and not one narrow_letters already put on the cell: the
+        # reference map still has the donor's own full width for it
+        new = (None if name in built or name in pinned
+               else (steps or {}).get(name))
+        if new is None:
+            if adv % cell == 0 or adv % FULLWIDTH == 0:
+                continue
+            bounds = BoundsPen(gs)
+            gs[name].draw(bounds)
+            new = grid_step(adv, (bounds.bounds[2] - bounds.bounds[0]) if bounds.bounds else 0,
+                            cell)
+        if new == adv:
+            continue
         shift = (new - adv) // 2
-        if hasattr(td, "FDArray"):   # CID-keyed (the JP faces)
-            private = td.FDArray[td.FDSelect[font.getGlyphID(name)]].Private
-        else:
-            private = td.Private
+        private = glyph_private(font, td, name)
         pen = T2CharStringPen(pen_width(private, new), gs)
-        gs[name].draw(TransformPen(pen, (1, 0, 0, 1, shift, 0)))
-        td.CharStrings[name] = pen.getCharString(private=private)
-        hmtx.metrics[name] = (new, lsb + shift)
+        stretch = tiling.get(name) == "stretch"
+        gs[name].draw(TransformPen(
+            pen, (new / adv, 0, 0, 1, 0, 0) if stretch
+            else (1, 0, 0, 1, shift, 0)))
+        cs = drawn[name] = pen.getCharString(private=private)
+        # a stretched outline's bearing is its own new xMin, and it did
+        # not move by `shift`, so no anchor on it did either
+        if stretch:
+            hmtx.metrics[name] = (new, charstring_lsb(cs))
+        else:
+            hmtx.metrics[name] = (new, lsb + shift)
+            shifted[name] = shift
         note_redrawn(font, [name])
         moved += 1
+    # swap after drawing everything: the glyph set draws through the same
+    # CharStrings, so replacing one mid-pass could feed a shifted glyph
+    # to a later one that references it (widen_fullwidth defers too)
+    for name, cs in drawn.items():
+        td.CharStrings[name] = cs
+    shift_anchors(font, shifted)
     return moved
 
 
@@ -1209,14 +2235,458 @@ def shift_charstring(cs, dx, width, private):
     return True
 
 
-def widen_fullwidth(font, cell):
+def _slab(path, a, b):
+    """The part of `path` between x = a and x = b."""
+    big = 1e5
+    return pathops.op(path, _rect_path(a, -big, b, big), pathops.PathOp.INTERSECTION)
+
+
+def edge_is_rule(path, side):
+    """Whether the ink at one edge of `path` is a horizontal rule: the
+    2-unit slab at the edge is the same SHAPE as the slab 10 units in,
+    slid onto it. True of a rule, a tee, a cross, a block; false of a
+    diagonal (╱), a wave (〰), a shaded pattern (▒) or a triangle (◢),
+    whose cross-section changes as it goes in. Compared by exclusive-or
+    area rather than by extents: ╳'s two diagonals and ▓'s dot columns
+    keep the same extents and piece count 10 units in, and only the
+    overlay tells them from a rule."""
+    x0, _, x1, _ = path.bounds
+    if side == "left":
+        edge, inner, back = _slab(path, x0, x0 + 2), _slab(path, x0 + 10, x0 + 12), -10
+    else:
+        edge, inner, back = _slab(path, x1 - 2, x1), _slab(path, x1 - 12, x1 - 10), 10
+    if edge.bounds is None:
+        return False
+    moved = _xform_path(inner, (1, 0, 0, 1, back, 0))
+    diff = pathops.op(edge, moved, pathops.PathOp.XOR)
+    # a rule overlays itself exactly; the tolerance is for float edges
+    # and for a leg that is already bending — the rounded corners ╭ ╮ ╯
+    # ╰ measure 0.0059 at the straight end of the arc, identically in
+    # every weight, and 0.005 read them as curves and left them out of
+    # the tiling. It stays under everything the box drawing has to
+    # reject: a diagonal ╱ ╲ ╳ is 0.34, and of the shapes decided by
+    # codepoint elsewhere a triangle's flat side is 0.0100 and the
+    # flattest wave 0.0083 (Heavy's 〰)
+    return abs(diff.area) <= 0.007 * abs(edge.area)
+
+
+def extend_edges(path, gap, left=True, right=True):
+    """Lengthen an outline by `gap` units at the side(s) named, by
+    extruding the 2-unit cross-section it has THERE. Not at its
+    midpoint, which is where stretch_path cuts and where a box-drawing
+    cross has its vertical stem: scaling that slab would smear the stem
+    into a bar. At the edge a rule, a cross and a tee all present the
+    same thing — the horizontal arm — so all three come out longer and
+    no stroke changes weight. A corner or a side tee reaches one
+    neighbour only, and is lengthened on that side only, so its stem
+    stays where the centring put it: on the cell's centre line."""
+    x0, y0, x1, y1 = path.bounds
+
+    def edge(a, b, anchor, width):
+        scale = width / (b - a)
+        return _xform_path(_slab(path, a, b), (scale, 0, 0, 1, anchor * (1 - scale), 0))
+
+    out = path
+    if left:
+        out = pathops.op(out, edge(x0, x0 + 2, x0 + 2, gap + 2), pathops.PathOp.UNION)
+    if right:
+        out = pathops.op(out, edge(x1 - 2, x1, x1 - 2, gap + 2), pathops.PathOp.UNION)
+    out.simplify()
+    return out
+
+
+# The characters drawn to tile with a neighbour, by block, and how the
+# Term family lengthens them from 1000 to 1200. Anything else that
+# happens to touch its own advance (Ⅷ, ㌄, 孰 in Bold, a bracket) is an
+# ordinary glyph and is centred like the rest: an edge test alone
+# stretched those 20% wide.
+#   stretch — the whole outline, by 1200/1000: block elements and
+#   shades (▏ is an eighth of the cell and must stay one; ▓'s dots must
+#   stay a pattern), the quadrant triangles, the wave and dashed lines,
+#   the full-width low line and overline
+#   rule — the box-drawing block, the dentistry symbols and √'s
+#   vinculum: extruded at the edge(s) the ink reaches, so a corner's
+#   stem stays on the cell centre and no stroke changes weight — unless
+#   edge_is_rule says the reaching edge is a diagonal or an arc (╱ ╳ ╭),
+#   which is stretched whole like the first group
+# The dashed rules ┄ ┅ ┈ ┉ ╌ ╍ sit inside the box-drawing block but are
+# stretched, and stretched whether or not their ink reaches the edge:
+# Source Han Sans insets their end dashes by half a gap so that cells
+# continue the pattern, which is exactly what the edge test cannot see
+# — centred in 1200, the gap at every cell boundary was 312u against
+# 111u inside the cell.
+TILING_STRETCH = ((0x2504, 0x2505), (0x2508, 0x2509), (0x254C, 0x254D),
+                  (0x2580, 0x259F), (0x25E2, 0x25E5), (0x2E3A, 0x2E3B),
+                  (0x3030, 0x3030), (0xFE49, 0xFE4F), (0xFF3F, 0xFF3F),
+                  (0xFFE3, 0xFFE3))
+TILING_RULE = ((0x221A, 0x221A), (0x23BE, 0x23CC), (0x2500, 0x257F))
+
+
+def tiling_glyphs(font):
+    """{glyph: 'stretch' | 'rule'} for every glyph a tiling character
+    reaches — through the cmap, and one fwid substitution on from
+    there, which is where the two-cell forms of the box drawing live.
+    Not through vert: a rotated rule tiles vertically, and in Term its
+    width is centred like any other glyph's."""
+    cmap = font.getBestCmap()
+    out = {}
+    # the stretch blocks last, so the dashed rules inside the box-drawing
+    # block take that treatment
+    for blocks, how in ((TILING_RULE, "rule"), (TILING_STRETCH, "stretch")):
+        for lo, hi in blocks:
+            for cp in range(lo, hi + 1):
+                name = cmap.get(cp)
+                if name is not None:
+                    out[name] = how
+    if "GSUB" in font:
+        gsub = font["GSUB"].table
+        for fr in gsub.FeatureList.FeatureRecord:
+            if fr.FeatureTag != "fwid":
+                continue
+            for li in fr.Feature.LookupListIndex:
+                kind, subtables = _unwrap(gsub.LookupList.Lookup[li])
+                for src, dst in _subst_pairs(kind, subtables, "fwid"):
+                    if src in out and dst not in out:
+                        out[dst] = out[src]
+    return out
+
+
+def shift_mark_placements(font, moved):
+    """Move the GPOS placements that put a mark on the vertical column
+    with the outline widen_fullwidth just moved. Returns the number of
+    subtables adjusted.
+
+    Source Han Sans centres its full-width marks for a vertical run in
+    'vert', with a SinglePos that places them +500 across the column —
+    a number measured against the outline, the way an anchor is. Move
+    the outline and leave it, and in Term the enclosing circle sat 100
+    units left of the column it encloses, the tone marks U+302A/302B
+    hung outside its left edge and U+302C/302D stood inside its
+    right."""
+    if not moved or "GPOS" not in font:
+        return 0
+    done = 0
+    for lookup in font["GPOS"].table.LookupList.Lookup:
+        kind, subtables = _unwrap_pos(lookup)
+        if kind != 1:
+            continue
+        for sub in subtables:
+            names = getattr(getattr(sub, "Coverage", None), "glyphs", None) or []
+            ours = [n for n in names if n in moved]
+            if not ours:
+                continue
+            if not sub.ValueFormat & 0x1:
+                continue
+            step = moved[ours[0]]
+            if sub.Format == 2:
+                # one ValueRecord per covered glyph: move only ours
+                for name, value in zip(names, sub.Value):
+                    if name in moved:
+                        value.XPlacement = getattr(value, "XPlacement", 0) - step
+                done += 1
+                continue
+            if len(ours) != len(names):
+                # one shared ValueRecord for glyphs that no longer move
+                # together: it would have to be split in two
+                rest = [n for n in names if n not in moved]
+                raise ValueError(
+                    "a GPOS placement covers both moved marks and other "
+                    f"glyphs (moved: {ours[:4]}, not: {rest[:4]}); it "
+                    "would need splitting")
+            sub.Value.XPlacement = getattr(sub.Value, "XPlacement", 0) - step
+            done += 1
+    return done
+
+
+def realign_halfwidth_marks(font, moved, widened):
+    """Put the full-width combining marks back where they were over a
+    base the widening did not move. Returns the number of glyphs the
+    rule covers.
+
+    widen_fullwidth moves them with the cell they ride on — but only
+    the full-width cell grew. The half-width layer (the Latin, and the
+    Halfwidth katakana) is one cell in both families, so over ｶ or ﾈ
+    the mark came out 100 units left of where Source Han Sans puts it,
+    into the kana's own strokes: 25 of the 116 Halfwidth-kana-and-
+    voicing pairs went from touching nowhere to sharing up to 4,651
+    square units of ink. A contextual rule gives those 100 units back
+    when the base did not move; everything else keeps it.
+
+    "Did not move" is `widened` — the glyphs widen_fullwidth actually
+    touched — and not "one cell wide", which is what this asked at
+    first. The Latin layer also owns 63 multi-cell ligature glyphs
+    (`==`, `===`, `!==`, their cv99 designs: 1200, 1800 and 2400 units),
+    and a ligature that lands on a whole number of full widths is in
+    the widening's own `skip` set, so its advance is the same in both
+    families — but it is not one cell, so all 488 ligature-and-mark
+    pairs kept the move and the ring around ＝＝ came out 100 units off
+    its own cells. Advance alone cannot tell them apart: 1200 is a
+    widened full-width glyph in Term and an untouched ligature."""
+    if not moved or "GPOS" not in font:
+        return 0
+    hmtx = font["hmtx"]
+    gid = font.getGlyphID
+    halves = sorted((name for name in font.getGlyphOrder()
+                     if hmtx[name][0] > 0 and name not in widened), key=gid)
+    if not halves:
+        return 0
+
+    def coverage(names):
+        cov = otTables.Coverage()
+        cov.glyphs = sorted(names, key=gid)
+        return cov
+
+    back = otTables.SinglePos()
+    back.Format = 1
+    back.Coverage = coverage(moved)
+    back.Value = otTables.ValueRecord()
+    # every mark moved by the same step, and this undoes it
+    back.Value.XPlacement = -next(iter(moved.values()))
+    back.ValueFormat = 0x1
+    gpos = font["GPOS"].table
+    first = len(gpos.LookupList.Lookup)
+    gpos.LookupList.Lookup.append(_new_lookup_obj(1, back))
+
+    # every OTHER mark is skipped while matching: the lookup filters on
+    # the attachment class these eight get to themselves, so a Latin
+    # accent between the base and the mark — 'B' + U+0300 + U+20DD, and
+    # 1,908 sequences like it — no longer breaks the chain. What is
+    # left to enumerate is a run of these eight themselves, one
+    # subtable per depth: in ｶ ゛ ⃝ the glyph before the circle is the
+    # dakuten, and three of them deep is as far as this goes
+    gdef = base_gdef(font)
+    ours_class = 0
+    if gdef is not None:
+        classes = dict(getattr(getattr(gdef, "MarkAttachClassDef", None),
+                               "classDefs", None) or {})
+        ours_class = max(classes.values(), default=0) + 1
+        for name in moved:
+            classes[name] = ours_class
+        if gdef.MarkAttachClassDef is None:
+            gdef.MarkAttachClassDef = otTables.MarkAttachClassDef()
+        gdef.MarkAttachClassDef.classDefs = classes
+    rules = []
+    for depth in range(4):
+        rule = otTables.ChainContextPos()
+        rule.Format = 3
+        rule.BacktrackCoverage = ([coverage(moved)] * depth
+                                  + [coverage(halves)])
+        rule.BacktrackGlyphCount = depth + 1
+        rule.InputCoverage = [coverage(moved)]
+        rule.InputGlyphCount = 1
+        rule.LookAheadCoverage = []
+        rule.LookAheadGlyphCount = 0
+        rec = otTables.PosLookupRecord()
+        rec.SequenceIndex, rec.LookupListIndex = 0, first
+        rule.PosLookupRecord = [rec]
+        rule.PosCount = 1
+        rules.append(rule)
+    chain = _new_lookup_obj(8, rules[0])
+    chain.SubTable = rules
+    chain.SubTableCount = len(rules)
+    # skip every other mark. Without a GDEF there is no class to filter
+    # on, and naming one anyway would make a shaper skip EVERY mark —
+    # the input marks included, which is the whole rule
+    chain.LookupFlag = ours_class << 8
+    gpos.LookupList.Lookup.append(chain)
+    gpos.LookupList.LookupCount = len(gpos.LookupList.Lookup)
+    # under 'dist', not 'mark': a shaper runs 'mark' in a vertical run
+    # too, and there the marks are already put on the column by Source
+    # Han Sans's own 'vert' placement (shift_mark_placements moves that
+    # one with the outline). Correcting again there pushed the tone
+    # marks 100 units clear of the column. 'dist' is horizontal-only
+    # and is exactly what it is for
+    _add_feature(gpos, "dist", [first + 1])
+    sort_feature_list(gpos)
+    return len(halves)
+
+
+def rehome_replaced_marks(base, replaced):
+    """Put the grafted accents into the mark lookups Source Han Sans
+    keeps for its OWN copies of them. Returns the number of entries
+    added.
+
+    Source Han Sans attaches the Bopomofo tone marks to the Bopomofo
+    letters with three MarkBasePos lookups, and their MarkCoverage names
+    Source Han Sans's own U+0300, U+0301, U+0307 and U+030C. The graft
+    re-points those four codepoints at the Latin donor's accents and
+    leaves the coverage naming glyphs no codepoint reaches any more, so
+    nothing attaches: 164 of the 188 Bopomofo-and-tone pairs drew the
+    mark straight through the letter's strokes (ㄓ + U+0301 at 636..836
+    against a letter at 66..934, where Source Han Sans hangs it off the
+    right shoulder at 760..1120, 284 units further right and 226 up).
+    U+02EA and U+02EB kept Source Han Sans's own glyphs and still
+    attach, which is how the rest of the machinery is known to be
+    sound.
+
+    The two outlines are not the same shape, so the anchor comes over
+    shifted by the difference between the two inks' centres: the donor's
+    accent then lands where Source Han Sans puts its own."""
+    if "GPOS" not in base or not replaced:
+        return 0
+    cmap = base.getBestCmap()
+    gs = base.getGlyphSet()
+    gid = base.getGlyphID
+    swap = {}
+    for cp, theirs in replaced.items():
+        ours = cmap.get(cp)
+        if ours and ours != theirs:
+            swap.setdefault(theirs, ours)
+
+    def centre(name):
+        box = _bounds(gs, name)
+        return None if box is None else ((box[0] + box[2]) / 2,
+                                         (box[1] + box[3]) / 2)
+
+    added = 0
+    for lookup in base["GPOS"].table.LookupList.Lookup:
+        kind, subtables = _unwrap_pos(lookup)
+        if kind not in (4, 5, 6):
+            continue
+        for sub in subtables:
+            cov = getattr(sub, "MarkCoverage", None) or \
+                getattr(sub, "Mark1Coverage", None)
+            array = getattr(sub, "MarkArray", None) or \
+                getattr(sub, "Mark1Array", None)
+            if cov is None or array is None:
+                continue
+            pairs = list(zip(cov.glyphs, array.MarkRecord))
+            for name, rec in list(pairs):
+                ours = swap.get(name)
+                if not ours or ours in cov.glyphs:
+                    continue
+                theirs_c, ours_c = centre(name), centre(ours)
+                if theirs_c is None or ours_c is None:
+                    continue
+                anchor = otTables.Anchor()
+                anchor.Format = 1
+                anchor.XCoordinate = round(rec.MarkAnchor.XCoordinate
+                                           + ours_c[0] - theirs_c[0])
+                anchor.YCoordinate = round(rec.MarkAnchor.YCoordinate
+                                           + ours_c[1] - theirs_c[1])
+                copy = otTables.MarkRecord()
+                copy.Class, copy.MarkAnchor = rec.Class, anchor
+                pairs.append((ours, copy))
+                added += 1
+            pairs.sort(key=lambda pair: gid(pair[0]))
+            cov.glyphs = [name for name, _rec in pairs]
+            array.MarkRecord = [rec for _name, rec in pairs]
+            array.MarkCount = len(pairs)
+    return added
+
+
+def extend_realign_bases(font, names):
+    """Add `names` to the backtrack of the Term mark correction, for
+    glyphs appended after widen_fullwidth ran. Returns the number of
+    subtables extended.
+
+    realign_halfwidth_marks freezes its backtrack at widening time — the
+    glyphs the widening did not move — and nerdpatch.py then appends
+    10,402 one-cell icons to the finished face. None of them were in it,
+    so in SumiMojiJPTermNFM-* a full-width mark after an icon kept the
+    widening's -100: U+F120 + U+20DD drew the ring at -465..465 where
+    the same one-cell base two rows up puts it at -365..565."""
+    gpos = getattr(font.get("GPOS"), "table", None)
+    if gpos is None or not names:
+        return 0
+    gid = font.getGlyphID
+    ours = set()
+    for fr in gpos.FeatureList.FeatureRecord:
+        if fr.FeatureTag == "dist":
+            ours.update(fr.Feature.LookupListIndex)
+    done = 0
+    for index in sorted(ours):
+        kind, subtables = _unwrap_pos(gpos.LookupList.Lookup[index])
+        if kind != 8:
+            continue
+        for sub in subtables:
+            covs = getattr(sub, "BacktrackCoverage", None)
+            if not covs:
+                continue
+            cov = covs[-1]      # the base, behind the run of marks
+            cov.glyphs = sorted(set(cov.glyphs) | set(names), key=gid)
+            done += 1
+    return done
+
+
+def base_gdef(font):
+    """The font's GDEF table, or None."""
+    return getattr(font.get("GDEF"), "table", None)
+
+
+def _new_lookup_obj(kind, subtable):
+    """A Lookup holding one subtable, with no flags."""
+    lookup = otTables.Lookup()
+    lookup.LookupType = kind
+    lookup.LookupFlag = 0
+    lookup.SubTable = [subtable]
+    lookup.SubTableCount = 1
+    return lookup
+
+
+def fullwidth_marks(font):
+    """The 0-advance combining marks Source Han Sans draws INSIDE a
+    full-width cell — the enclosing circle and square, the kana voicing
+    marks, the ideographic tone marks. They ride on the cell before
+    them, so widen_fullwidth has to move them with it.
+
+    Source Han Sans draws them one FULL WIDTH left of the origin, the
+    way graft_halfwidth draws ours one CELL left, so widening the cell
+    to 1200 has to take them 100 units further left — not right. Told
+    from the grafted Latin marks by `_built`: those are ours, the Latin
+    cell is 600 in both families, and they stay put.
+
+    What says "drawn in the full-width cell" is where the ink's CENTRE
+    falls, not a hair's breadth either side of the cell's own edges. The
+    first version of this allowed 2 units, and Source Han Sans's strokes
+    thicken with the weight: at Medium the ideographic tone marks reach
+    -1007 and +7, at Bold the voicing marks +5 and +7, so four of the
+    eight fell out of the set at Medium and six at Bold. Those marks
+    kept the 1000-unit cell in Term (the enclosing ring 100 units off
+    the character it encloses, at three of the five weights), and the
+    half-set then tripped shift_mark_placements, which is where the CI
+    build stopped. Source Han Sans's own Latin marks, which the graft
+    may not have replaced, are drawn to the RIGHT of the origin — even
+    U+0304, the widest, is centred on it — so the centre tells them
+    apart at any weight."""
+    hmtx = font["hmtx"]
+    gs = font.getGlyphSet()
+    built = getattr(font, "_built", frozenset())
+    slack = FULLWIDTH // 20
+    out = set()
+    for cp, name in font.getBestCmap().items():
+        if (name in built or hmtx[name][0] != 0
+                or unicodedata.category(chr(cp)) not in ("Mn", "Me")):
+            continue
+        box = _bounds(gs, name)
+        if (box is not None and box[0] >= -FULLWIDTH - slack
+                and box[2] <= slack and (box[0] + box[2]) / 2 < 0):
+            out.add(name)
+    return out
+
+
+def widen_fullwidth(font, cell, skip=()):
     """Term variant: widen every full-width glyph's advance to two cells
     (2 x cell; an n-full-width glyph such as ⸻ to 2n cells) and center
-    the unchanged outline. The Latin layer is untouched by this pass; the
-    terminal grid becomes exact (CJK = two cells, symmetric padding
-    instead of a right-side gap).
+    the unchanged outline. The terminal grid becomes exact (CJK = two
+    cells, symmetric padding instead of a right-side gap).
 
-    The outlines are moved inside their charstrings (shift_charstring),
+    The Latin layer is on the cell grid and passes through untouched —
+    except that a multi-cell ligature can land on a whole number of full
+    widths too (5 cells = 3000 = three full widths), so `skip` names the
+    ligature glyphs. The full-width forms this build appended for fwid
+    (stretch_arrows' arrows, fullwidth_forms' Source Han Sans glyphs)
+    are full-width and widen with the rest.
+
+    A tiling character (TILING_STRETCH / TILING_RULE, tiling_glyphs)
+    whose ink reaches an edge of its own advance is drawn to meet a
+    neighbour there — ＿ ￣ 〰 ◢ and, under fwid, the box drawing and
+    block elements. Centring one of those would leave white at that
+    join, so it is lengthened on that side instead: extruded where the
+    edge is a rule (extend_edges), stretched whole where it is a block,
+    a pattern, a diagonal or a wave.
+
+    The other outlines are moved inside their charstrings (shift_charstring),
     so Source Han Sans's own hints survive on the 17,000 glyphs this
     touches — redrawing them cost autohint 100 seconds per face; a
     glyph shift_charstring declines is redrawn and re-hinted."""
@@ -1225,16 +2695,67 @@ def widen_fullwidth(font, cell):
     td = cff[cff.fontNames[0]]
     gs = font.getGlyphSet()
     hmtx = font["hmtx"]
-    redrawn = {}
-    shifted = 0
+    redrawn, moved_by, marks_moved = {}, {}, {}
+    shifted = tiled = 0
+    tiling = tiling_glyphs(font)
+    skip = set(skip)
+    full_marks = fullwidth_marks(font)
     for name in font.getGlyphOrder():
         adv, lsb = hmtx.metrics[name]
-        if adv <= 0 or adv % FULLWIDTH:
+        if name in full_marks:
+            # a combining mark carries no advance of its own and rides
+            # on the cell before it, so it has to move with that cell:
+            # Source Han Sans's own full-width marks (the enclosing
+            # circle and square, the kana voicing marks, the ideographic
+            # tone marks) are drawn inside a 1000-unit cell, and leaving
+            # them there put the circle 100 units right of the kanji it
+            # encloses — through its left edge. They hang to the LEFT of
+            # the origin, over the cell that has just been widened, so
+            # they move the other way from the glyph that carries them
+            step = -((2 * cell - FULLWIDTH) // 2)
+            private = glyph_private(font, td, name)
+            if shift_charstring(td.CharStrings[name], step, 0, private):
+                shifted += 1
+            else:
+                pen = T2CharStringPen(pen_width(private, 0), gs)
+                gs[name].draw(TransformPen(pen, (1, 0, 0, 1, step, 0)))
+                redrawn[name] = pen.getCharString(private=private)
+            hmtx.metrics[name] = (0, lsb + step)
+            moved_by[name] = step
+            marks_moved[name] = step
+            continue
+        if adv <= 0 or adv % FULLWIDTH or name in skip:
             continue
         full = (adv // FULLWIDTH) * 2 * cell
         shift = (full - adv) // 2
-        gid = font.getGlyphID(name)
-        private = td.FDArray[td.FDSelect[gid]].Private
+        private = glyph_private(font, td, name)
+        how = tiling.get(name)
+        box = _bounds(gs, name) if how else None
+        left = box is not None and box[0] <= 2
+        right = box is not None and box[2] >= adv - 2
+        if how == "stretch" or (how == "rule" and (left or right)):
+            # drawn to TILE with a neighbour at the edge its ink reaches:
+            # centring it in the wider advance leaves `shift` units of
+            # white at that join, so a rule of ＿ or ─ came out dashed, █
+            # striped, and every corner of a box stood 100u clear of the
+            # rule it should meet
+            path = pathops.Path()
+            gs[name].draw(path.getPen())
+            if how == "rule" and all(edge_is_rule(path, side) for side, on in
+                                     (("left", left), ("right", right)) if on):
+                path = extend_edges(_xform_path(path, (1, 0, 0, 1, shift, 0)),
+                                    shift, left, right)
+            else:
+                path = _xform_path(path, (full / adv, 0, 0, 1, 0, 0))
+            pen = T2CharStringPen(pen_width(private, full), gs)
+            path.draw(pen)
+            cs = redrawn[name] = pen.getCharString(private=private)
+            tiled += 1
+            # the ink grew as well as moved, so the bearing is the new
+            # outline's own xMin and not the old one plus the shift
+            hmtx.metrics[name] = (full, charstring_lsb(cs))
+            moved_by[name] = shift
+            continue
         if shift_charstring(td.CharStrings[name], shift, full, private):
             shifted += 1
         else:
@@ -1242,11 +2763,160 @@ def widen_fullwidth(font, cell):
             gs[name].draw(TransformPen(pen, (1, 0, 0, 1, shift, 0)))
             redrawn[name] = pen.getCharString(private=private)
         hmtx.metrics[name] = (full, lsb + shift)
+        moved_by[name] = shift
     for name, cs in redrawn.items():
-        td.CharStrings.charStringsIndex[td.CharStrings.charStrings[name]] = cs
+        td.CharStrings[name] = cs        # a plain CFF has no charStringsIndex
+    shift_anchors(font, moved_by)
+    shift_mark_placements(font, marks_moved)
+    realign_halfwidth_marks(font, marks_moved, moved_by)
     note_redrawn(font, redrawn)
     print(f"  full-width widened to {2 * cell}: {shifted} shifted with their hints, "
-          f"{len(redrawn)} redrawn")
+          f"{len(redrawn)} redrawn ({tiled} of them lengthened to keep tiling)")
+
+
+# How a tiling character is lengthened DOWN the page, by block. The
+# sideways classes do not transpose: ┄ tiles across the cell and ┆ down
+# the page, and ＿ ￣ 〰 ◢ tile sideways only — they have no one-cell
+# form to match, so their full-width glyph IS the default and
+# lengthening it would redraw the character (＿'s 41-unit rule came out
+# a 320-unit slab).
+#   scale — the block elements and the quadrants, whose whole point is a
+#   fraction of the cell (an eighth block must stay an eighth of the
+#   line, not gain the same 280 units as the full block), and the
+#   diagonals
+#   rule — the rest of the box drawing: extruded, so a stem or a double
+#   rule keeps its weight. The diagonals ╱ ╲ ╳ are scaled instead, as
+#   they are sideways: extruding a slant would grow a tail, and the
+#   one-cell default is already 1200 tall in a 600 cell — a steeper
+#   diagonal is the design for a line, not a distortion of it
+#   period — the vertical dashed rules, whose pattern has to repeat at
+#   the LINE's own pitch, not the band's: their em is mapped onto the
+#   line box instead, so a column of them keeps one rhythm across the
+#   join. Mapped onto the band like a block, ┊'s bottom dash and the
+#   next line's top dash overlapped by 57 units and merged into one
+#   471-unit dash among 264-unit ones
+#   tile — the shades, whose dots a 40% stretch would draw as ovals: the
+#   pattern is repeated a whole em up and down and cut to the band,
+#   which is what the cell above and the cell below would have shown
+VTILING_SCALE = ((0x2571, 0x2573), (0x2580, 0x2590), (0x2594, 0x259F))
+VTILING_PERIOD = ((0x2506, 0x2507), (0x250A, 0x250B), (0x254E, 0x254F))
+VTILING_TILE = ((0x2591, 0x2593),)
+VTILING_RULE = ((0x2500, 0x257F),)
+
+
+def vtiling_glyphs(font):
+    """{glyph: 'scale' | 'rule'} over the full-width forms of the
+    characters that tile down the page. Only the forms a fwid
+    substitution reaches: a character the Latin donor draws at one cell
+    already spans the line in its default form, and one with no
+    one-cell form at all (＿ ￣ 〰) is not drawn to stack."""
+    cmap = font.getBestCmap()
+    fwid = feature_map(font, "fwid")
+    out = {}
+    for blocks, how in ((VTILING_RULE, "rule"), (VTILING_SCALE, "scale"),
+                        (VTILING_PERIOD, "period"), (VTILING_TILE, "tile")):
+        for lo, hi in blocks:
+            for cp in range(lo, hi + 1):
+                full = fwid.get(cmap.get(cp))
+                if full is not None and full != cmap.get(cp):
+                    out[full] = how
+    return out
+
+
+def tile_vertically(font):
+    """Make the full-width box drawing and block elements as tall as a
+    line, so a column of them joins.
+
+    Under fwid those are Source Han Sans's own glyphs, drawn to its
+    1000-unit em, and the line is 1257 (copy_line_metrics gives the face
+    Source Code Pro's 984 / -273): a column of fwid │ broke at every
+    line and a run of fwid █ came out striped, 257 units of white in
+    every 1257. The one-cell defaults never had it — the Latin donor
+    draws its box drawing -400..1000, tall enough to overlap the line —
+    and that band is the target here.
+
+    A rule (vtiling_glyphs) is lengthened only where its ink reaches the
+    edge of the em it is drawn in (█'s own full-width extent, which is
+    the cell by definition) AND presents a rule there: the two tests
+    widen_fullwidth makes sideways, made on the outline transposed, so a
+    stem keeps its weight. A block element is mapped onto the band
+    instead, em edge to band edge, which is what keeps ▁ an eighth of
+    the line and ▀ a half of it; a dashed vertical is mapped onto the
+    LINE instead, so its pattern repeats at the pitch a column of cells
+    advances by; and a shade has its pattern repeated a whole em up and
+    down and cut to the band. Returns the number redrawn."""
+    cmap = font.getBestCmap()
+    gs = font.getGlyphSet()
+    fwid = feature_map(font, "fwid")
+    block = cmap.get(0x2588)
+    band = _bounds(gs, block) if block else None
+    em = _bounds(gs, fwid.get(block)) if fwid.get(block) else None
+    if band is None or em is None:
+        return 0
+    cff = font["CFF "].cff
+    td = cff[cff.fontNames[0]]
+    hmtx = font["hmtx"]
+    vmtx = font.get("vmtx")
+    scale = (band[3] - band[1]) / (em[3] - em[1])
+    # a pattern repeats at the line's pitch, not the band's: hhea's own
+    # box, which is what a column of cells advances by
+    hhea = font["hhea"]
+    line = (hhea.descent, hhea.ascent)
+    period = (line[1] - line[0]) / (em[3] - em[1])
+    redrawn = {}
+    for name, how in sorted(vtiling_glyphs(font).items()):
+        path = pathops.Path()
+        gs[name].draw(path.getPen())
+        if path.bounds is None:
+            continue
+        _, y0, _, y1 = path.bounds
+        origin = vmtx_origin(font, name) if vmtx is not None else 0
+        if how in ("scale", "period"):
+            sy, lo = ((scale, band[1]) if how == "scale"
+                      else (period, line[0]))
+            out = _xform_path(path, (1, 0, 0, sy, 0, lo - em[1] * sy))
+        elif how == "tile":
+            span = em[3] - em[1]
+            out = path
+            for dy in (-span, span):
+                out = pathops.op(out, _xform_path(path, (1, 0, 0, 1, 0, dy)),
+                                 pathops.PathOp.UNION)
+            out = pathops.op(out, _rect_path(-1e5, band[1], 1e5, band[3]),
+                             pathops.PathOp.INTERSECTION)
+        else:
+            down = y0 - band[1] if y0 <= em[1] + 2 else 0
+            up = band[3] - y1 if y1 >= em[3] - 2 else 0
+            # (x, y) -> (y, x): the top and bottom edges become the
+            # right and left ones, and the sideways machinery reads them
+            # as they are. Transposing back undoes the mirrored winding
+            flip = (0, 1, 1, 0, 0, 0)
+            tp = _xform_path(path, flip)
+            out = tp
+            if down > 0 and edge_is_rule(tp, "left"):
+                out = extend_edges(out, down, left=True, right=False)
+            if up > 0 and edge_is_rule(tp, "right"):
+                out = extend_edges(out, up, left=False, right=True)
+            if out is tp:
+                continue
+            out = _xform_path(out, flip)
+        adv = hmtx.metrics[name][0]
+        private = glyph_private(font, td, name)
+        pen = T2CharStringPen(pen_width(private, adv), gs)
+        out.draw(pen)
+        cs = redrawn[name] = pen.getCharString(private=private)
+        hmtx.metrics[name] = (adv, charstring_lsb(cs))
+        # the vertical origin is a top side bearing plus the glyph's own
+        # yMax, so growing upward would move it 120 units unless the
+        # bearing gives those back — and VORG, which states the origin
+        # outright, would no longer agree with vmtx
+        if vmtx is not None and name in vmtx.metrics:
+            vadv, _ = vmtx.metrics[name]
+            vmtx.metrics[name] = (vadv, origin - out.bounds[3])
+    for name, cs in redrawn.items():
+        td.CharStrings[name] = cs
+    note_redrawn(font, redrawn)
+    print(f"  full-width tiling glyphs lengthened to the line: {len(redrawn)}")
+    return len(redrawn)
 
 
 # name IDs we drop before writing our own (every platform/encoding, so no
@@ -1334,8 +3004,17 @@ def set_names(font, suffix, weight, italic, italic_angle=-12.0, version=None,
                      (17, (weight + (" Italic" if italic else ""))
                           .replace("Regular Italic", "Italic"))):
         name.setName(val, nid, 3, 1, 0x409)
-    font["OS/2"].achVendID = VENDOR_ID
-    font["OS/2"].usWeightClass = WEIGHT_CLASS[weight]
+    os2 = font["OS/2"]
+    os2.achVendID = VENDOR_ID
+    os2.usWeightClass = WEIGHT_CLASS[weight]
+    # PANOSE weight rides with it, and is set here rather than in
+    # set_monospace_metadata because this is where the weight is known:
+    # each face takes the Source Han Sans weight whose bar matches its
+    # Latin, not the one that shares its name, and Source Code Pro's VF
+    # carries its default master's — so every face inherited a PANOSE
+    # that disagreed with its own usWeightClass (Regular 4 against 400).
+    # A GDI-era matcher substitutes on it
+    os2.panose.bWeight = panose_weight(WEIGHT_CLASS[weight])
     if "DSIG" in font:
         del font["DSIG"]
     # a variable font (build_latin_vf.py) carries CFF2, not CFF; CFF2's
@@ -1555,6 +3234,11 @@ def _guard_subtables(font, gsub, seq_map, lig_lookup):
     beyond the input sequence is undefined by OpenType. Monaspace's own
     calt is built the way this is: input length == ligature length."""
     seqs = {tuple(k) for k in seq_map}
+    # a set is for the membership tests below; the rules are emitted in a
+    # fixed order so two builds of the same face produce the same GSUB
+    # bytes (they used to differ by a permutation of the 16 rule sets —
+    # shaping-identical over 67,239 probes, but not diffable)
+    ordered = sorted(seqs, key=lambda seq: (-len(seq), seq))
     builder = otl.ChainContextSubstBuilder(font, None)
     Rule = otl.ChainContextualRule
     seen = set()   # a and c (or b and d) can derive the same guard twice
@@ -1565,17 +3249,34 @@ def _guard_subtables(font, gsub, seq_map, lig_lookup):
         seen.add((prefix, glyphs, suffix))
         builder.rules.append(Rule([{g} for g in prefix], [{g} for g in glyphs],
                                   [{g} for g in suffix], [None] * len(glyphs)))
-    for seq in sorted(seqs, key=len, reverse=True):
-        if (seq[0],) + seq not in seqs:
-            ignore((seq[0],), seq, ())                            # a
+    # A guard whose backtrack is non-empty (a, c) starts to the RIGHT of
+    # the longer ligature it might pre-empt, so that ligature's own
+    # trigger matches first, at the earlier position, and consumes the
+    # run before this guard is reached: such a guard is always safe, and
+    # skipping it when the longer run is itself a ligature is what let
+    # '>>>=' shape as '>' '>' '≥' — the '>>' guard consumed the first two
+    # glyphs and left '>=' unguarded, and the '>>=' that was supposed to
+    # take them never got the chance.
+    #
+    # A guard whose backtrack is empty (b, d) starts where that longer
+    # ligature starts, and every guard is tried before every trigger, so
+    # it WOULD pre-empt it: '===' shaped as three plain glyphs the moment
+    # '==' was guarded against a following '='. Those two keep the skip.
+    for seq in ordered:
+        ignore((seq[0],), seq, ())                                # a
         if seq + (seq[-1],) not in seqs:
             ignore((), seq, (seq[-1],))                           # b
-        for other in seqs:
-            if other[-1] == seq[0] and other[:-1] + seq not in seqs:
+        for other in ordered:
+            # every ligature whose tail is this one, not only those that
+            # overlap it by a single glyph: '=!=' ends with '!=', and
+            # without this '==!=' shaped as '=' '=' '≠'
+            if len(other) > len(seq) and other[-len(seq):] == seq:
+                ignore(other[:-len(seq)], seq, ())                # c
+            if other[-1] == seq[0]:
                 ignore(other[:-1], seq, ())                       # c
             if other[0] == seq[-1] and seq + other[1:] not in seqs:
                 ignore((), seq, other[1:])                        # d
-    for seq in sorted(seqs, key=len, reverse=True):
+    for seq in ordered:
         builder.rules.append(Rule([], [{g} for g in seq], [],
                                   [[_LookupRef(lig_lookup)]]
                                   + [None] * (len(seq) - 1)))
@@ -1696,15 +3397,32 @@ def sort_feature_list(gsub):
         ls.FeatureIndex = sorted(remap[i] for i in ls.FeatureIndex
                                  if i in remap)
         ls.FeatureCount = len(ls.FeatureIndex)
+        remap_required(ls, remap)
     return remap
+
+
+NO_REQUIRED_FEATURE = 0xFFFF
+
+
+def remap_required(langsys, remap):
+    """A LangSys's ReqFeatureIndex points into the same FeatureList as
+    its FeatureIndex list, so it has to move with it — and 0xFFFF, its
+    "none", must not be remapped. Source Han Sans sets none today."""
+    req = getattr(langsys, "ReqFeatureIndex", NO_REQUIRED_FEATURE)
+    if req != NO_REQUIRED_FEATURE:
+        langsys.ReqFeatureIndex = remap.get(req, NO_REQUIRED_FEATURE)
 
 
 def drop_features(font, tags):
     """Remove every FeatureRecord whose tag is in `tags` from GSUB and GPOS
     alike: drop it from FeatureList and every LangSys's FeatureIndex,
     remapping the remaining indices — same pattern as sort_feature_list().
-    Used for 'pwid'/'palt': proportional-width has no meaning in a
-    fixed-cell terminal font (see the 600-cell families in build_face)."""
+    Used for the features that move a glyph off the fixed cell:
+    'pwid'/'palt' (proportional width has no meaning here), 'kern' and
+    'halt' (Source Han Sans kerns あ+て 20u tighter than the cell, and
+    'kern' is on by default in every horizontal shaper). The vertical
+    features stay: the faces keep vmtx/vhea, and 'vert' is the one
+    HarfBuzz turns on for a vertical run."""
     for tbl_tag in ("GSUB", "GPOS"):
         if tbl_tag not in font:
             continue
@@ -1721,31 +3439,31 @@ def drop_features(font, tags):
             ls.FeatureIndex = sorted(remap[i] for i in ls.FeatureIndex
                                      if i in remap)
             ls.FeatureCount = len(ls.FeatureIndex)
+            remap_required(ls, remap)
 
 
 def feature_map(font, tag):
     """{glyph: substitute} over every Single / Alternate subst reachable
-    under `tag` — Source Han Sans's own hwid / fwid forms."""
-    if "GSUB" not in font:
-        return {}
-    gsub = font["GSUB"].table
+    under `tag` — Source Han Sans's own hwid / fwid forms. The first
+    substitute wins where a glyph has more than one."""
     out = {}
+    for src, dst in _feature_pairs(font, tag):
+        out.setdefault(src, dst)
+    return out
+
+
+def _feature_pairs(font, tag):
+    """(glyph, substitute) over every Single / Alternate subst under
+    `tag`, in lookup order."""
+    if "GSUB" not in font:
+        return
+    gsub = font["GSUB"].table
     for fr in gsub.FeatureList.FeatureRecord:
         if fr.FeatureTag != tag:
             continue
         for li in fr.Feature.LookupListIndex:
             kind, subs = _unwrap(gsub.LookupList.Lookup[li])
-            for src, dst in _subst_pairs(kind, subs, tag):
-                out.setdefault(src, dst)
-    return out
-
-
-def hwid_targets(font):
-    """Glyph names reachable via the 'hwid' feature — SHS's own half-width
-    alternates, drawn at its native 500-unit half cell (half of the 1000
-    em), not our 600-unit one. Used to center them onto the terminal grid
-    (see fit_to_grid())."""
-    return set(feature_map(font, "hwid").values())
+            yield from _subst_pairs(kind, subs, tag)
 
 
 def add_gsub(font, added, alts, ligatures, variant_maps=None,
@@ -1801,21 +3519,216 @@ def add_gsub(font, added, alts, ligatures, variant_maps=None,
     sort_feature_list(gsub)
 
 
+# Greek and Coptic, and Cyrillic: the width policy says every character
+# Sumi Moji covers is one cell (README, 幅の方針), and these two scripts
+# are in it. Source Code Pro Italic draws neither, so the italic faces
+# fall through to Source Han Sans's own proportional letters.
+LETTER_BLOCKS = ((0x0370, 0x04FF),)
+# the tightest side bearing the Latin donor gives a letter: Source Code
+# Pro's 'w' and 'W' carry 8 units either side of the 600 cell. A letter
+# condensed to fit the cell gets the same, rather than an ink-exact fit
+# that would leave it abutting its neighbours
+LETTER_BEARING = 8
+
+
+def narrow_letters(font, cell, blocks=LETTER_BLOCKS):
+    """Condense an alphabetic glyph Source Han Sans draws wider than the
+    cell into it, in place.
+
+    grid_step rounds to the NEAREST step, so the fourteen widest of these
+    (Ж М Ф Ш Щ Ъ Ы Ю ж ф ш щ ю Μ, drawn 755-1005) landed on a full
+    width: two terminal columns for scripts every terminal allots one
+    (Cyrillic and Greek are East_Asian_Width A), so an italic МОСКВА
+    painted its М over its О while the upright face of the same family
+    was right. The advance goes to the cell for all of them; the outline
+    is scaled only where its ink does not fit the cell less a bearing at
+    each side, and then only as far as that — condensing costs stroke
+    weight, and a letter squeezed beside letters that were not reads as
+    thin and small inside its own alphabet. It is what a monospace face
+    does with a wide letter, Source Code Pro's own M included, but only
+    the letters that need it. A glyph the Latin donor supplied is left
+    alone: it is already a cell wide by construction.
+
+    Runs before fit_to_grid, on Source Han Sans's own advance, and the
+    names it touches are recorded so that pass leaves them alone.
+    Modifies the glyph rather than copying it: each is reached from one
+    codepoint. One that is not is left alone and said so, since
+    condensing it would narrow whatever else shares it. Returns the
+    number condensed."""
+    cmap = font.getBestCmap()
+    hmtx = font["hmtx"]
+    gs = font.getGlyphSet()
+    cff = font["CFF "].cff
+    td = cff[cff.fontNames[0]]
+    wanted = {cp for lo, hi in blocks for cp in range(lo, hi + 1)}
+    built = getattr(font, "_built", frozenset())
+    room = cell - 2 * LETTER_BEARING
+    reached = {}
+    for cp, name in cmap.items():
+        reached.setdefault(name, set()).add(cp)
+    drawn = {}
+    for cp in sorted(wanted & set(cmap)):
+        name = cmap[cp]
+        adv = hmtx[name][0]
+        if adv <= 0 or name in drawn or name in built:
+            continue                      # the Latin donor's, already a cell
+        box = _bounds(gs, name)
+        ink = (box[2] - box[0]) if box else 0
+        if adv == cell and ink <= room:
+            continue
+        if not reached[name] <= wanted:
+            print(f"  skip U+{cp:04X}: its glyph also draws "
+                  f"{sorted(hex(c) for c in reached[name] - wanted)}")
+            continue
+        private = glyph_private(font, td, name)
+        # scaled ONLY where the ink does not fit, and then just enough:
+        # condensing costs stroke weight, and a letter squeezed beside
+        # letters that were not stands out as thin and small in its own
+        # alphabet. Scaling everything by cell/advance did that to 61 of
+        # these 115, taking Ж's stem from 83 units to 54 while Г kept
+        # 83. Twenty-eight of them are genuinely wider than the cell
+        sx = 1.0 if ink <= room else room / ink
+        dx = (cell - (box[2] - box[0]) * sx) / 2 - box[0] * sx if box else 0
+        pen = T2CharStringPen(pen_width(private, cell), gs)
+        gs[name].draw(TransformPen(pen, (sx, 0, 0, 1, dx, 0)))
+        drawn[name] = pen.getCharString(private=private)
+    for name, cs in drawn.items():
+        td.CharStrings[name] = cs
+        hmtx.metrics[name] = (cell, charstring_lsb(cs))
+    note_redrawn(font, drawn)
+    pinned = getattr(font, "_pinned_cell", None)
+    if pinned is None:
+        pinned = font._pinned_cell = set()
+    pinned.update(drawn)
+    return len(drawn)
+
+
+def narrow_halfwidth(font, cell):
+    """A character Unicode calls Halfwidth (East_Asian_Width H, taken
+    from unicodedata so this and verify.py cannot disagree) is one cell,
+    and every terminal's width table gives it one column. Source Han Sans
+    aliases
+    the halfwidth Hangul letters (U+FFA1-FFDC) to the wide compatibility
+    jamo they came from — one 920-unit glyph for U+3131 and U+FFA1
+    alike — so putting that glyph on the grid puts both on a full width.
+    Each halfwidth codepoint whose glyph is wider than the cell — in
+    advance or in ink — gets a one-cell copy of it, condensed, and
+    whatever else shares that glyph keeps the original.
+
+    Runs before fit_to_grid, so the scale is Source Han Sans's own
+    advance and not the grid step that pass would give it, and before
+    widen_fullwidth, which must not widen the copies. A glyph that
+    already fits the cell is left for fit_to_grid to centre. Returns the
+    number made."""
+    cmap = font.getBestCmap()
+    hmtx = font["hmtx"]
+    gs = font.getGlyphSet()
+    cff = font["CFF "].cff
+    td = cff[cff.fontNames[0]]
+    vdon = vmtx_donor(font, fullwidth=False)
+    made, new = {}, {}
+    for cp, name in sorted(cmap.items()):
+        adv = hmtx[name][0]
+        if adv <= 0 or unicodedata.east_asian_width(chr(cp)) != "H":
+            continue
+        box = _bounds(gs, name)
+        ink = (box[2] - box[0]) if box else 0
+        if adv <= cell and ink <= cell:
+            # already fits: fit_to_grid centres it in the cell, and
+            # condensing here would only stretch it (Source Han Sans's
+            # half-width kana are 500 wide, and 600/500 is a 20% widening
+            # of every vertical stroke against untouched horizontals)
+            continue
+        if name not in made:
+            # the copy stays in the source glyph's own FontDict: it is a
+            # Hangul jamo, and add_latin_fd would otherwise re-home it
+            # with the grafted Latin and hint it against Latin blues
+            fd = glyph_fd(font, td, name)
+            private = glyph_private(font, td, name)
+            # condensed into the cell, not just re-advanced: Source Han
+            # Sans's jamo carry 810u of ink in a 920 advance, and moving
+            # that into a 600 cell would spill 105u into each neighbour.
+            # Scaling by the cell over the advance keeps the design's own
+            # bearings in proportion, which is what a half-width form is;
+            # over the ink instead where even that would not fit
+            sx = min(1.0, cell / max(adv, ink))   # condense, never widen
+            # centred in the cell, not scaled about the origin: a source
+            # glyph whose ink starts left of zero would otherwise bleed
+            # into the cell before it
+            dx = (cell - (box[2] - box[0]) * sx) / 2 - box[0] * sx if box else 0
+            pen = T2CharStringPen(pen_width(private, cell), gs)
+            gs[name].draw(TransformPen(pen, (sx, 0, 0, 1, dx, 0)))
+            made[name] = alloc_glyph_name(font)
+            append_glyph(font, td, made[name], pen.getCharString(private=private),
+                         fd, cell, None, vdon)
+            # append_glyph records it in both sets; take it out of the
+            # Latin-FontDict one only, so add_latin_fd leaves this copy
+            # in the FontDict it came from. It stays in _built, which is
+            # what fit_to_grid reads to know a name is ours
+            font._appended.discard(made[name])
+        new[cp] = made[name]
+    set_cmap(font, new)
+    return len(new)
+
+
 def fullwidth_forms(font, replaced):
     """{codepoint: Source Han Sans's two-cell glyph} for the codepoints
-    graft_halfwidth replaced: the replaced glyph itself when it is
-    full-width, else the glyph Source Han Sans's own fwid feature maps it
-    to when that one is; the rest (Greek in Source Han Sans JP) have no
-    two-cell form and are left out."""
+    graft_halfwidth replaced: the glyph Source Han Sans's own fwid
+    feature maps the replaced one to, else the replaced glyph itself
+    when it is full-width; the rest (Greek in Source Han Sans JP) have
+    no two-cell form and are left out.
+
+    The fwid form first, because it is the designed two-cell glyph:
+    Source Han Sans draws ％ ＠ Ｍ ｍ ｗ ― differently from the % @ M m w
+    — it also has at a proportional advance, and fit_to_grid may since
+    have re-advanced those to a full width (an em dash's bar sits 100u
+    higher in the two-cell design). Nothing full-width is a fwid source,
+    so the order costs the natively two-cell glyphs nothing."""
     hmtx = font["hmtx"]
     fw = feature_map(font, "fwid")
     out = {}
     for cp, old in replaced.items():
-        for g in (old, fw.get(old)):
+        for g in (fw.get(old), old):
             if g is not None and hmtx[g][0] == FULLWIDTH:
                 out[cp] = g
                 break
     return out
+
+
+def repoint_features(font, replaced, tags=("vert", "vrt2")):
+    """Source Han Sans's own features substitute FROM the glyphs the
+    graft replaced, so once the cmap points at Sumi Moji's they never
+    fire. Re-point each of `tags` at the grafted glyph, the way
+    add_width_alternates does for fwid, so a vertical run still gets the
+    rotated forms of what Sumi Moji took over.
+
+    Only the vertical features: 'locl' is on by default, and re-pointing
+    it would swap Sumi Moji's own design for Source Han Sans's in
+    ordinary horizontal text (its JP locale form of '…' is full width).
+    Returns the number re-pointed."""
+    if "GSUB" not in font:
+        return 0
+    cmap = font.getBestCmap()
+    gsub = font["GSUB"].table
+    added = 0
+    for tag in tags:
+        fmap = feature_map(font, tag)
+        pairs = {}
+        for cp, old in replaced.items():
+            if old not in fmap or cp not in cmap or cmap[cp] == old:
+                continue
+            src, want = cmap[cp], fmap[old]
+            if pairs.setdefault(src, want) != want:
+                raise ValueError(
+                    f"{tag} for U+{cp:04X} cannot be wired: {src} is shared with "
+                    f"another codepoint and already maps to {pairs[src]}, not {want}")
+        if not pairs:
+            continue
+        _add_feature(gsub, tag, [_new_lookup(gsub, otl.buildSingleSubstSubtable(pairs))])
+        added += len(pairs)
+    if added:
+        sort_feature_list(gsub)
+    return added
 
 
 def add_width_alternates(font, fwid):
@@ -1949,10 +3862,21 @@ def classify_marks(font, marks):
 
 
 def classify_unicode_marks(font):
-    """GDEF class 3 (Mark) for every cmap'd glyph whose Unicode category is
-    Mn — Source Code Pro leaves two of its own combining marks (U+035F,
-    U+0361, the double-width ones) unclassified. Existing classes are
-    kept, the rest of Source Code Pro's marks already are class 3."""
+    """GDEF class 3 (Mark) for every cmap'd glyph whose Unicode category
+    is Mn, and for everything a feature substitutes for one of those.
+    Existing classes are kept.
+
+    Source Code Pro leaves two of its own combining marks (U+035F,
+    U+0361, the double-width ones) unclassified — and, in the ITALIC
+    donor only, the `.cap` design its ccmp swaps U+0310 for after a
+    capital. A substituted glyph takes its class from GDEF alone once a
+    font has a GlyphClassDef (HarfBuzz has no Unicode-category
+    fallback), so that one became a BASE: the mark-to-base search for
+    the next mark stopped on it and gave up, and 23 of the 53 combining
+    marks lost their attachment after U+0310 in all five italic Latin
+    faces and the italic variable font — `E` + U+0310 + U+0301 put both
+    accents on the character after them. Reachable only through a
+    feature, so the cmap sweep above could not see it."""
     if "GDEF" not in font or font["GDEF"].table.GlyphClassDef is None:
         return []
     defs = font["GDEF"].table.GlyphClassDef.classDefs
@@ -1961,7 +3885,51 @@ def classify_unicode_marks(font):
         if unicodedata.category(chr(cp)) == "Mn" and defs.get(g) != 3:
             defs[g] = 3
             fixed.append(g)
+    # the closure: a variant of a variant of a mark is a mark too, and
+    # so is a ligature of marks — Source Code Pro's ccmp stacks
+    # U+0308+U+0301 and 29 other pairs into one glyph, 21 of which no
+    # codepoint reaches, so neither the cmap sweep above nor the edges
+    # below could see them. A ligature is read only when EVERY component
+    # is a mark: Ą is A plus an ogonek, and calling that a mark zeroes
+    # its advance
+    edges = []
+    for lookup in (font["GSUB"].table.LookupList.Lookup
+                   if "GSUB" in font else []):
+        kind, subtables = _unwrap(lookup)
+        for sub in subtables:
+            if kind == 1:
+                edges += [([src], [dst])
+                          for src, dst in (getattr(sub, "mapping", None) or {}).items()]
+            elif kind == 2:
+                edges += [([src], list(dsts))
+                          for src, dsts in (getattr(sub, "mapping", None) or {}).items()]
+            elif kind == 3:
+                edges += [([src], list(dsts)) for src, dsts in
+                          (getattr(sub, "alternates", None) or {}).items()]
+            elif kind == 4:
+                for first, ligs in (getattr(sub, "ligatures", None) or {}).items():
+                    edges += [([first, *lig.Component], [lig.LigGlyph])
+                              for lig in ligs]
+    changed = True
+    while changed:
+        changed = False
+        for srcs, dsts in edges:
+            if any(defs.get(src) != 3 for src in srcs):
+                continue
+            for dst in dsts:
+                if defs.get(dst) != 3:
+                    defs[dst] = 3
+                    fixed.append(dst)
+                    changed = True
     return fixed
+
+
+def panose_weight(us_weight_class):
+    """PANOSE's weight digit for an OS/2 usWeightClass, the mapping
+    Source Han Sans itself uses (400 -> 5 Book, 700 -> 8 Bold). The
+    verifiers import this rather than repeat it, so a change is one
+    edit and the checks stay checks."""
+    return us_weight_class // 100 + 1
 
 
 def set_monospace_metadata(font):
@@ -1970,7 +3938,8 @@ def set_monospace_metadata(font):
     proportion 9 are what Windows Terminal's font picker and GDI's
     FIXED_PITCH filter read — Source Han Sans's 0 would hide the fonts
     there. xAvgCharWidth follows OS/2 v3+'s definition (mean of every
-    non-zero advance)."""
+    non-zero advance). PANOSE weight is set_names' (the weight is known
+    there)."""
     font["post"].isFixedPitch = 1
     font["OS/2"].panose.bProportion = 9
     font["OS/2"].recalcAvgCharWidth(font)
@@ -2144,14 +4113,42 @@ def subroutinize_face(path):
     font = TTFont(path)
     font.recalcBBoxes = False   # extents were set by update_bbox; outlines unchanged
     cffsubr.subroutinize(font)
+    restore_cid_count(font)
     font.save(path)
+
+
+def highest_cid(td):
+    """The largest CID in a CID-keyed TopDict's charset, or -1."""
+    return max((int(n[3:]) for n in td.charset
+                if n.startswith("cid") and n[3:].isdigit()), default=-1)
+
+
+def restore_cid_count(font):
+    """A CID-keyed TopDict's CIDCount must cover every CID in the font.
+    cffsubr sets it from the LAST charset entry, and Source Han Sans's
+    CID space is sparse — the glyphs this build appends sit at the end
+    of the order with CIDs from CID_ALLOC_START, well below the 65,497
+    the Japanese glyphs reach — so it came out at 25,267 with 9,749
+    glyphs above it. A consumer that sizes its CID-to-GID table from
+    CIDCount (Adobe's interpreter; a face embedded in a PDF as
+    CIDFontType0) resolves every one of those to .notdef. Returns the
+    count, or None for a plain CFF."""
+    cff = font["CFF "].cff
+    td = cff[cff.fontNames[0]]
+    if not hasattr(td, "ROS"):      # ROS is what makes a CFF CID-keyed;
+        return None                 # CIDCount has a spec default either way
+    td.CIDCount = max(td.CIDCount, highest_cid(td) + 1)
+    return td.CIDCount
 
 
 def autohint_face(path, glyph_names):
     """Hint `glyph_names` with AFDKO's otfautohint, in place. The JP
     faces pass the glyphs they (re)drew (note_redrawn): Source Han Sans's
-    own hints on untouched glyphs are kept as shipped, and the run stays
-    seconds for the base family (grafted Latin only) instead of minutes.
+    own hints on untouched glyphs are kept as shipped, so the run is
+    seconds rather than the minutes hinting 19,000 glyphs takes. That is
+    the grafted Latin, the ligatures, and whatever fit_to_grid and
+    widen_fullwidth moved — a few hundred more in the italic faces,
+    where Source Han Sans's Greek and Cyrillic survive.
     The Latin faces pass every glyph — the instancer drops SCP's hints.
     SUMI_SKIP_AUTOHINT=1 skips it for quick local iterations."""
     if os.environ.get("SUMI_SKIP_AUTOHINT"):
@@ -2314,7 +4311,7 @@ def write_face(font, out, hint_glyphs):
 def build_face(job):
     """Build one output face. Plain data in and out, so it can run in a
     pool worker (unfiltered builds) as well as in-process."""
-    suffix, term, weight, shs_file, italic, env, out_dir = job
+    suffix, term, weight, shs_file, italic, env, out_dir, steps = job
     face_label = f"{weight}{' Italic' if italic else ''}"
     latin_path = latin_face_path(env["LATIN_DIR"], weight, italic)
     if not latin_path.exists():
@@ -2322,35 +4319,84 @@ def build_face(job):
     latin = TTFont(latin_path)
     base = TTFont(Path(env["SHS_DIR"]) / shs_file)
     n_scp, replaced, default_map, marks = graft_halfwidth(base, latin)
+    # the locl forms first: SCP's ccmp composes the Greek breathing
+    # marks from them, so they have to exist before that graft runs
+    locl_order, locl_where = _locl_lookups(latin["GSUB"].table)
+    n_locl = graft_scp_outputs(base, latin, default_map, marks, locl_order)
+    # then what ccmp composes, before the variant features are read, so
+    # a variant rule on a composed glyph has a glyph to name
+    n_ccmp = graft_scp_ccmp(base, latin, default_map, marks)
     variant_maps, variant_names = import_scp_variants(base, latin, default_map, marks)
-    classify_marks(base, marks)   # the grafted marks and their variants
     copy_line_metrics(base, latin)
     # the outlines' real slant lives in the Latin donor (SCP Italic's)
     ref_angle = (latin["post"].italicAngle or -12.0) if italic else None
     alts = {}
     added = latin_ligatures(base, latin, latin_path, alts, LIGATURES)
     add_gsub(base, added, alts, LIGATURES, variant_maps, variant_names)
-    # Source Han Sans's proportional leftovers onto the grid, hwid's own
-    # 500-advance alternates included (walked BEFORE dropping any
-    # features that might touch it); pwid / palt have no meaning in a
-    # fixed-cell font
-    n_fit = fit_to_grid(base, CELL)
-    n_fit += fit_to_grid(base, CELL, glyph_names=hwid_targets(base))
-    drop_features(base, {"pwid", "palt"})
+    # after add_gsub, which appends to the same LookupList: the copied
+    # ccmp lookups' nested lookup indices are absolute, so nothing may
+    # renumber the list once they are in (drop_features below touches
+    # the FeatureList only)
+    n_ccmp += import_scp_ccmp(base, latin, default_map, marks)
+    n_locl += import_scp_locl(base, latin, default_map,
+                              scripts_with_langsys(base["GSUB"].table))
+    classify_marks(base, marks)   # the grafted marks, the variants, ccmp's
+    # and where each of them sits: after classify_marks, which is what
+    # tells a shaper they are marks at all, and after the ccmp import,
+    # whose composed accents the donor positions too
+    n_mark = import_scp_marks(base, latin, default_map, marks)
+    # and into the lookups Source Han Sans keeps for the accents
+    # the graft replaced (the Bopomofo tone marks)
+    n_mark += rehome_replaced_marks(base, replaced)
+    # the Halfwidth block into one cell first, so its copies are
+    # condensed from Source Han Sans's own advance and not from the one
+    # the grid pass would give it
+    n_half = narrow_halfwidth(base, CELL)
+    # and the Greek and Cyrillic the italic faces keep from Source Han
+    # Sans, for the same reason: on the donor's own advance, before the
+    # grid pass rounds the widest of them up to two columns
+    n_letters = narrow_letters(base, CELL)
+    # then Source Han Sans's proportional leftovers onto the grid — every
+    # glyph, so hwid's own 500-advance alternates and the locl forms no
+    # codepoint reaches come along. It reads no features, so nothing
+    # ties it to drop_features below
+    n_fit = fit_to_grid(base, CELL, steps=steps)
+    # kern would pull Japanese pairs off the cell in any shaper that
+    # lays out a run (VS Code, a browser); halt and palt are alternate
+    # horizontal metrics, which a fixed cell has no use for. The
+    # vertical features are left alone (the faces keep vmtx/vhea)
+    drop_features(base, {"pwid", "palt", "kern", "halt"})
     # the two-cell forms under fwid: the arrows redrawn from the
     # ligatures so they share their head, everything else Source Han
     # Sans's own — the full-width glyph the one-cell default replaced
     # (→ ─ ≠), or its fwid form where the replaced glyph was proportional
     # (A é: Source Han Sans's own fwid maps those to Ａ é). Greek has
     # neither in Source Han Sans JP and stays one cell under fwid too
+    n_vert = repoint_features(base, replaced)
     fullwidth = fullwidth_forms(base, replaced)
     arrows = stretch_arrows(base, added, fullwidth,
                             ref_angle if ref_angle is not None else 0.0)
     cmap_now = base.getBestCmap()
-    add_width_alternates(base, {cmap_now[cp]: arrows.get(cp, old)
-                                for cp, old in fullwidth.items()})
+    fwid_map = {}
+    for cp, old in fullwidth.items():
+        # several codepoints can share one grafted glyph (graft_halfwidth
+        # makes one per donor glyph), and then only one full-width form
+        # can be reached from it — fine while they agree, a silent loss
+        # if a future donor aliases two characters with different forms
+        src, want = cmap_now[cp], arrows.get(cp, old)
+        if fwid_map.setdefault(src, want) != want:
+            raise ValueError(
+                f"fwid for U+{cp:04X} cannot be wired: {src} is shared with "
+                f"another codepoint and already maps to {fwid_map[src]}, not "
+                f"{want}. The two need separate glyphs (see graft_halfwidth)")
+    add_width_alternates(base, fwid_map)
+    # and the full-width box drawing as tall as a line, before the Term
+    # pass lengthens the same glyphs sideways
+    n_tall = tile_vertically(base)
     if term:
-        widen_fullwidth(base, CELL)
+        # the ligatures are the Latin layer's only multi-cell glyphs, so
+        # the only ones an advance test cannot tell from a full width
+        widen_fullwidth(base, CELL, skip=set(added.values()) | set(alts.values()))
     # OS/2 Unicode / code-page range bits, from the now-final cmap
     base["OS/2"].recalcUnicodeRanges(base)
     recalc_codepage_range(base)
@@ -2367,8 +4413,10 @@ def build_face(job):
     out = Path(out_dir) / f"{ps}.otf"
     write_face(base, out, getattr(base, "_redrawn", set()))
     return (f"{face_label}{f' [{suffix}]' if suffix else ''}: "
-            f"latin={n_scp} fwid={len(fullwidth)} fitted={n_fit} "
-            f"ligs={len(added)} -> {out.name}")
+            f"latin={n_scp} fwid={len(fullwidth)} vert={n_vert} "
+            f"fitted={n_fit} half={n_half} letters={n_letters} "
+            f"ligs={len(added)} ccmp={n_ccmp} locl={n_locl} mark={n_mark} "
+            f"tall={n_tall} -> {out.name}")
 
 
 # VFSource / _vf_source are build_latin.py's and build_latin_vf.py's
@@ -2401,16 +4449,22 @@ def main():
             print(f"removed {len(stale)} stale face(s) from {out_dir}")
 
     jobs = []
-    for suffix, var in VARIANTS.items():
+    for suffix, term in VARIANTS.items():
         for weight, shs_file in FACES:
             for italic in (False, True):
                 face_label = f"{weight}{' Italic' if italic else ''}"
                 if not face_matches(only, weight, face_label, suffix):
                     continue
-                jobs.append((suffix, var.term, weight, shs_file, italic,
-                             env, str(out_dir)))
+                jobs.append([suffix, term, weight, shs_file, italic,
+                             env, str(out_dir)])
     if not jobs:
         sys.exit(f"no face matches {only!r}")
+    # measured once here, not once per pool worker (two whole Source Han
+    # Sans faces), and after the filter, so a one-face build pays for it
+    # only when there is a face to build
+    steps = reference_steps(Path(env["SHS_DIR"]) / REFERENCE_SHS, CELL,
+                            Path(env["SHS_DIR"]) / INK_SHS)
+    jobs = [tuple(job) + (steps,) for job in jobs]
     run_faces(jobs, build_face,
               label=lambda job: f"{job[2]} [{job[0] or 'base'}]",
               on_result=lambda job, msg: print(msg))

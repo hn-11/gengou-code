@@ -4,6 +4,7 @@ import io
 import sys
 from pathlib import Path
 
+import pathops
 import pytest
 import uharfbuzz as hb
 from fontTools.fontBuilder import FontBuilder
@@ -49,7 +50,7 @@ def test_group_names_all_remap_nontrivially():
     exactly the shape _remap_scp_tag maps ssNN -> ss(NN+10) for (or, for
     cv99, passes through unchanged) — none of them come back None. So if
     an SCP font happened to carry a feature under one of our own tags
-    (ss01-ss09, cv99), _remap_scp_tag alone would NOT filter it out: it
+    (ss01-ss08, cv99), _remap_scp_tag alone would NOT filter it out: it
     would be remapped/kept just like any other SCP feature and collide
     with the glyph variants Sumi Moji itself authors under that tag. That
     is exactly why import_scp_variants must skip fr.FeatureTag in
@@ -182,13 +183,13 @@ def test_ligature_schema():
 def test_every_group_has_a_ui_name():
     groups = {spec["group"] for spec in build.load_ligatures().values()}
     assert groups <= set(build.GROUP_NAMES), "group without a UI name"
-    # cv99 and ss09 (width alternates) are authored too; no name goes unused
-    assert set(build.GROUP_NAMES) == groups | {"cv99", "ss09"}
+    # cv99 (the alternate designs) is authored too; no name goes unused
+    assert set(build.GROUP_NAMES) == groups | {"cv99"}
 
 
 def test_ui_names_are_nonempty_ascii():
     for tag, name in build.GROUP_NAMES.items():
-        assert tag in KNOWN_GROUPS or tag == "ss09" or tag.startswith("cv"), tag
+        assert tag in KNOWN_GROUPS or tag.startswith("cv"), tag
         assert name and name.strip() == name, tag
         assert name.isascii(), tag
 
@@ -624,6 +625,73 @@ def test_add_gsub_guard_keeps_longer_run_plain(gsub_font_bytes):
     assert len(_shape(gsub_font_bytes, "<->", features)) == 3
 
 
+def _shift_font_bytes():
+    """The real font's '>' family in miniature: '>=', '>>' and '>>=' are
+    ligatures, '>>>' and '>>>=' are not."""
+    glyph_order = [".notdef", "greater", "equal", "lig_ge", "lig_gg", "lig_gge"]
+    font = _tt_font(glyph_order, {ord(">"): "greater", ord("="): "equal"},
+                    {g: 600 for g in glyph_order})
+    font["GSUB"] = newTable("GSUB")
+    font["GSUB"].table = _empty_gsub_table()
+    ligatures = {">=": {"cells": 2, "glyphs": ["ge"], "group": "ss01"},
+                 ">>": {"cells": 2, "glyphs": ["gg"], "group": "ss01"},
+                 ">>=": {"cells": 3, "glyphs": ["gge"], "group": "ss01"}}
+    added = {">=": "lig_ge", ">>": "lig_gg", ">>=": "lig_gge"}
+    build.add_gsub(font, added, {}, ligatures, {}, {})
+    buf = io.BytesIO()
+    font.save(buf)
+    return buf.getvalue()
+
+
+def test_add_gsub_guard_holds_when_the_longer_ligature_is_itself_blocked():
+    """'>>>=' shaped as '>' '>' '≥': the '>>' guard consumed the first two
+    glyphs, so the '>>=' that was supposed to claim them never matched,
+    and '>=' was left unguarded because that '>>=' existed. A guard with
+    a backtrack is safe unconditionally — the longer ligature's own
+    trigger matches at the earlier position and consumes the run first."""
+    b = _shift_font_bytes()
+    on = {"calt": True, "liga": True}
+    assert len(_shape(b, ">=", on)) == 1        # still ligatures
+    assert len(_shape(b, ">>", on)) == 1
+    assert len(_shape(b, ">>=", on)) == 1
+    assert len(_shape(b, ">>>=", on)) == 4      # the leak
+    assert len(_shape(b, ">>>", on)) == 3
+    assert len(_shape(b, "a >>= b", on)) == 5
+
+
+def test_guard_subtables_keep_the_skip_only_for_lookahead_guards():
+    """A guard whose backtrack is empty starts where the longer ligature
+    starts, and every guard is tried before every trigger, so it would
+    pre-empt it — '===' shaped as three plain glyphs the moment '==' was
+    guarded against a following '='. Those keep the skip; the backtrack
+    ones do not."""
+    glyph_order = [".notdef", "greater", "equal", "lig_ge", "lig_gg",
+                   "lig_gge", "lig_ee", "lig_eee"]
+    font = _tt_font(glyph_order, {ord(">"): "greater", ord("="): "equal"},
+                    {g: 600 for g in glyph_order})
+    subtables = build._guard_subtables(font, None, {
+        ("greater", "equal"): "lig_ge", ("greater", "greater"): "lig_gg",
+        ("greater", "greater", "equal"): "lig_gge",
+        ("equal", "equal"): "lig_ee",
+        ("equal", "equal", "equal"): "lig_eee"}, 0)
+    st = subtables[0]
+    guards = set()
+    for gi, ruleset in enumerate(st.ChainSubRuleSet):
+        if ruleset is None:
+            continue
+        first = st.Coverage.glyphs[gi]
+        for rule in ruleset.ChainSubRule:
+            if not rule.SubstLookupRecord:
+                guards.add((tuple(rule.Backtrack), (first,) + tuple(rule.Input),
+                            tuple(rule.LookAhead)))
+    # '>>=' is a ligature, and '>=' is guarded after a '>' all the same
+    assert (("greater",), ("greater", "equal"), ()) in guards
+    # '===' is a ligature, so '==' is NOT guarded before a '='
+    assert ((), ("equal", "equal"), ("equal",)) not in guards
+    # ... but it is guarded after one
+    assert (("equal",), ("equal", "equal"), ()) in guards
+
+
 def test_add_gsub_calt_liga_off_leaves_ligatures_plain(gsub_font_bytes):
     assert len(_shape(gsub_font_bytes, "->",
                       {"calt": False, "liga": False})) == 2
@@ -749,23 +817,25 @@ def _cff_font():
     return fb.font
 
 
-def _cff_font_with_widths(widths):
+def _cff_font_with_widths(widths, x0=0):
     """A CID-less CFF font whose glyphs are 100-unit squares at the given
-    advances: what fit_to_grid moves."""
+    advances, drawn from x0: what fit_to_grid moves. A square at x0=0
+    touches its left edge, which widen_fullwidth reads as "drawn to tile
+    there"; tests of that pass give their glyphs a bearing."""
     glyph_order = [".notdef", *widths]
     charstrings = {}
     for g in glyph_order:
         pen = T2CharStringPen(0, None)
-        pen.moveTo((0, 0))
-        pen.lineTo((100, 0))
-        pen.lineTo((100, 100))
+        pen.moveTo((x0, 0))
+        pen.lineTo((x0 + 100, 0))
+        pen.lineTo((x0 + 100, 100))
         pen.closePath()
         charstrings[g] = pen.getCharString()
     fb = FontBuilder(1000, isTTF=False)
     fb.setupGlyphOrder(glyph_order)
     fb.setupCharacterMap({0xE000 + i: g for i, g in enumerate(widths)})
     fb.setupCFF("T", {}, charstrings, {})
-    fb.setupHorizontalMetrics({".notdef": (0, 0), **{g: (w, 0) for g, w in widths.items()}})
+    fb.setupHorizontalMetrics({".notdef": (0, 0), **{g: (w, x0) for g, w in widths.items()}})
     fb.setupHorizontalHeader(ascent=800, descent=-200)
     fb.setupNameTable({"familyName": "T", "styleName": "R"})
     fb.setupOS2()
@@ -773,29 +843,507 @@ def _cff_font_with_widths(widths):
     return fb.font
 
 
+def test_append_glyph_takes_the_donor_s_vertical_origin_not_its_bearing():
+    """A top side bearing is measured DOWN from each glyph's own yMax, so
+    copying the donor's verbatim moves the origin by the difference
+    between the two. Every glyph the graft appended inherited U+FF61's
+    637 against its own yMax of 243, and stood 250-570 units low in a
+    vertical run under any shaper that reads vmtx rather than VORG."""
+    font = _cff_font_with_widths({"donor": 600, "tall": 600})
+    font["vmtx"] = newTable("vmtx")
+    font["vmtx"].metrics = {".notdef": (1000, 0), "donor": (1000, 637),
+                            "tall": (1000, 637)}
+    # the donor is a 100-unit square, so its origin is 100 + 637
+    pen = T2CharStringPen(600, None)
+    pen.moveTo((0, 0))
+    pen.lineTo((100, 0))
+    pen.lineTo((100, 400))
+    pen.closePath()
+    cff = font["CFF "].cff
+    td = cff[cff.fontNames[0]]
+    build.append_glyph(font, td, "new", pen.getCharString(private=td.Private),
+                       None, 600, None, "donor")
+    assert font["vmtx"].metrics["new"] == (1000, 737 - 400)
+    assert font["vmtx"].metrics["donor"] == (1000, 637)      # untouched
+    assert font["hmtx"].metrics["new"] == (600, 0)
+
+
+@pytest.mark.parametrize("us_weight, want", [(300, 4), (400, 5), (500, 6),
+                                             (600, 7), (700, 8)])
+def test_panose_weight_matches_source_han_sans_own_mapping(us_weight, want):
+    assert build.panose_weight(us_weight) == want
+
+
+@pytest.mark.parametrize("adv, ink, want", [
+    (500, 400, 600),      # half-width kana: under the cell
+    (500, 1400, 2000),    # ...unless its ink is nowhere near one cell
+    (250, 100, 600),      # a Hangul tone mark
+    (618, 548, 600),      # Source Han Sans's alpha: nearest the cell
+    (663, 612, 600),      # its Bold alpha, ink a little over the cell
+    (795, 687, 600),      # its Phi, still nearest the cell
+    (920, 700, 1000),     # a Hangul jamo: nearest one full width
+    (1005, 844, 1000),    # its Yu: a full width and a bit, not two
+    (1672, 1600, 2000),
+    (2452, 2400, 3000),   # a three-em dash: the ink needs the third
+    (700, 1400, 2000),    # ink far past the step: up it goes
+])
+def test_grid_step_takes_the_nearest_step_the_ink_fits(adv, ink, want):
+    assert build.grid_step(adv, ink, 600) == want
+
+
 def test_fit_to_grid_centres_proportional_advances_on_the_grid():
     """Half-width kana at 500 -> the cell; Hangul jamo at 920 -> one full
-    width; a three-em dash at 2459 -> three; a mark at 0, a cell, a full
-    width and a ligature (2 cells) are left alone."""
+    width; an advance of 2459 -> the nearest two (these fixtures are
+    100-unit squares, so no ink pushes it to three, as the real three-em
+    dash's does); a mark at 0, a cell, a full width and a ligature
+    (2 cells) are left alone."""
     font = _cff_font_with_widths({"kana": 500, "jamo": 920, "dash": 2459,
                                   "mark": 0, "cell": 600, "full": 1000, "lig": 1200})
     assert build.fit_to_grid(font, 600) == 3
     hmtx = font["hmtx"].metrics
     assert {g: hmtx[g][0] for g in ("kana", "jamo", "dash", "mark", "cell", "full", "lig")} == \
-        {"kana": 600, "jamo": 1000, "dash": 3000, "mark": 0, "cell": 600,
+        {"kana": 600, "jamo": 1000, "dash": 2000, "mark": 0, "cell": 600,
          "full": 1000, "lig": 1200}
     gs = font.getGlyphSet()
-    for g, want_lsb in (("kana", 50), ("jamo", 40), ("dash", 270)):
+    for g, want_lsb in (("kana", 50), ("jamo", 40), ("dash", -230)):
         pen = BoundsPen(gs)
         gs[g].draw(pen)
         assert pen.bounds[0] == want_lsb == hmtx[g][1]     # centred, lsb kept in step
     assert font._redrawn == {"kana", "jamo", "dash"}
 
 
-def test_fit_to_grid_takes_explicit_glyph_names():
-    font = _cff_font_with_widths({"a": 500, "b": 500})
-    assert build.fit_to_grid(font, 600, glyph_names=["a", "a", None]) == 1
-    assert font["hmtx"].metrics["a"][0] == 600 and font["hmtx"].metrics["b"][0] == 500
+def _path(points):
+    path = pathops.Path()
+    pen = path.getPen()
+    pen.moveTo(points[0])
+    for pt in points[1:]:
+        pen.lineTo(pt)
+    pen.closePath()
+    return path
+
+
+def test_edge_is_rule_tells_a_rule_from_a_diagonal_and_a_pattern():
+    """A rule, a cross and a tee present the same cross-section at the
+    edge as 10 units in; a diagonal, a wave and a dot pattern do not.
+    Extruding the edge of the latter puts a flat bar at every join."""
+    rule = _path([(0, 360), (1000, 360), (1000, 400), (0, 400)])
+    assert build.edge_is_rule(rule, "left") and build.edge_is_rule(rule, "right")
+    cross = pathops.op(rule, _path([(480, -120), (520, -120), (520, 880), (480, 880)]),
+                       pathops.PathOp.UNION)
+    assert build.edge_is_rule(cross, "left") and build.edge_is_rule(cross, "right")
+    corner = pathops.op(_path([(480, 360), (1000, 360), (1000, 400), (480, 400)]),
+                        _path([(480, -120), (520, -120), (520, 400), (480, 400)]),
+                        pathops.PathOp.UNION)
+    assert build.edge_is_rule(corner, "right")          # the arm reaches it
+    diagonal = _path([(0, 0), (40, 0), (1000, 960), (960, 1000), (0, 40)])
+    assert not build.edge_is_rule(diagonal, "left")
+    assert not build.edge_is_rule(diagonal, "right")
+    saltire = pathops.op(diagonal, _path([(0, 1000), (0, 960), (960, 0), (1000, 0), (40, 1000)]),
+                         pathops.PathOp.UNION)
+    assert not build.edge_is_rule(saltire, "left")      # same extents, not a rule
+    dots = pathops.Path()              # 8u dots on a 20u grid, like ▒
+    pen = dots.getPen()
+    for x in range(0, 1000, 20):
+        for y in range(0, 1000, 20):
+            pen.moveTo((x, y))
+            pen.lineTo((x + 8, y))
+            pen.lineTo((x + 8, y + 8))
+            pen.lineTo((x, y + 8))
+            pen.closePath()
+    assert not build.edge_is_rule(dots, "left")
+
+
+def test_widen_fullwidth_stretches_a_pattern_and_extrudes_a_rule():
+    """A diagonal drawn edge to edge is stretched whole, so the ends of a
+    run of ╳ keep their slope instead of growing a flat tick."""
+    font = _cff_font_with_widths({"diag": 1000, "rule": 1000}, x0=20)
+    font["cmap"].tables[0].cmap = {0x2571: "diag", 0x2500: "rule"}   # ╱ ─
+    cff = font["CFF "].cff
+    td = cff[cff.fontNames[0]]
+    for name, pts in (("diag", [(0, 0), (40, 0), (1000, 960), (960, 1000), (0, 40)]),
+                      ("rule", [(0, 360), (1000, 360), (1000, 400), (0, 400)])):
+        pen = T2CharStringPen(1000, None)
+        pen.moveTo(pts[0])
+        for pt in pts[1:]:
+            pen.lineTo(pt)
+        pen.closePath()
+        td.CharStrings[name] = pen.getCharString(private=td.Private)
+    build.widen_fullwidth(font, 600)
+    gs = font.getGlyphSet()
+    diag = pathops.Path()
+    gs["diag"].draw(diag.getPen())
+    # stretched: still a single slanted band, 1200 wide, no flat piece at
+    # either end (the strip 0..100 is a parallelogram, ~80u tall, not 40)
+    assert (round(diag.bounds[0]), round(diag.bounds[2])) == (0, 1200)
+    strip = build._slab(diag, 0, 100).bounds
+    assert strip[3] - strip[1] > 100
+    rule = pathops.Path()
+    gs["rule"].draw(rule.getPen())
+    assert (round(rule.bounds[1]), round(rule.bounds[3])) == (360, 400)   # extruded, same thickness
+
+
+def test_widen_fullwidth_lengthens_a_glyph_drawn_to_tile():
+    """A glyph whose ink reaches both edges of its advance is drawn to
+    tile (＿ ￣ 〰 ◢, and under fwid most of the box drawing). Centring it
+    in the wider Term advance leaves white at every cell join, so a rule
+    of ＿ comes out dashed and █ striped."""
+    font = _cff_font_with_widths({"rule": 1000, "kanji": 1000}, x0=20)
+    font["cmap"].tables[0].cmap = {0xFF3F: "rule", 0x4E00: "kanji"}    # ＿ 一
+    cff = font["CFF "].cff
+    td = cff[cff.fontNames[0]]
+    pen = T2CharStringPen(1000, None)          # a bar spanning the advance
+    pen.moveTo((0, 40))
+    pen.lineTo((1000, 40))
+    pen.lineTo((1000, 100))
+    pen.lineTo((0, 100))
+    pen.closePath()
+    td.CharStrings["rule"] = pen.getCharString(private=td.Private)
+    build.widen_fullwidth(font, 600)
+    hmtx = font["hmtx"].metrics
+    assert hmtx["rule"][0] == hmtx["kanji"][0] == 1200
+    pen = BoundsPen(font.getGlyphSet())
+    font.getGlyphSet()["rule"].draw(pen)
+    x0, y0, x1, y1 = pen.bounds
+    assert (round(x0), round(x1)) == (0, 1200)     # still edge to edge
+    assert (round(y0), round(y1)) == (40, 100)     # and no thicker
+    # the ordinary glyph is still centred, not stretched
+    pen = BoundsPen(font.getGlyphSet())
+    font.getGlyphSet()["kanji"].draw(pen)
+    assert round(pen.bounds[2] - pen.bounds[0]) == 100
+
+
+def test_widen_fullwidth_centres_an_ordinary_glyph_that_touches_its_edge():
+    """Ⅷ, ㌄ and 孰 in Bold have ink at their advance's edge and are not
+    drawn to tile: an edge test alone stretched them 20% wide. Only a
+    character in the tiling blocks is lengthened."""
+    font = _cff_font_with_widths({"eight": 1000})
+    font["cmap"].tables[0].cmap = {0x2167: "eight"}                    # Ⅷ, ink from x=0
+    build.widen_fullwidth(font, 600)
+    pen = BoundsPen(font.getGlyphSet())
+    font.getGlyphSet()["eight"].draw(pen)
+    assert (round(pen.bounds[0]), round(pen.bounds[2])) == (100, 200)  # moved, not stretched
+
+
+def test_widen_fullwidth_stretches_a_block_element_to_its_fraction():
+    """▏ is an eighth of the cell; extruding its left edge as a rule made
+    it 225 of 1200 where ▎ is 350, so the ▏▎▍▌▋▊▉█ series stepped
+    unevenly. A block element is stretched whole."""
+    font = _cff_font_with_widths({"eighth": 1000})
+    font["cmap"].tables[0].cmap = {0x258F: "eighth"}
+    cff = font["CFF "].cff
+    td = cff[cff.fontNames[0]]
+    pen = T2CharStringPen(1000, None)
+    pen.moveTo((0, -120))
+    pen.lineTo((125, -120))
+    pen.lineTo((125, 880))
+    pen.lineTo((0, 880))
+    pen.closePath()
+    td.CharStrings["eighth"] = pen.getCharString(private=td.Private)
+    build.widen_fullwidth(font, 600)
+    pen = BoundsPen(font.getGlyphSet())
+    font.getGlyphSet()["eighth"].draw(pen)
+    assert (round(pen.bounds[0]), round(pen.bounds[2])) == (0, 150)
+
+
+def test_widen_fullwidth_stretches_a_dashed_rule_whose_ink_stops_short():
+    """┄'s end dashes are inset by half a gap so that cells continue the
+    pattern; its ink never reaches the edge, and centring it in 1200
+    made the gap at every cell boundary three times the gap inside."""
+    font = _cff_font_with_widths({"dashed": 1000})
+    font["cmap"].tables[0].cmap = {0x2504: "dashed"}
+    cff = font["CFF "].cff
+    td = cff[cff.fontNames[0]]
+    pen = T2CharStringPen(1000, None)          # three dashes, 55u in from each edge
+    for x in (55, 385, 715):
+        pen.moveTo((x, 360))
+        pen.lineTo((x + 230, 360))
+        pen.lineTo((x + 230, 400))
+        pen.lineTo((x, 400))
+        pen.closePath()
+    td.CharStrings["dashed"] = pen.getCharString(private=td.Private)
+    build.widen_fullwidth(font, 600)
+    pen = BoundsPen(font.getGlyphSet())
+    font.getGlyphSet()["dashed"].draw(pen)
+    assert (round(pen.bounds[0]), round(pen.bounds[2])) == (66, 1134)   # 55*1.2 .. 945*1.2
+
+
+def test_widen_fullwidth_spares_the_ligatures_it_is_given():
+    """Term: a full width goes to two cells, three full widths to six,
+    but a named 5-cell ligature — 3000 too — stays on the cell grid; a
+    cell and a mark are never touched."""
+    font = _cff_font_with_widths({"full": 1000, "dash": 3000, "lig5": 3000,
+                                  "cell": 600, "mark": 0}, x0=20)
+    build.widen_fullwidth(font, 600, skip={"lig5"})
+    hmtx = font["hmtx"].metrics
+    assert {g: hmtx[g][0] for g in ("full", "dash", "lig5", "cell", "mark")} == \
+        {"full": 1200, "dash": 3600, "lig5": 3000, "cell": 600, "mark": 0}
+    gs = font.getGlyphSet()
+    for g, want_lsb in (("full", 120), ("dash", 320), ("lig5", 20)):
+        pen = BoundsPen(gs)
+        gs[g].draw(pen)
+        assert pen.bounds[0] == want_lsb == hmtx[g][1]
+
+
+def test_narrow_letters_puts_a_wide_cyrillic_on_the_cell():
+    """Source Code Pro Italic has no Cyrillic, so the italic faces keep
+    Source Han Sans's own, and grid_step rounded the widest of them up to
+    a full width — two terminal columns for a script every terminal
+    allots one. The advance goes to the cell for all of them; only the
+    outline whose ink does not fit is scaled."""
+    font = _cff_font_with_widths({"zhe": 918, "a": 602, "kanji": 1000})
+    font["cmap"].tables[0].cmap = {0x416: "zhe", 0x430: "a", 0x4E00: "kanji"}
+    gs = font.getGlyphSet()
+
+    def width(g):
+        pen = BoundsPen(gs)
+        gs[g].draw(pen)
+        return pen.bounds[2] - pen.bounds[0]
+
+    assert build.narrow_letters(font, 600) == 2
+    hmtx = font["hmtx"].metrics
+    assert hmtx["zhe"][0] == hmtx["a"][0] == 600
+    assert hmtx["kanji"][0] == 1000                  # not a letter
+    gs = font.getGlyphSet()
+    # 100 units of ink fit the cell, so neither is scaled: condensing
+    # costs stroke weight, and only a letter that overflows should pay it
+    assert width("zhe") == pytest.approx(100, abs=1)
+    assert width("a") == pytest.approx(100, abs=1)
+    # and fit_to_grid leaves them there, though the reference says 1000
+    assert build.fit_to_grid(font, 600, steps={"zhe": 1000, "a": 1000}) == 0
+    assert font["hmtx"].metrics["zhe"][0] == 600
+
+
+def test_narrow_letters_condenses_a_letter_to_the_cell_less_a_bearing():
+    """Only as far as it must: to the cell less the bearing the Latin
+    donor gives its own widest letters, so a condensed letter neither
+    abuts its neighbours nor loses more stroke weight than it has to."""
+    font = _cff_font_with_widths({"wide": 918})
+    cff = font["CFF "].cff
+    td = cff[cff.fontNames[0]]
+    pen = T2CharStringPen(918, None)
+    pen.moveTo((9, 0))            # 900 of ink in a 918 advance
+    pen.lineTo((909, 0))
+    pen.lineTo((909, 100))
+    pen.closePath()
+    td.CharStrings["wide"] = pen.getCharString(private=td.Private)
+    font["cmap"].tables[0].cmap = {0x416: "wide"}
+    assert build.narrow_letters(font, 600) == 1
+    assert font["hmtx"].metrics["wide"][0] == 600
+    pen = BoundsPen(font.getGlyphSet())
+    font.getGlyphSet()["wide"].draw(pen)
+    x0, x1 = pen.bounds[0], pen.bounds[2]
+    assert x1 - x0 == pytest.approx(600 - 2 * build.LETTER_BEARING, abs=1)
+    assert x0 + x1 == pytest.approx(600, abs=1)        # centred in the cell
+    assert x0 == pytest.approx(build.LETTER_BEARING, abs=1)
+
+
+def test_narrow_letters_leaves_the_latin_donor_s_own_glyphs_alone():
+    """In the upright faces Greek and Cyrillic come from Source Code Pro
+    and are a cell wide already; two of them (Җ җ) overhang the advance
+    by design, and squeezing those would make the JP face disagree with
+    its own Latin sibling."""
+    font = _cff_font_with_widths({"grafted": 600})
+    font["cmap"].tables[0].cmap = {0x496: "grafted"}
+    font._built = {"grafted"}
+    assert build.narrow_letters(font, 600) == 0
+
+
+def test_narrow_letters_leaves_a_shared_glyph_alone():
+    """In place, so condensing would narrow whatever else reaches it."""
+    font = _cff_font_with_widths({"shared": 918})
+    font["cmap"].tables[0].cmap = {0x416: "shared", 0x4E00: "shared"}
+    assert build.narrow_letters(font, 600) == 0
+    assert font["hmtx"].metrics["shared"][0] == 918
+
+
+def test_narrow_halfwidth_condenses_a_shared_glyph_into_the_cell():
+    """A Halfwidth codepoint whose glyph is the wide compatibility one
+    gets its own copy, squeezed into the cell; the wide codepoint keeps
+    the original, and the copy stays out of _appended so add_latin_fd
+    leaves it in the FontDict it came from."""
+    font = _cff_font_with_widths({"jamo": 920, "kana": 600, "wide": 1000})
+    # U+3131 (Wide) and U+FFA1 (Halfwidth) on one glyph, ｱ already a cell
+    font["cmap"].tables[0].cmap = {0x3131: "jamo", 0xFFA1: "jamo",
+                                   0xFF71: "kana", 0x4E00: "wide"}
+    assert build.narrow_halfwidth(font, 600) == 1
+    cmap, hmtx = font.getBestCmap(), font["hmtx"].metrics
+    assert cmap[0x3131] == "jamo" and hmtx["jamo"][0] == 920      # untouched
+    copy = cmap[0xFFA1]
+    assert copy != "jamo" and hmtx[copy][0] == 600
+    assert copy not in font._appended            # keeps its own FontDict
+    pen = BoundsPen(font.getGlyphSet())
+    font.getGlyphSet()[copy].draw(pen)
+    assert pen.bounds[2] - pen.bounds[0] == pytest.approx(100 * 600 / 920, abs=1)
+
+
+def test_narrow_halfwidth_copies_are_out_of_reach_of_the_reference_steps():
+    """The copy's name comes from Source Han Sans's own CID space, where
+    the reference font it is looked up in has 10,000 glyphs of its own —
+    a name collision would re-advance a half-width form to whatever that
+    reference glyph measures. It opts out of the Latin FontDict, not out
+    of being ours, so fit_to_grid still takes the fallback path for it."""
+    font = _cff_font_with_widths({"jamo": 920})
+    font["cmap"].tables[0].cmap = {0x3131: "jamo", 0xFFA1: "jamo"}
+    assert build.narrow_halfwidth(font, 600) == 1
+    copy = font.getBestCmap()[0xFFA1]
+    assert copy in font._built and copy not in font._appended
+    # a reference that claims this very name is a full width
+    assert build.fit_to_grid(font, 600, steps={copy: 1000, "jamo": 1000}) == 1
+    assert font["hmtx"].metrics[copy][0] == 600        # still one cell
+    assert font["hmtx"].metrics["jamo"][0] == 1000     # the reference did apply
+
+
+def test_narrow_halfwidth_never_widens_a_glyph_that_already_fits():
+    """Source Han Sans's half-width kana and punctuation are 500 wide —
+    inside the cell, so there is nothing to condense. Scaling them by
+    cell/advance would stretch every vertical stroke 20% against
+    untouched horizontals; fit_to_grid centres them at 600 instead."""
+    font = _cff_font_with_widths({"kana": 500, "sym": 500})
+    font["cmap"].tables[0].cmap = {0xFF71: "kana", 0xFFE9: "sym"}
+    def box():
+        pen = BoundsPen(font.getGlyphSet())
+        font.getGlyphSet()["kana"].draw(pen)
+        return pen.bounds
+
+    before = box()
+    assert build.narrow_halfwidth(font, 600) == 0
+    assert font.getBestCmap()[0xFF71] == "kana"
+    assert font["hmtx"].metrics["kana"] == (500, before[0])   # left for fit_to_grid
+    assert box() == before
+
+
+def test_narrow_halfwidth_leaves_a_blank_glyph_alone():
+    """A Halfwidth codepoint drawn as a 0-advance combining mark has no
+    advance to scale by."""
+    font = _cff_font_with_widths({"mark": 0})
+    font["cmap"].tables[0].cmap = {0xFF9E: "mark"}
+    assert build.narrow_halfwidth(font, 600) == 0
+
+
+def test_remap_required_moves_a_required_feature_and_keeps_its_none():
+    """ReqFeatureIndex points into the same FeatureList the remap
+    renumbers; 0xFFFF is 'none' and must stay put."""
+    class LangSys:
+        pass
+
+    ls = LangSys()
+    ls.ReqFeatureIndex = 5
+    build.remap_required(ls, {5: 2})
+    assert ls.ReqFeatureIndex == 2
+    build.remap_required(ls, {})            # the required feature was dropped
+    assert ls.ReqFeatureIndex == 0xFFFF
+    build.remap_required(ls, {0: 0})        # already none: left alone
+    assert ls.ReqFeatureIndex == 0xFFFF
+    build.remap_required(LangSys(), {0: 1})  # no attribute at all
+
+
+def test_shift_anchors_moves_a_base_anchor_with_its_outline():
+    """An anchor is a point on the glyph: re-centring the outline in a
+    wider advance has to take it along, or the mark lands where the ink
+    used to be (Source Han Sans's Bopomofo tone marks)."""
+    from fontTools.ttLib.tables import otTables
+
+    def anchor(x):
+        a = otTables.Anchor()
+        a.Format, a.XCoordinate, a.YCoordinate = 1, x, 0
+        return a
+
+    sub = otTables.MarkBasePos()
+    sub.MarkCoverage = otTables.MarkCoverage()
+    sub.MarkCoverage.glyphs = ["mark"]
+    sub.MarkArray = otTables.MarkArray()
+    rec = otTables.MarkRecord()
+    rec.Class, rec.MarkAnchor = 0, anchor(10)
+    sub.MarkArray.MarkRecord = [rec]
+    sub.BaseCoverage = otTables.BaseCoverage()
+    sub.BaseCoverage.glyphs = ["base", "still"]
+    sub.BaseArray = otTables.BaseArray()
+    base, still = otTables.BaseRecord(), otTables.BaseRecord()
+    base.BaseAnchor, still.BaseAnchor = [anchor(640)], [anchor(500)]
+    sub.BaseArray.BaseRecord = [base, still]
+    lookup = otTables.Lookup()
+    lookup.LookupType, lookup.SubTable = 4, [sub]
+
+    font = _cff_font_with_widths({"a": 600})
+    gpos = newTable("GPOS")
+    gpos.table = otTables.GPOS()
+    gpos.table.LookupList = otTables.LookupList()
+    gpos.table.LookupList.Lookup = [lookup]
+    font["GPOS"] = gpos
+
+    assert build.shift_anchors(font, {"base": 100, "mark": -5}) == 2
+    assert base.BaseAnchor[0].XCoordinate == 740
+    assert rec.MarkAnchor.XCoordinate == 5
+    assert still.BaseAnchor[0].XCoordinate == 500      # not shifted, not moved
+    assert build.shift_anchors(font, {}) == 0
+
+    # and through GPOS's own Extension, which is type 9 (GSUB's is 7)
+    ext = otTables.ExtensionPos()
+    ext.Format, ext.ExtSubTable = 1, sub
+    wrapper = otTables.Lookup()
+    wrapper.LookupType, wrapper.SubTable = 9, [ext]
+    gpos.table.LookupList.Lookup = [wrapper]
+    assert build.shift_anchors(font, {"base": 60}) == 1
+    assert base.BaseAnchor[0].XCoordinate == 800
+
+
+def test_restore_cid_count_covers_the_highest_cid(tmp_path):
+    """cffsubr sets CIDCount from the last charset entry; Source Han
+    Sans's CID space is sparse, so the glyphs this build appends sit at
+    the end of the order with lower CIDs than the Japanese ones."""
+    font = _cff_font_with_widths({"a": 600})
+    cff = font["CFF "].cff
+    td = cff[cff.fontNames[0]]
+    td.ROS = ("Adobe", "Japan1", 6)           # what makes a CFF CID-keyed
+    td.charset = [".notdef", "cid65497", "cid23058"]
+    td.CIDCount = 23059                       # what cffsubr would leave
+    assert build.restore_cid_count(font) == 65498
+    td.CIDCount = 70000                       # never narrowed
+    assert build.restore_cid_count(font) == 70000
+
+
+def test_restore_cid_count_leaves_a_plain_cff_alone():
+    """A plain CFF has a CIDCount attribute too (the spec default), so
+    the CID-keyed test is ROS."""
+    assert build.restore_cid_count(_cff_font_with_widths({"a": 600})) is None
+
+
+def test_widen_fullwidth_redraws_a_charstring_shift_declines(monkeypatch):
+    """shift_charstring declines a program it does not understand and the
+    glyph is redrawn instead — on a plain CFF as well as a CID-keyed one."""
+    font = _cff_font_with_widths({"full": 1000}, x0=20)
+    monkeypatch.setattr(build, "shift_charstring", lambda *a, **k: False)
+    build.widen_fullwidth(font, 600)
+    assert font["hmtx"].metrics["full"][0] == 1200
+    assert font._redrawn == {"full"}
+    pen = BoundsPen(font.getGlyphSet())
+    font.getGlyphSet()["full"].draw(pen)
+    assert pen.bounds[0] == 120                      # centred in the new advance
+
+
+def test_fit_to_grid_follows_the_reference_steps_over_this_face():
+    """The family decides a glyph's width once, on one weight
+    (reference_steps): a heavier face whose own advance would round the
+    other way follows it, and a glyph the reference does not name falls
+    back to this face's advance."""
+    font = _cff_font_with_widths({"phi": 824, "psi": 900})
+    assert build.fit_to_grid(font, 600, steps={"phi": 600}) == 2
+    hmtx = font["hmtx"].metrics
+    assert hmtx["phi"][0] == 600                # the reference's answer
+    assert hmtx["psi"][0] == 1000               # its own: nearest a full width
+
+
+def test_fit_to_grid_reaches_a_glyph_no_codepoint_does():
+    """'locl' and 'ccmp' put glyphs on the page without being asked, so
+    the pass walks the whole font, not the cmap."""
+    font = _cff_font_with_widths({"a": 500})
+    order = list(font.getGlyphOrder())
+    font["hmtx"].metrics["hidden"] = (1052, 0)   # a locl form, uncmap'd
+    font.setGlyphOrder(order + ["hidden"])
+    font["CFF "].cff.topDictIndex[0].CharStrings["hidden"] = \
+        font["CFF "].cff.topDictIndex[0].CharStrings["a"]
+    assert build.fit_to_grid(font, 600) == 2
+    assert font["hmtx"].metrics["hidden"][0] == 1000
 
 
 def test_set_names():
@@ -927,7 +1475,7 @@ def test_stretch_path_shortens_the_shaft(axis):
     assert abs(out.area) == pytest.approx(abs(src.area) - 40 * 20)
 
 
-# --- set_cmap / HALFWIDTH_FORMS / env_paths / run_faces --------------------
+# --- set_cmap / env_paths / run_faces --------------------
 
 def test_set_cmap_replaces_existing_and_adds_only_when_asked():
     font = _tt_font([".notdef", "a", "b", "c"], {0x61: "a", 0x10000: "b"},
@@ -949,14 +1497,14 @@ def test_env_paths_reads_defaults_and_exits_on_missing(tmp_path, monkeypatch, ca
     a.mkdir()
     b.mkdir()
     monkeypatch.setenv("SHS_DIR", str(a))
-    monkeypatch.delenv("SHCJ_TTC", raising=False)
+    monkeypatch.delenv("NF_SYMBOLS", raising=False)
     monkeypatch.setenv("SUMI_VERSION", "9.9.9")
-    env = build.env_paths({"SHS_DIR": None, "SHCJ_TTC": str(b)})
-    assert env == {"SHS_DIR": str(a), "SHCJ_TTC": str(b), "SUMI_VERSION": "9.9.9"}
-    monkeypatch.setenv("SHCJ_TTC", str(tmp_path / "nowhere"))
+    env = build.env_paths({"SHS_DIR": None, "NF_SYMBOLS": str(b)})
+    assert env == {"SHS_DIR": str(a), "NF_SYMBOLS": str(b), "SUMI_VERSION": "9.9.9"}
+    monkeypatch.setenv("NF_SYMBOLS", str(tmp_path / "nowhere"))
     monkeypatch.delenv("SHS_DIR")
-    with pytest.raises(SystemExit, match=r"missing env: \['SHS_DIR', 'SHCJ_TTC'\]"):
-        build.env_paths({"SHS_DIR": None, "SHCJ_TTC": str(b)})
+    with pytest.raises(SystemExit, match=r"missing env: \['SHS_DIR', 'NF_SYMBOLS'\]"):
+        build.env_paths({"SHS_DIR": None, "NF_SYMBOLS": str(b)})
 
 
 _SEEN_IN_THIS_PROCESS = []
@@ -1203,3 +1751,635 @@ def test_sync_lsb_sets_bearings_from_the_outlines():
     assert metrics["A"] == (600, 20) and metrics["B"] == (700, -40)
     assert metrics["space"] == (600, 7)
     assert build.sync_lsb(font) == 0
+
+
+def test_fit_to_grid_stretches_a_tiling_glyph_into_its_step():
+    """A character drawn to butt against the next one must fill the step
+    the grid rounds it up to, not sit centred in it: Source Han Sans's
+    two-em dash is 1580 units of ink in a 1672 advance and the step is
+    2000, so centring left a 420-unit hole in a run of them."""
+    font = _cff_font_with_widths({"emdash": 824, "plain": 824}, x0=12)
+    build.set_cmap(font, {0x2E3A: "emdash"}, add_new=True)
+    assert build.fit_to_grid(font, 600) == 2
+    gs = font.getGlyphSet()
+    hmtx = font["hmtx"].metrics
+    assert hmtx["emdash"][0] == hmtx["plain"][0] == 1000
+    dash = build._bounds(gs, "emdash")
+    plain = build._bounds(gs, "plain")
+    # stretched: the ink grew with the advance and the bearing with it
+    assert round(dash[2] - dash[0]) == round(100 * 1000 / 824)
+    assert hmtx["emdash"][1] == pytest.approx(dash[0], abs=1)
+    # the ordinary glyph beside it is the same 100 units, only moved
+    assert round(plain[2] - plain[0]) == 100
+
+
+def _vtiling_font():
+    """A face shaped like the built ones where tile_vertically reads it:
+    each tiling character has a one-cell default that already spans the
+    line (-400..1000, as the Latin donor draws it) and a full-width form
+    under fwid drawn to Source Han Sans's 1000-unit em (-120..880).
+    Everything the pass has to tell apart is here: a rule, a rule whose
+    ink stops short, a diagonal, a dashed vertical, an upper block, a
+    lower block, the full block, a shade, and a character inside the
+    blocks with no full-width form at all."""
+    shapes = {
+        ".notdef": [[(0, 0), (1, 0), (1, 1)]],
+        # one-cell defaults, all spanning the line
+        "vrule1": [[(280, -400), (320, -400), (320, 1000), (280, 1000)]],
+        "block1": [[(0, -400), (600, -400), (600, 1000), (0, 1000)]],
+        "eighth1": [[(0, -400), (600, -400), (600, -225), (0, -225)]],
+        "upper1": [[(0, 300), (600, 300), (600, 1000), (0, 1000)]],
+        "dash1": [[(280, -400), (320, -400), (320, 1000), (280, 1000)]],
+        "diag1": [[(0, -400), (120, -400), (600, 1000), (480, 1000)]],
+        "shade1": [[(0, -400), (600, -400), (600, -300), (0, -300)]],
+        "hrule1": [[(0, 180), (600, 180), (600, 220), (0, 220)]],
+        # full width already: its "full-width form" under fwid is
+        # itself, so there is no one-cell drawing for it to match
+        "heavy1": [[(460, -120), (540, -120), (540, 880), (460, 880)]],
+        # full-width forms, in the 1000-unit em
+        "vruleF": [[(480, -120), (520, -120), (520, 880), (480, 880)]],
+        "blockF": [[(0, -120), (1000, -120), (1000, 880), (0, 880)]],
+        "eighthF": [[(0, -120), (1000, -120), (1000, 5), (0, 5)]],
+        "upperF": [[(0, 380), (1000, 380), (1000, 880), (0, 880)]],
+        # three dashes, stopping 56 units short of the em at either end
+        "dashF": [[(480, -64), (520, -64), (520, 216), (480, 216)],
+                  [(480, 296), (520, 296), (520, 464), (480, 464)],
+                  [(480, 544), (520, 544), (520, 824), (480, 824)]],
+        "diagF": [[(0, -120), (200, -120), (1000, 880), (800, 880)]],
+        "shadeF": [[(0, -120), (1000, -120), (1000, -20), (0, -20)]],
+        "hruleF": [[(0, 360), (1000, 360), (1000, 400), (0, 400)]],
+    }
+    order = list(shapes)
+    charstrings = {}
+    for g, contours in shapes.items():
+        pen = T2CharStringPen(0, None)
+        for points in contours:
+            pen.moveTo(points[0])
+            for pt in points[1:]:
+                pen.lineTo(pt)
+            pen.closePath()
+        charstrings[g] = pen.getCharString()
+    fb = FontBuilder(1000, isTTF=False)
+    fb.setupGlyphOrder(order)
+    fb.setupCharacterMap({0x2502: "vrule1", 0x2588: "block1",
+                          0x2581: "eighth1", 0x2580: "upper1",
+                          0x2506: "dash1", 0x2541: "diag1",
+                          0x2592: "shade1", 0x2500: "hrule1",
+                          0x2503: "heavy1"})
+    fb.setupCFF("T", {}, charstrings, {})
+    metrics = {".notdef": (0, 0)}
+    for g in order[1:]:
+        wide = g.endswith("F") or g == "heavy1"
+        box = min(pt[0] for c in shapes[g] for pt in c)
+        metrics[g] = (1000 if wide else 600, box)
+    fb.setupHorizontalMetrics(metrics)
+    fb.setupHorizontalHeader(ascent=984, descent=-273)
+    fb.setupNameTable({"familyName": "T", "styleName": "R"})
+    fb.setupOS2()
+    fb.setupPost()
+    fb.addOpenTypeFeatures("feature fwid {\n" + "".join(
+        f"  sub {one} by {one[:-1]}F;\n"
+        for one in ("vrule1", "block1", "eighth1", "upper1", "dash1",
+                    "diag1", "shade1", "hrule1")) + "} fwid;\n")
+    font = fb.font
+    # a character whose full-width form is the glyph itself: feaLib will
+    # not write `sub X by X`, so it goes straight into the table
+    gsub = font["GSUB"].table
+    for fr in gsub.FeatureList.FeatureRecord:
+        if fr.FeatureTag == "fwid":
+            for li in fr.Feature.LookupListIndex:
+                gsub.LookupList.Lookup[li].SubTable[0].mapping["heavy1"] = "heavy1"
+    font["vmtx"] = newTable("vmtx")
+    # origin = top side bearing + yMax: 120 + 880 for every full width
+    font["vmtx"].metrics = {g: (1000, 120 if g.endswith("F") or g == "heavy1"
+                                else 0) for g in order}
+    return font
+
+
+def _band(font, name):
+    box = build._bounds(font.getGlyphSet(), name)
+    return (round(box[1]), round(box[3]))
+
+
+def test_tile_vertically_extrudes_a_rule_and_scales_a_block():
+    """The full-width rules are Source Han Sans's, drawn to its
+    1000-unit em, and the line is 1257: under fwid a column of │ broke
+    at every line. A rule is extruded to the band its one-cell default
+    occupies, so its stem keeps its weight; a block element is mapped
+    onto the band instead, so an eighth block stays an eighth of the
+    line rather than gaining the same units as the full block."""
+    font = _vtiling_font()
+    assert build.tile_vertically(font) == 6
+    gs = font.getGlyphSet()
+    assert _band(font, "vruleF") == (-400, 1000)
+    assert round(build._bounds(gs, "vruleF")[2]
+                 - build._bounds(gs, "vruleF")[0]) == 40   # no fattening
+    assert _band(font, "blockF") == (-400, 1000)
+    assert _band(font, "eighthF") == (-400, -225)          # an eighth, at the floor
+    assert _band(font, "upperF") == (300, 1000)            # a half, at the ceiling
+    # the origin is a bearing plus the glyph's own yMax, so the bearing
+    # has to give back what the ink gained above it
+    assert build.vmtx_origin(font, "blockF") == 1000
+    assert font["vmtx"].metrics["blockF"][1] == 0
+
+
+def test_tile_vertically_puts_a_dashed_rule_on_the_line_s_own_pitch():
+    """A dashed vertical never reaches the edge of its em, so extruding
+    would skip it and a column of them would break at every line. It is
+    mapped onto the LINE rather than the band a block gets: a pattern
+    has to repeat at the pitch a column of cells advances by, and on
+    the band its period came out 11% long — one dash merged with the
+    next line's."""
+    font = _vtiling_font()
+    build.tile_vertically(font)
+    hhea = font["hhea"]
+    line = hhea.ascent - hhea.descent
+    # the em -120..880 mapped onto -273..984
+    assert _band(font, "dashF") == (round(hhea.descent + 56 * line / 1000),
+                                    round(hhea.descent + 944 * line / 1000))
+    assert _band(font, "blockF") == (-400, 1000)   # a block keeps the band
+
+
+def test_tile_vertically_leaves_a_short_rule_and_a_slant():
+    """The two guards on the extrusion: ─'s ink stops well inside its
+    em, so there is nothing at the edge to extrude, and a slanted shape
+    in the rule class reaches both edges but presents no rule there —
+    extruding one would grow it a tail."""
+    font = _vtiling_font()
+    build.tile_vertically(font)
+    assert _band(font, "hruleF") == (360, 400)
+    assert _band(font, "diagF") == (-120, 880)
+
+
+def test_tile_vertically_tiles_a_shade_instead_of_stretching_it():
+    """A shade's dots would come out ovals under a 40% stretch, so the
+    pattern is repeated a whole em up and down and cut to the band."""
+    font = _vtiling_font()
+    build.tile_vertically(font)
+    assert _band(font, "shadeF") == (-120, 980)
+
+
+def test_tile_vertically_leaves_a_character_with_no_full_width_form():
+    """The pass reads the full-width forms a fwid substitution reaches:
+    a character whose only glyph is its default is not drawn to stack,
+    and extruding it would redraw the character."""
+    font = _vtiling_font()
+    build.tile_vertically(font)
+    assert _band(font, "heavy1") == (-120, 880)
+    assert "heavy1" not in build.vtiling_glyphs(font)
+
+
+def test_tile_vertically_needs_the_block_and_its_full_width_form():
+    """Both references come from the cmap and fwid; a face without them
+    is left alone rather than guessed at."""
+    font = _vtiling_font()
+    build.set_cmap(font, {0x2588: ".notdef"})
+    assert build.tile_vertically(font) == 0
+
+
+def _lookup(kind, subtable):
+    lk = otTables.Lookup()
+    lk.LookupType = kind
+    lk.LookupFlag = 0
+    lk.SubTable = [subtable]
+    lk.SubTableCount = 1
+    return lk
+
+
+def _coverage(glyphs):
+    cov = otTables.Coverage()
+    cov.glyphs = list(glyphs)
+    return cov
+
+
+def test_ccmp_remap_rewrites_a_substitution_and_drops_what_we_lack():
+    """The donor's lookups are copied in OUR glyph names; a rule naming a
+    glyph the graft never made is dropped, and a lookup that loses all
+    of them says so."""
+    st = otTables.SingleSubst()
+    st.mapping = {"i": "dotlessi", "q": "qvariant"}
+    lookup = _lookup(1, st)
+    gmap = {"i": "cid1", "dotlessi": "cid2"}
+    assert build._ccmp_remap(lookup, gmap, {}, "abcdefgh".index)
+    assert lookup.SubTable[0].mapping == {"cid1": "cid2"}
+
+    st2 = otTables.SingleSubst()
+    st2.mapping = {"q": "qvariant"}
+    dead = _lookup(1, st2)
+    assert not build._ccmp_remap(dead, gmap, {}, "abcdefgh".index)
+    assert dead.SubTable == []
+
+
+def test_ccmp_remap_sorts_a_coverage_and_renumbers_its_callee():
+    """A coverage is searched in glyph-id order, and the donor's order is
+    not ours; a chain context calls its lookup by index, which the copy
+    moves."""
+    st = otTables.ChainContextSubst()
+    st.Format = 3
+    st.BacktrackCoverage = []
+    st.InputCoverage = [_coverage(["a", "b"])]
+    st.LookAheadCoverage = [_coverage(["c"])]
+    rec = otTables.SubstLookupRecord()
+    rec.SequenceIndex, rec.LookupListIndex = 0, 4
+    st.SubstLookupRecord = [rec]
+    st.SubstCount = 1
+    lookup = _lookup(6, st)
+    gmap = {"a": "za", "b": "yb", "c": "xc"}
+    gid = {"za": 7, "yb": 3, "xc": 9}.get
+    assert build._ccmp_remap(lookup, gmap, {4: 12}, gid)
+    assert lookup.SubTable[0].InputCoverage[0].glyphs == ["yb", "za"]
+    assert lookup.SubTable[0].SubstLookupRecord[0].LookupListIndex == 12
+
+
+def test_ccmp_remap_drops_a_context_whose_callee_did_not_survive():
+    """A chain context substitutes nothing itself: with its only callee
+    gone it matches and does nothing, so it goes too."""
+    st = otTables.ChainContextSubst()
+    st.Format = 3
+    st.BacktrackCoverage = []
+    st.InputCoverage = [_coverage(["a"])]
+    st.LookAheadCoverage = []
+    rec = otTables.SubstLookupRecord()
+    rec.SequenceIndex, rec.LookupListIndex = 0, 4
+    st.SubstLookupRecord = [rec]
+    st.SubstCount = 1
+    lookup = _lookup(6, st)
+    assert not build._ccmp_remap(lookup, {"a": "za"}, {}, {"za": 1}.get)
+
+
+def test_insert_lookups_first_renumbers_everything_that_points_at_one():
+    """ccmp has to run before the features that change a letter, and a
+    shaper runs a stage's lookups in LookupList order whatever order the
+    features name them — so the copies go in front, and every index
+    already in the table moves up: the features' own lists and the
+    nested ones a chain context calls."""
+    st = otTables.ChainContextSubst()
+    st.Format = 3
+    st.BacktrackCoverage = []
+    st.InputCoverage = [_coverage(["a"])]
+    st.LookAheadCoverage = []
+    rec = otTables.SubstLookupRecord()
+    rec.SequenceIndex, rec.LookupListIndex = 0, 1
+    st.SubstLookupRecord = [rec]
+    st.SubstCount = 1
+    single = otTables.SingleSubst()
+    single.mapping = {"a": "b"}
+    table = otTables.GSUB()
+    table.LookupList = otTables.LookupList()
+    table.LookupList.Lookup = [_lookup(6, st), _lookup(1, single)]
+    table.FeatureList = otTables.FeatureList()
+    fr = otTables.FeatureRecord()
+    fr.FeatureTag = "cv04"
+    fr.Feature = otTables.Feature()
+    fr.Feature.LookupListIndex = [0, 1]
+    table.FeatureList.FeatureRecord = [fr]
+
+    ours = _lookup(1, otTables.SingleSubst())
+    ours.SubTable[0].mapping = {"i": "dotlessi"}
+    build._insert_lookups_first(table, [ours])
+
+    assert table.LookupList.Lookup[0] is ours
+    assert table.LookupList.LookupCount == 3
+    assert fr.Feature.LookupListIndex == [1, 2]
+    assert table.LookupList.Lookup[1].SubTable[0].SubstLookupRecord[0].LookupListIndex == 2
+
+
+def test_insert_lookups_first_on_nothing_changes_nothing():
+    table = otTables.GSUB()
+    table.LookupList = otTables.LookupList()
+    table.LookupList.Lookup = [_lookup(1, otTables.SingleSubst())]
+    table.FeatureList = otTables.FeatureList()
+    table.FeatureList.FeatureRecord = []
+    build._insert_lookups_first(table, [])
+    assert len(table.LookupList.Lookup) == 1
+
+
+def _anchor(x, y):
+    a = otTables.Anchor()
+    a.Format, a.XCoordinate, a.YCoordinate = 1, x, y
+    return a
+
+
+def _mark_base_subtable():
+    """A MarkBasePos in the donor's own glyph order: two marks and two
+    bases, each with one anchor, listed the way SCP numbers them."""
+    sub = otTables.MarkBasePos()
+    sub.Format = 1
+    sub.ClassCount = 1
+    sub.MarkCoverage = _coverage(["grave", "acute"])
+    sub.MarkArray = otTables.MarkArray()
+    sub.MarkArray.MarkRecord = []
+    for x in (10, 20):
+        rec = otTables.MarkRecord()
+        rec.Class, rec.MarkAnchor = 0, _anchor(x, 700)
+        sub.MarkArray.MarkRecord.append(rec)
+    sub.BaseCoverage = _coverage(["b", "a"])
+    sub.BaseArray = otTables.BaseArray()
+    sub.BaseArray.BaseRecord = []
+    for y in (712, 486):
+        rec = otTables.BaseRecord()
+        rec.BaseAnchor = [_anchor(300, y)]
+        sub.BaseArray.BaseRecord.append(rec)
+    return sub
+
+
+def test_remap_mark_subtable_sorts_each_coverage_with_its_anchors():
+    """A mark coverage is not a set: its order is the order of the
+    anchor array beside it, so the two are sorted together. Sorting one
+    alone would hand every accent the next letter's anchor."""
+    sub = _mark_base_subtable()
+    gmap = {"grave": "cid01", "acute": "cid02", "a": "cid03", "b": "cid04"}
+    gid = {"cid01": 9, "cid02": 4, "cid03": 7, "cid04": 2}.get
+    assert build._remap_mark_subtable(sub, 4, gmap, gid)
+    assert sub.MarkCoverage.glyphs == ["cid02", "cid01"]     # by our ids
+    assert [r.MarkAnchor.XCoordinate for r in sub.MarkArray.MarkRecord] == [20, 10]
+    assert sub.BaseCoverage.glyphs == ["cid04", "cid03"]
+    assert [r.BaseAnchor[0].YCoordinate
+            for r in sub.BaseArray.BaseRecord] == [712, 486]
+
+
+def test_remap_mark_subtable_drops_a_coverage_we_cannot_fill():
+    """A donor whose bases we never grafted leaves nothing to attach
+    to, and an empty coverage would match everywhere."""
+    sub = _mark_base_subtable()
+    assert not build._remap_mark_subtable(
+        sub, 4, {"grave": "cid01", "acute": "cid02"}, {"cid01": 1, "cid02": 2}.get)
+
+
+def test_shift_subtable_anchors_moves_the_mark_and_leaves_the_base():
+    """The outline of a grafted mark is a cell left of the donor's, so
+    the anchor ON it has to be too — the base's does not move."""
+    sub = _mark_base_subtable()
+    moved = build._shift_subtable_anchors(4, sub, {"grave": -600})
+    assert moved == 1
+    assert [r.MarkAnchor.XCoordinate for r in sub.MarkArray.MarkRecord] == [-590, 20]
+    assert [r.BaseAnchor[0].XCoordinate for r in sub.BaseArray.BaseRecord] == [300, 300]
+
+
+def _gpos_skeleton():
+    """An empty GPOS with the three lists _add_feature walks."""
+    gpos = newTable("GPOS")
+    gpos.table = otTables.GPOS()
+    gpos.table.LookupList = otTables.LookupList()
+    gpos.table.LookupList.Lookup = []
+    gpos.table.LookupList.LookupCount = 0
+    gpos.table.FeatureList = otTables.FeatureList()
+    gpos.table.FeatureList.FeatureRecord = []
+    gpos.table.FeatureList.FeatureCount = 0
+    langsys = otTables.LangSys()
+    langsys.FeatureIndex, langsys.FeatureCount = [], 0
+    langsys.ReqFeatureIndex = 0xFFFF
+    script = otTables.Script()
+    script.DefaultLangSys, script.LangSysRecord = langsys, []
+    script.LangSysCount = 0
+    record = otTables.ScriptRecord()
+    record.ScriptTag, record.Script = "DFLT", script
+    gpos.table.ScriptList = otTables.ScriptList()
+    gpos.table.ScriptList.ScriptRecord = [record]
+    gpos.table.ScriptList.ScriptCount = 1
+    return gpos
+
+
+def test_realign_halfwidth_marks_backtracks_on_every_base_the_widening_left():
+    """The correction fires after a base whose advance the Term widening
+    did not change — which is not the same as "one cell wide". The Latin
+    layer's 63 multi-cell ligature glyphs (== is 1200 units, === 1800)
+    are in the widening's own skip set, so they are the same advance in
+    both families; asking for one cell missed all 488 ligature-and-mark
+    pairs, and the enclosing ring came out 100 units left of the cells
+    it encloses. Advance cannot tell them apart: a widened full-width
+    glyph is 1200 in Term too."""
+    font = _cff_font_with_widths({"half": 600, "lig": 1200, "cjk": 1200,
+                                  "mark": 0})
+    font["GPOS"] = _gpos_skeleton()
+    covered = build.realign_halfwidth_marks(font, {"mark": -100},
+                                            {"cjk": 100})
+    assert covered == 2                       # half and lig, not cjk
+    lookups = font["GPOS"].table.LookupList.Lookup
+    back, chain = lookups[-2], lookups[-1]
+    assert back.SubTable[0].Value.XPlacement == 100        # the move, undone
+    bases = set(chain.SubTable[0].BacktrackCoverage[-1].glyphs)
+    assert bases == {"half", "lig"}
+    # every depth reads the same set of bases behind its run of marks
+    assert [len(sub.BacktrackCoverage) for sub in chain.SubTable] == [1, 2, 3, 4]
+    assert all(set(sub.BacktrackCoverage[-1].glyphs) == bases
+               for sub in chain.SubTable)
+    # and the marks get an attachment class of their own, so an
+    # intervening accent does not break the chain
+    ours = font["GDEF"].table.MarkAttachClassDef.classDefs["mark"] \
+        if "GDEF" in font else chain.LookupFlag >> 8
+    assert chain.LookupFlag >> 8 == ours
+    assert {fr.FeatureTag for fr in font["GPOS"].table.FeatureList.FeatureRecord} \
+        == {"dist"}
+
+
+def test_realign_halfwidth_marks_does_nothing_without_marks_or_bases():
+    font = _cff_font_with_widths({"cjk": 1200, "mark": 0})
+    font["GPOS"] = _gpos_skeleton()
+    assert build.realign_halfwidth_marks(font, {}, {"cjk": 100}) == 0
+    # every glyph widened: nothing is left to backtrack on
+    assert build.realign_halfwidth_marks(font, {"mark": -100},
+                                         {"cjk": 100, "mark": -100}) == 0
+    assert font["GPOS"].table.LookupList.Lookup == []
+
+
+def _mark_font(boxes):
+    """A font whose cmap'd combining marks draw the given boxes at
+    advance 0. `boxes` is {codepoint: (x0, x1)}."""
+    names = {cp: f"m{i}" for i, cp in enumerate(boxes)}
+    font = _cff_font_with_widths({n: 0 for n in names.values()})
+    font["cmap"].tables[0].cmap = {cp: names[cp] for cp in boxes}
+    cff = font["CFF "].cff
+    td = cff[cff.fontNames[0]]
+    for cp, (x0, x1) in boxes.items():
+        pen = T2CharStringPen(0, None)
+        pen.moveTo((x0, 0))
+        pen.lineTo((x1, 0))
+        pen.lineTo((x1, 100))
+        pen.closePath()
+        td.CharStrings[names[cp]] = pen.getCharString(private=td.Private)
+    return font, names
+
+
+def test_fullwidth_marks_reads_where_the_ink_is_centred_not_the_cell_edges():
+    """Source Han Sans's strokes thicken with the weight: at Medium the
+    ideographic tone marks reach -1007 and +7, at Bold the voicing marks
+    +5 and +7. A flat two units of tolerance dropped four of the eight
+    at Medium and six at Bold — those kept the 1000-unit cell in Term,
+    and the half-set then broke the build in shift_mark_placements. What
+    says "drawn in the full-width cell" is which side of the origin the
+    ink's centre falls on; the donor's own Latin marks are drawn to the
+    right of it, U+0304 centred on it."""
+    font, names = _mark_font({
+        0x302A: (-1013, -807),     # Bold's tone mark, 13u past the cell
+        0x3099: (-263, 5),         # Bold's dakuten, 5u past the origin
+        0x20DD: (-972, -28),       # the enclosing ring
+        0x0300: (98, 511),         # the donor's grave: right of the origin
+        0x0304: (-163, 163),       # the donor's macron: centred on it
+        0x0041: (0, 500),          # not a mark at all
+    })
+    got = build.fullwidth_marks(font)
+    assert got == {names[0x302A], names[0x3099], names[0x20DD]}
+    # ... and ours, drawn one CELL left, are told apart by _built alone
+    font._built = frozenset({names[0x20DD]})
+    assert build.fullwidth_marks(font) == {names[0x302A], names[0x3099]}
+
+
+def test_shift_mark_placements_moves_only_the_marks_in_a_shared_subtable():
+    """A Format 2 SinglePos carries one value per covered glyph, so a
+    subtable covering both moved marks and other glyphs needs no
+    splitting — only a Format 1 one, whose single value they share,
+    does."""
+    font = _cff_font_with_widths({"mark": 0, "other": 600})
+    font["GPOS"] = _gpos_skeleton()
+
+    def value(x):
+        v = otTables.ValueRecord()
+        v.XPlacement = x
+        return v
+
+    sub = otTables.SinglePos()
+    sub.Format = 2
+    sub.Coverage = otTables.Coverage()
+    sub.Coverage.glyphs = ["mark", "other"]
+    sub.Value = [value(500), value(70)]
+    sub.ValueFormat = 0x1
+    lookup = otTables.Lookup()
+    lookup.LookupType, lookup.SubTable = 1, [sub]
+    font["GPOS"].table.LookupList.Lookup = [lookup]
+    assert build.shift_mark_placements(font, {"mark": -100}) == 1
+    assert [v.XPlacement for v in sub.Value] == [600, 70]
+
+    flat = otTables.SinglePos()
+    flat.Format = 1
+    flat.Coverage = otTables.Coverage()
+    flat.Coverage.glyphs = ["mark", "other"]
+    flat.Value = value(500)
+    flat.ValueFormat = 0x1
+    lookup.SubTable = [flat]
+    with pytest.raises(ValueError, match="would need splitting"):
+        build.shift_mark_placements(font, {"mark": -100})
+    flat.Coverage.glyphs = ["mark"]
+    assert build.shift_mark_placements(font, {"mark": -100}) == 1
+    assert flat.Value.XPlacement == 600
+
+
+def test_rehome_replaced_marks_puts_the_grafted_accent_in_the_donor_s_lookup():
+    """Source Han Sans attaches the Bopomofo tone marks with lookups
+    whose MarkCoverage names its OWN U+0300/U+0301/U+0307/U+030C. The
+    graft re-points those codepoints at the Latin donor's accents, so
+    the coverage named glyphs no codepoint reaches and nothing
+    attached: the accent drew through the letter's strokes. The anchor
+    comes over shifted by the difference between the two inks' centres,
+    because the two outlines are not the same shape."""
+    font, names = _mark_font({0x0301: (100, 300)})     # ours, ink centre 200
+    # their glyph: same font, a wider ink centred at 400
+    cff = font["CFF "].cff
+    td = cff[cff.fontNames[0]]
+    pen = T2CharStringPen(0, None)
+    pen.moveTo((300, 0))
+    pen.lineTo((500, 0))
+    pen.lineTo((500, 100))
+    pen.closePath()
+    build.append_glyph(font, td, "theirs", pen.getCharString(private=td.Private),
+                       None, 0, None, None)
+    sub = otTables.MarkBasePos()
+    sub.Format = 1
+    sub.MarkCoverage = otTables.Coverage()
+    sub.MarkCoverage.glyphs = ["theirs"]
+    rec = otTables.MarkRecord()
+    rec.Class = 0
+    rec.MarkAnchor = otTables.Anchor()
+    rec.MarkAnchor.Format = 1
+    rec.MarkAnchor.XCoordinate, rec.MarkAnchor.YCoordinate = 10, 20
+    sub.MarkArray = otTables.MarkArray()
+    sub.MarkArray.MarkRecord = [rec]
+    lookup = otTables.Lookup()
+    lookup.LookupType, lookup.SubTable = 4, [sub]
+    font["GPOS"] = _gpos_skeleton()
+    font["GPOS"].table.LookupList.Lookup = [lookup]
+
+    assert build.rehome_replaced_marks(font, {0x0301: "theirs"}) == 1
+    assert set(sub.MarkCoverage.glyphs) == {"theirs", names[0x0301]}
+    gid = font.getGlyphID
+    assert sub.MarkCoverage.glyphs == sorted(sub.MarkCoverage.glyphs, key=gid)
+    ours = sub.MarkArray.MarkRecord[sub.MarkCoverage.glyphs.index(names[0x0301])]
+    assert ours.Class == 0
+    # 10 + (200 - 400): the donor's accent sits 200 units further left
+    assert (ours.MarkAnchor.XCoordinate, ours.MarkAnchor.YCoordinate) == (-190, 20)
+    # idempotent: a second pass adds nothing
+    assert build.rehome_replaced_marks(font, {0x0301: "theirs"}) == 0
+
+
+def test_extend_realign_bases_adds_glyphs_appended_after_the_widening():
+    """nerdpatch.py appends 10,402 one-cell icons to a finished Term
+    face, and realign_halfwidth_marks froze its backtrack at widening
+    time — so a full-width mark after an icon kept the widening's
+    -100."""
+    font = _cff_font_with_widths({"half": 600, "cjk": 1200, "mark": 0})
+    font["GPOS"] = _gpos_skeleton()
+    assert build.realign_halfwidth_marks(font, {"mark": -100}, {"cjk": 100}) == 1
+    chain = font["GPOS"].table.LookupList.Lookup[-1]
+    assert chain.SubTable[0].BacktrackCoverage[-1].glyphs == ["half"]
+    assert build.extend_realign_bases(font, ["cjk", "half"]) == 4
+    gid = font.getGlyphID
+    for sub in chain.SubTable:
+        names = sub.BacktrackCoverage[-1].glyphs
+        assert names == sorted(set(names), key=gid) == sorted(["half", "cjk"], key=gid)
+    assert build.extend_realign_bases(font, []) == 0
+
+
+def _ligature(components, name):
+    lig = otTables.Ligature()
+    lig.Component, lig.LigGlyph = list(components), name
+    lig.CompCount = len(components) + 1
+    return lig
+
+
+def test_classify_unicode_marks_follows_a_mark_through_its_substitutes():
+    """A substituted glyph takes its GDEF class from GDEF alone once a
+    font has a GlyphClassDef — HarfBuzz has no Unicode-category
+    fallback — so a variant left unclassified becomes a BASE and the
+    mark-to-base search for the next mark stops on it. Source Code Pro
+    Italic leaves the `.cap` design its ccmp swaps U+0310 for after a
+    capital unclassified, and 23 of the 53 combining marks lost their
+    attachment after U+0310 in every italic Latin face."""
+    order = [".notdef", "mark", "cap", "capalt", "stack", "base", "lig"]
+    font = make_font(order, {0x0310: "mark", ord("E"): "base"},
+                     dict.fromkeys(order, 600))
+    gdef = newTable("GDEF")
+    gdef.table = otTables.GDEF()
+    gdef.table.Version = 0x00010000
+    gdef.table.GlyphClassDef = otTables.GlyphClassDef()
+    gdef.table.GlyphClassDef.classDefs = {"base": 1}
+    font["GDEF"] = gdef
+
+    single = otTables.SingleSubst()
+    single.mapping = {"mark": "cap"}
+    alt = otTables.AlternateSubst()
+    alt.alternates = {"cap": ["capalt"]}
+    # a ligature of marks IS a mark (Source Code Pro's ccmp stacks 30
+    # pairs of combining marks into one glyph); a ligature that takes a
+    # BASE is not — calling Ą a mark would zero its advance
+    liga = otTables.LigatureSubst()
+    liga.ligatures = {"mark": [_ligature(["cap"], "stack")],
+                      "base": [_ligature(["mark"], "lig")]}
+    gsub = newTable("GSUB")
+    gsub.table = otTables.GSUB()
+    gsub.table.LookupList = otTables.LookupList()
+    gsub.table.LookupList.Lookup = []
+    for kind, sub in ((1, single), (3, alt), (4, liga)):
+        lookup = otTables.Lookup()
+        lookup.LookupType, lookup.SubTable = kind, [sub]
+        gsub.table.LookupList.Lookup.append(lookup)
+    font["GSUB"] = gsub
+
+    fixed = build.classify_unicode_marks(font)
+    classes = font["GDEF"].table.GlyphClassDef.classDefs
+    # the cmap'd mark, its variant, the variant's variant, and the
+    # stack of two marks — but not the ligature a base takes part in
+    assert set(fixed) == {"mark", "cap", "capalt", "stack"}
+    assert classes["stack"] == 3
+    assert classes["mark"] == classes["cap"] == classes["capalt"] == 3
+    assert classes["base"] == 1 and "lig" not in classes
+    assert build.classify_unicode_marks(font) == []      # idempotent

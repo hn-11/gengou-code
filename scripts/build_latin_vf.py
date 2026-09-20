@@ -419,10 +419,6 @@ def build_style(style, env, out_dir):
     #    terms (user) with the named weights as the map's anchor points
     #    (see module docstring / scp_design_axis / user_axis)
     scp_design, scp_breaks = scp_design_axis(vf_meta)
-    # rounded to 1/100 wght up front so the same number is the map's
-    # anchor, the master's location and the instance position (an
-    # unrounded 856.768 vs a rounded 856.77 master maps to user 900.001,
-    # which varLib rejects as out of range)
     weight_pos = weight_positions()
     lo_u, default_u, hi_u, axis_map, to_scp = user_axis(
         weight_pos, scp_design, scp_breaks, axis.minValue)
@@ -478,7 +474,7 @@ def build_style(style, env, out_dir):
 
     # 5. designspace: in-memory sources (no masters written to disk) at
     #    their SCP-linear design coordinate, the user axis map (varLib
-    #    turns it into avar), 6 named instances at the usWeightClass
+    #    turns it into avar), 5 named instances at the usWeightClass
     #    user values (designspace instance locations are DESIGN
     #    coordinates; varLib maps them back through the axis map for fvar)
     doc = DesignSpaceDocument()

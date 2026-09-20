@@ -44,7 +44,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build  # noqa: E402
 from verifylib import static_faces  # noqa: E402
 
-CELL = build.SCP_CELL   # 600
+CELL = build.CELL   # 600
 MONA_K = CELL / build.MONA_CELL
 
 FAMILY, PS_FAMILY = build.LATIN_FAMILY   # "Sumi Moji", "SumiMoji"
@@ -90,11 +90,31 @@ def round_outlines(font):
     build.sync_lsb(font)
 
 
+# the Private-dict entries the CFF spec stores as integer deltas or
+# integer numbers. BlueScale is the one real number in the group, so it
+# is not here
+_INT_PRIVATE = ("BlueValues", "OtherBlues", "FamilyBlues", "FamilyOtherBlues",
+                "StemSnapH", "StemSnapV", "StdHW", "StdVW",
+                "BlueShift", "BlueFuzz")
+
+
 def fix_zone_order(font):
-    """Instancing a CFF2 blends each alignment-zone edge separately, and
-    at some weights a pair comes out inverted (SCP Regular: OtherBlues
-    [-217, -222]); otfautohint refuses a zone with the wrong sign. Sort
-    every pair, and the pairs, on every FontDict."""
+    """Sort and round the alignment zones and stem widths on every
+    FontDict.
+
+    Instancing a CFF2 blends each zone edge separately, and at some
+    weights a pair comes out inverted (SCP Regular: OtherBlues [-217,
+    -222]); otfautohint refuses a zone with the wrong sign.
+
+    The blend also leaves them fractional, and the spec stores them as
+    integer deltas: eight of the ten static faces shipped values like
+    733.9999999 and 671.9999999 (SumiMoji-BoldItalic had nine, and
+    StdHW 115.33964), which a reader that truncates rather than rounds
+    reads a unit low — the zone then sits under the overshoot it is
+    there to suppress. Only Regular and Regular Italic were integral,
+    because they sit on Source Code Pro's own default master. The JP
+    faces never saw this: build.latin_blue_zones re-measures and rounds
+    what it writes."""
     cff = font["CFF "].cff
     td = cff[cff.fontNames[0]]
     for fd in td.FDArray:
@@ -106,6 +126,12 @@ def fix_zone_order(font):
             pairs = sorted(tuple(sorted(values[i:i + 2]))
                            for i in range(0, len(values) - 1, 2))
             setattr(private, key, [v for pair in pairs for v in pair])
+        for key in _INT_PRIVATE:
+            value = getattr(private, key, None)
+            if isinstance(value, (list, tuple)):
+                setattr(private, key, [int(round(v)) for v in value])
+            elif isinstance(value, float):
+                setattr(private, key, int(round(value)))
 
 
 def add_missing_from_mona(font, mona, chars, dy, k):
@@ -279,11 +305,20 @@ def main():
                         on_result=lambda job, msg: print(msg))
     finally:
         # over every face of the family in the output directory (see
-        # harmonize_win_metrics)
-        paths = static_faces(out_dir, PS_FAMILY)
-        if paths:
-            a, d = harmonize_win_metrics(paths)
-            print(f"win metrics {a}/{d} over {len(paths)} faces")
+        # harmonize_win_metrics). A face a failed worker left half
+        # written would raise here and replace run_faces' own report of
+        # which faces failed, so it is swallowed only while that report
+        # is already on its way out
+        in_flight = sys.exc_info()[1]                  # run_faces' own report?
+        try:
+            paths = static_faces(out_dir, PS_FAMILY)
+            if paths:
+                a, d = harmonize_win_metrics(paths)
+                print(f"win metrics {a}/{d} over {len(paths)} faces")
+        except Exception as exc:                       # noqa: BLE001
+            if in_flight is None:
+                raise                                  # this pass IS the failure
+            print(f"win metrics skipped: {exc!r}")
 
 
 if __name__ == "__main__":
