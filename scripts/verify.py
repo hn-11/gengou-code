@@ -11,7 +11,14 @@ from fontTools.pens.transformPen import TransformPen
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
-from verifylib import Checker, hmtx_mismatches, make_shaper  # noqa: E402
+import build  # noqa: E402
+from verifylib import (  # noqa: E402
+    Checker,
+    check_style_bits,
+    glyph_has_hint,
+    hmtx_mismatches,
+    make_shaper,
+)
 
 FONT = Path(sys.argv[1]) if len(sys.argv) > 1 else (
     ROOT / "dist" / "SumiMojiJP-Regular.otf"
@@ -235,8 +242,34 @@ def main():
     n0 = name.getDebugName(0) or ""
     for donor in ("Source Han Sans", "Source Code Pro", "Monaspace"):
         check(donor in n0, f"nameID 0 credits {donor}")
-    for nid in (1, 2, 3, 4, 5, 6, 8, 9, 11, 13, 14):
+    for nid in (1, 2, 3, 4, 5, 6, 8, 9, 11, 13, 14, 16, 17):
         check(bool(name.getDebugName(nid)), f"nameID {nid} is set")
+    check(tf["OS/2"].achVendID == "SUMI",
+          f"OS/2 vendor id ({tf['OS/2'].achVendID!r})")
+    check(tf["post"].underlinePosition and tf["post"].underlineThickness,
+          f"post underline ({tf['post'].underlinePosition}, "
+          f"{tf['post'].underlineThickness})")
+    # the version the face is stamped with, against the one the build
+    # was asked for: one dist/ with two versions in it passed every
+    # gate, and a release step that misses SUMI_VERSION makes exactly
+    # that
+    want_version = os.environ.get("SUMI_VERSION")
+    if want_version:
+        major, minor = want_version.split(".")[:2]
+        head5 = name.getDebugName(5) or ""
+        check(abs(tf["head"].fontRevision - float(f"{major}.{minor}")) < 5e-4
+              and head5.startswith(f"Version {want_version}")
+              and (name.getDebugName(3) or "").startswith(want_version + ";"),
+              f"stamped {want_version} (fontRevision "
+              f"{tf['head'].fontRevision:.3f}, {head5!r})")
+    else:
+        print("skip  version stamp (SUMI_VERSION unset)")
+    # the weight the face calls itself, in the number Windows sorts by
+    weight = subfamily_name(tf).replace(" Italic", "") or "Regular"
+    if weight in build.WEIGHT_CLASS:
+        check(tf["OS/2"].usWeightClass == build.WEIGHT_CLASS[weight],
+              f"OS/2 usWeightClass {tf['OS/2'].usWeightClass} "
+              f"(want {build.WEIGHT_CLASS[weight]} for {weight})")
 
     # a coverage table is searched by glyph id, so its list has to be
     # in that order — and the mark coverages are parallel to their
@@ -333,6 +366,50 @@ def main():
     check(stored == again, f"OS/2 Unicode ranges match the cmap "
                            f"({[hex(v) for v in stored]} vs "
                            f"{[hex(v) for v in again]})")
+    # and the code pages beside them: a face that declares no 932/JIS
+    # disappears from GDI's font list for Japanese
+    pages = (os2b.ulCodePageRange1, os2b.ulCodePageRange2)
+    build.recalc_codepage_range(tf)
+    check(pages == (os2b.ulCodePageRange1, os2b.ulCodePageRange2),
+          f"OS/2 code page ranges match the cmap ({[hex(v) for v in pages]} "
+          f"vs {[hex(os2b.ulCodePageRange1), hex(os2b.ulCodePageRange2)]})")
+    # every Unicode cmap subtable agrees, not just the one HarfBuzz
+    # picks: build.set_cmap writes them all, and the format 4 tables
+    # the GDI paths read went unchecked — repointing every entry below
+    # U+2000 to 日, or dropping both subtables, passed
+    subtables = [t for t in tf["cmap"].tables
+                 if t.isUnicode() and t.format != 14]   # 14 is variation sequences
+    bmp = [t for t in subtables if t.format in (0, 4, 6)]
+    check(any(t.platformID == 3 for t in bmp),
+          f"a BMP cmap subtable is there ({[(t.platformID, t.platEncID, t.format) for t in subtables]})")
+    disagree = {}
+    for table in subtables:
+        for cp, name in cmap.items():
+            if cp > 0xFFFF and table.format in (0, 4, 6):
+                continue
+            got = table.cmap.get(cp)
+            if got != name:
+                disagree.setdefault((table.platformID, table.platEncID), []) \
+                    .append((hex(cp), got, name))
+    check(not disagree, f"every Unicode cmap subtable maps the same "
+                        f"({len(subtables)} subtables; off: "
+                        f"{[(k, v[:2], len(v)) for k, v in disagree.items()]})")
+    # vhea's extents as well as hhea's: the same pass writes both
+    if "vhea" in tf and "vmtx" in tf:
+        vhea, vmtx = tf["vhea"], tf["vmtx"].metrics
+        heights = [vmtx[n][0] for n in tf.getGlyphOrder()]
+        tops = [vmtx[n][1] for n in bounds]
+        bottoms = [vmtx[n][0] - vmtx[n][1] - (b[3] - b[1])
+                   for n, b in bounds.items()]
+        for label, got, want in (
+                ("advanceHeightMax", vhea.advanceHeightMax, max(heights)),
+                ("minTopSideBearing", vhea.minTopSideBearing, min(tops)),
+                ("minBottomSideBearing", vhea.minBottomSideBearing,
+                 min(bottoms)),
+                ("yMaxExtent", vhea.yMaxExtent,
+                 max(t + (b[3] - b[1]) for t, b in zip(tops, bounds.values())))):
+            check(abs(got - want) <= 1,
+                  f"vhea {label} is the outlines' ({got} vs {round(want)})")
 
 
     # and nothing paints a whole cell past its own advance: an italic
@@ -415,37 +492,29 @@ def main():
         check(not off, f"vmtx and VORG agree on the vertical origin "
                        f"({len(off)} off, e.g. {off[:3]})")
 
-    angle = tf["post"].italicAngle
-    if italic:
-        check(angle != 0, "italic face, post.italicAngle non-zero")
-    else:
-        check(angle == 0, f"upright face, post.italicAngle == 0 (got {angle})")
-
-    # fsSelection/macStyle must agree with nameID 2 (RIBBI subfamily) — the
-    # Windows family model keys off these bits, not the name text.
-    fsel = tf["OS/2"].fsSelection
-    mac = tf["head"].macStyle
     sub = subfamily_name(tf)
-    want_bold = "Bold" in sub.split()   # SemiBold is not bold
-    want_italic = "Italic" in sub
-    ok = bool(fsel & 0x20) == want_bold
-    check(ok, f"fsSelection BOLD bit matches "
-              f"subfamily {sub!r} (fsSelection={fsel:#06x})")
-    ok = bool(fsel & 0x1) == want_italic
-    check(ok, f"fsSelection ITALIC bit matches "
-              f"subfamily {sub!r} (fsSelection={fsel:#06x})")
-    ok = bool(mac & 0x1) == want_bold
-    check(ok, f"macStyle Bold bit matches "
-              f"subfamily {sub!r} (macStyle={mac:#06x})")
-    ok = bool(mac & 0x2) == want_italic
-    check(ok, f"macStyle Italic bit matches "
-              f"subfamily {sub!r} (macStyle={mac:#06x})")
-    if not want_bold and not want_italic:   # Light/Medium/SemiBold too
-        ok = bool(fsel & 0x40) and not (fsel & 0x61 & ~0x40)
-        check(ok, f"fsSelection REGULAR bit set, "
-                  f"BOLD/ITALIC clear (fsSelection={fsel:#06x})")
+    check_style_bits(tf, check, sub, italic)
 
     shape_infos = make_shaper(FONT)
+
+    # the hinting the build spends a minute a face on: nothing here read
+    # it, and a face whose autohint pass silently did nothing — which is
+    # what an empty _redrawn set produces — passed every check
+    hint_td = tf["CFF "].cff[tf["CFF "].cff.fontNames[0]]
+    unhinted = []
+    for ch in "HAx=":
+        name_ = cmap.get(ord(ch))
+        if name_ and not glyph_has_hint(hint_td.CharStrings[name_]):
+            unhinted.append(ch)
+    for text in ("a != b", "a -> b"):     # a ligature this build drew
+        infos, _p = shape_infos(text, {"calt": True, "liga": True})
+        if len(infos) > 4:
+            name_ = tf.getGlyphOrder()[infos[2].codepoint]
+            if not glyph_has_hint(hint_td.CharStrings[name_]):
+                unhinted.append(text.strip("ab "))
+    check(not unhinted, f"the glyphs this build redrew carry hints "
+                        f"(unhinted: {unhinted})")
+
 
     # the two-cell forms under fwid: the arrow redrawn from the ligature,
     # ≠ and ─ from Source Han Sans, Ａ through Source Han Sans's own fwid
@@ -589,6 +658,7 @@ def main():
     # single-glyph and multi-glyph-component cases without special-casing.
     lig_failed = 0
     lig_fail_lines = []
+    lig_order = tf.getGlyphOrder()
     for seq, spec in LIGATURES.items():
         text = f"a {seq} b"
         infos, positions = shape_infos(text, {"calt": True, "liga": True})
@@ -596,18 +666,24 @@ def main():
         n = len(infos)
         mid = positions[2:-2] if n > 4 else []
         got_adv = sum(p.x_advance for p in mid) if mid else None
-        ok = n > 4 and got_adv == want_adv
+        # and it has to DRAW: nothing here read the outline, so a build
+        # that emptied 50 of the 61 set '!=' as whitespace and passed
+        blank = [lig_order[i.codepoint] for i in infos[2:-2]
+                 if lig_order[i.codepoint] not in bounds]
+        ok = n > 4 and got_adv == want_adv and not blank
         if not ok:
             lig_failed += 1
             lig_fail_lines.append(
                 f"FAIL ligature {seq!r} ({spec['cells']} cells): "
-                f"{n} glyphs total, mid_advance={got_adv} (want {want_adv})")
+                f"{n} glyphs total, mid_advance={got_adv} (want {want_adv})"
+                + (f", blank: {blank}" if blank else ""))
     if lig_failed:
         for line in lig_fail_lines:
             print(line)
         check.failed = True
     else:
-        print(f"ok   all {len(LIGATURES)} ligatures shape at declared widths")
+        print(f"ok   all {len(LIGATURES)} ligatures shape at declared "
+              f"widths and draw")
 
     # standalone operators redrawn from Monaspace must match the ligatures
     # cut from the same instance: every contour of the lone glyph has a
@@ -664,13 +740,17 @@ def main():
               f"fwid {got_alt} (want {full_adv})")
 
     def extent(rows):
+        # a blank glyph has no rows: report it, do not abort the rest
+        if not rows:
+            return None, None
         return min(a for a, _ in rows), max(b for _, b in rows)
     for ch in ARROWS_H:
         seq = ARROW_SOURCE[ch][0]
         lig_ymin, lig_ymax = extent(y_rows(lig_glyph(f"a {seq} b")))
         infos, _ = shape_infos(ch, {"fwid": True})
         ymin, ymax = extent(y_rows(glyph_order[infos[0].codepoint]))
-        ok = abs(ymin - lig_ymin) <= 2 and abs(ymax - lig_ymax) <= 2
+        ok = (None not in (ymin, lig_ymin)
+              and abs(ymin - lig_ymin) <= 2 and abs(ymax - lig_ymax) <= 2)
         check(ok, f"{ch!r} (fwid) y extent {ymin}..{ymax} "
                   f"vs {seq!r} {lig_ymin}..{lig_ymax}")
 

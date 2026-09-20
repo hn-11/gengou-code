@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 import build  # noqa: E402
 import build_latin_vf  # noqa: E402
-from verifylib import Checker, make_shaper  # noqa: E402
+from verifylib import Checker, check_style_bits, make_shaper  # noqa: E402
 
 FONT = Path(sys.argv[1]) if len(sys.argv) > 1 else (
     ROOT / "dist" / "latin" / "SumiMoji[wght].otf")
@@ -157,6 +157,29 @@ def main():
     # failed three checks
     vf_cmap = tf.getBestCmap()
     check(len(vf_cmap) >= 800, f"{len(vf_cmap)} codepoints mapped")
+    # ... and they DRAW: the count is a cmap count, so a VF with 1,626
+    # of its 1,632 glyphs emptied passed this file, which is the only
+    # gate the two variable fonts have
+    default_gs = tf.getGlyphSet(location={"wght": axis.defaultValue})
+    drawn = set()
+    for g in tf.getGlyphOrder():
+        pen = BoundsPen(default_gs)
+        default_gs[g].draw(pen)
+        if pen.bounds is not None:
+            drawn.add(g)
+    inked = sum(1 for g in vf_cmap.values() if g in drawn)
+    check(inked >= 700, f"{inked} mapped glyphs draw at the default weight")
+    ligs = []
+    shape_default = make_shaper(FONT, {"wght": axis.defaultValue})
+    for seq in build.LIGATURES:
+        infos, _p = shape_default(f"a {seq} b", {"calt": True, "liga": True})
+        ligs += [tf.getGlyphOrder()[i.codepoint] for i in infos[2:len(infos) - 2]
+                 if tf.getGlyphOrder()[i.codepoint] not in drawn]
+    check(not ligs, f"every ligature draws ({len(build.LIGATURES)} probes; "
+                    f"blank: {ligs[:5]})")
+    check_style_bits(tf, check, tf["name"].getDebugName(2) or "",
+                     "Italic" in (tf["name"].getDebugName(17)
+                                  or tf["name"].getDebugName(2) or ""))
     off_grid = sorted({adv for adv, _ in metrics.values()}
                       - {0} - {build.CELL * n for n in range(1, 5)})
     check(not off_grid, f"every advance is 0 or a whole number of "

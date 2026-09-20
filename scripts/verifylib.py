@@ -4,6 +4,7 @@ tally, the CFF hint probe, and the static-face listing nerdpatch.py and
 harmonize_latin.py share.
 """
 
+import math
 from pathlib import Path
 
 import uharfbuzz as hb
@@ -126,3 +127,45 @@ def static_faces(src_dir, family):
     directory (`Family[wght].otf`, `Family-Italic[wght].otf` — the second
     also matches a naive `Family-*.otf` glob)."""
     return sorted(p for p in Path(src_dir).glob(f"{family}-*.otf") if "[" not in p.name)
+
+
+def check_style_bits(tf, check, subfamily, italic):
+    """fsSelection / macStyle / post.italicAngle against the face's own
+    subfamily name. The Windows family model keys off these bits, not
+    the name text — clear the italic ones and Word offers the italic
+    face as a separate family. Only verify.py checked them; the Latin
+    faces and the variable fonts, which are half of what ships, did
+    not."""
+    angle = tf["post"].italicAngle
+    if italic:
+        check(angle != 0, "italic face, post.italicAngle non-zero")
+        rise = tf["hhea"].caretSlopeRise
+        run = tf["hhea"].caretSlopeRun
+        want = -rise * math.tan(math.radians(angle))
+        check(run != 0 and abs(run - want) <= 2,
+              f"caret slope follows the outlines ({rise}/{run}, "
+              f"want {rise}/{round(want)} at {angle}°)")
+    else:
+        check(angle == 0, f"upright face, post.italicAngle == 0 (got {angle})")
+        check(tf["hhea"].caretSlopeRun == 0,
+              f"upright face, caret is vertical ({tf['hhea'].caretSlopeRun})")
+    fsel = tf["OS/2"].fsSelection
+    mac = tf["head"].macStyle
+    want_bold = "Bold" in subfamily.split()   # SemiBold is not bold
+    want_italic = "Italic" in subfamily
+    check(bool(fsel & 0x20) == want_bold,
+          f"fsSelection BOLD bit matches subfamily {subfamily!r} "
+          f"(fsSelection={fsel:#06x})")
+    check(bool(fsel & 0x1) == want_italic,
+          f"fsSelection ITALIC bit matches subfamily {subfamily!r} "
+          f"(fsSelection={fsel:#06x})")
+    check(bool(mac & 0x1) == want_bold,
+          f"macStyle Bold bit matches subfamily {subfamily!r} "
+          f"(macStyle={mac:#06x})")
+    check(bool(mac & 0x2) == want_italic,
+          f"macStyle Italic bit matches subfamily {subfamily!r} "
+          f"(macStyle={mac:#06x})")
+    if not want_bold and not want_italic:   # Light/Medium/SemiBold too
+        check(bool(fsel & 0x40) and not (fsel & 0x61 & ~0x40),
+              f"fsSelection REGULAR bit set, BOLD/ITALIC clear "
+              f"(fsSelection={fsel:#06x})")

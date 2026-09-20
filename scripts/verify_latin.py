@@ -4,6 +4,7 @@ every ligature fires, the guards hold, everything sits on the 600 grid,
 nothing CJK or full-width is left, and the metadata is the Latin font's
 own. Usage: python scripts/verify_latin.py dist/latin/SumiMoji-Regular.otf"""
 
+import os
 import sys
 from pathlib import Path
 
@@ -16,6 +17,7 @@ import build_latin  # noqa: E402
 from verify import CASES  # noqa: E402
 from verifylib import (  # noqa: E402
     Checker,
+    check_style_bits,
     glyph_has_hint,
     hmtx_mismatches,
     make_shaper,
@@ -41,6 +43,16 @@ def main():
     ps_family = build_latin.PS_FAMILY + ("NFM" if is_nf else "")
     check((name.getDebugName(6) or "").startswith(ps_family + "-"),
           f"PostScript name {name.getDebugName(6)!r}")
+    check_style_bits(tf, check, name.getDebugName(2) or "", "Italic" in
+                     (name.getDebugName(17) or name.getDebugName(2) or ""))
+    want_version = os.environ.get("SUMI_VERSION")
+    if want_version:
+        major, minor = want_version.split(".")[:2]
+        check(abs(tf["head"].fontRevision - float(f"{major}.{minor}")) < 5e-4
+              and (name.getDebugName(5) or "").startswith(
+                  f"Version {want_version}"),
+              f"stamped {want_version} (fontRevision "
+              f"{tf['head'].fontRevision:.3f}, {name.getDebugName(5)!r})")
     n0 = name.getDebugName(0) or ""
     check("Source Code Pro:" in n0 and "Monaspace:" in n0
           and "Source Han Sans" not in n0,
@@ -138,12 +150,18 @@ def main():
             continue   # the CJK case belongs to the JP families
         got = len(shape(text, on)[0])
         check(got == want, f"{text!r}: {got} glyphs (want {want})")
+    order = tf.getGlyphOrder()
     for seq, spec in build.LIGATURES.items():
         infos, positions = shape(f"a {seq} b", on)
         mid = positions[2:len(infos) - 2]
         adv = sum(p.x_advance for p in mid)
-        check(adv == spec["cells"] * CELL and len(infos) <= 5,
-              f"ligature {seq!r}: {len(infos)} glyphs, {adv}u")
+        # and it draws: only the count and the advance were read, so a
+        # build that emptied all 61 set them as whitespace and passed
+        blank = [order[i.codepoint] for i in infos[2:len(infos) - 2]
+                 if order[i.codepoint] not in bounds]
+        check(adv == spec["cells"] * CELL and len(infos) <= 5 and not blank,
+              f"ligature {seq!r}: {len(infos)} glyphs, {adv}u"
+              + (f", blank: {blank}" if blank else ""))
     off = {"calt": False, "liga": False}
     check(len(shape("a -> b", off)[0]) == 6, "calt/liga off leaves '->' plain")
     check(len(shape("a -> b", dict(off, ss02=True))[0]) == 5, "ss02 alone ligates '->'")
