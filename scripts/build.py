@@ -1328,6 +1328,115 @@ def _remap_mark_subtable(sub, kind, gmap, gid):
     return True
 
 
+def _remap_single_pos(sub, gmap, gid, marks):
+    """Rewrite a SinglePos subtable in our glyph names, keeping the
+    placement it carries and dropping the advance.
+
+    The donor pays for its spacing marks in GPOS: one subtable takes a
+    cell off every mark's advance, and a second also pulls the two
+    double-span marks — the tie bar U+0361 and the double macron U+035F
+    — half a cell left, because they straddle the pair they join. Our
+    marks are 0 wide already, so the advance is ours to drop; the
+    placement is not, and dropping it with the rest left the tie
+    centred on the first letter, 193 units left of the line's start and
+    through the descenders U+035F is drawn to clear. Their outlines are
+    already a CELL left of the donor's, so the placement it asks for is
+    a CELL further right than the donor's. Returns False when nothing
+    is left to say."""
+    cov = getattr(sub, "Coverage", None)
+    if cov is None:
+        return False
+    keep = [g for g in cov.glyphs if g in gmap]
+    if not keep or not all(gmap[g] in marks for g in keep):
+        return False        # a placement on a base is not ours to move
+    sub.ValueFormat &= 0x3          # placements only, no advances
+    if not sub.ValueFormat:
+        return False
+
+    def carry(value):
+        for attr in ("XAdvance", "YAdvance"):
+            if hasattr(value, attr):
+                delattr(value, attr)
+        value.XPlacement = getattr(value, "XPlacement", 0) + CELL
+
+    if sub.Format == 2:
+        pairs = sorted(((gmap[g], v) for g, v in zip(cov.glyphs, sub.Value)
+                        if g in gmap), key=lambda pair: gid(pair[0]))
+        for _, value in pairs:
+            carry(value)
+        cov.glyphs = [g for g, _ in pairs]
+        sub.Value = [v for _, v in pairs]
+        sub.ValueCount = len(pairs)
+    else:
+        # one ValueRecord for the whole coverage: adjusted once
+        carry(sub.Value)
+        cov.glyphs = sorted((gmap[g] for g in keep), key=gid)
+    return True
+
+
+def _pos_records(sub):
+    """Every PosLookupRecord a contextual positioning subtable holds,
+    whichever format it is in: format 3 keeps them on the subtable,
+    formats 1 and 2 under a rule set indexed by glyph or by class."""
+    yield from getattr(sub, "PosLookupRecord", None) or ()
+    for holder in ("ChainPosClassSet", "ChainPosRuleSet",
+                   "PosClassSet", "PosRuleSet"):
+        for rules in getattr(sub, holder, None) or ():
+            for attr in ("ChainPosClassRule", "ChainPosRule",
+                         "PosClassRule", "PosRule"):
+                for rule in getattr(rules, attr, None) or ():
+                    yield from getattr(rule, "PosLookupRecord", None) or ()
+
+
+def _remap_chain_pos(sub, gmap, gid, shift):
+    """Rewrite a ChainContextPos subtable: coverages and class
+    definitions in our glyph names, the lookups it calls at their new
+    indices. A context whose callees all went is dead, and so is one
+    that loses a whole coverage — an empty one matches everywhere."""
+
+    def renumber(records):
+        recs = [rec for rec in records or () if rec.LookupListIndex in shift]
+        for rec in recs:
+            rec.LookupListIndex = shift[rec.LookupListIndex]
+        return recs
+
+    if sub.Format == 2:
+        # class-based: the rule sets are indexed BY class, so nothing
+        # here may be reordered — only the glyph keys change
+        cov = getattr(sub, "Coverage", None)
+        if cov is None:
+            return False
+        cov.glyphs = sorted((gmap[g] for g in cov.glyphs if g in gmap), key=gid)
+        if not cov.glyphs:
+            return False
+        for attr in ("BacktrackClassDef", "InputClassDef", "LookAheadClassDef"):
+            classes = getattr(sub, attr, None)
+            if classes is not None:
+                classes.classDefs = {gmap[g]: c
+                                     for g, c in classes.classDefs.items()
+                                     if g in gmap}
+        alive = False
+        for rules in getattr(sub, "ChainPosClassSet", None) or ():
+            for rule in getattr(rules, "ChainPosClassRule", None) or ():
+                rule.PosLookupRecord = renumber(rule.PosLookupRecord)
+                rule.PosCount = len(rule.PosLookupRecord)
+                alive = alive or bool(rule.PosLookupRecord)
+        return alive
+    if sub.Format != 3:
+        print(f"  warning: mark import: ChainContextPos format {sub.Format}, "
+              f"skipped")
+        return False
+    for attr in ("BacktrackCoverage", "InputCoverage", "LookAheadCoverage"):
+        for cov in getattr(sub, attr, None) or ():
+            cov.glyphs = sorted((gmap[g] for g in cov.glyphs if g in gmap),
+                                key=gid)
+            if not cov.glyphs:
+                return False
+    sub.PosLookupRecord = renumber(getattr(sub, "PosLookupRecord", None))
+    sub.PosCount = len(sub.PosLookupRecord)
+    return bool(sub.PosLookupRecord)
+
+
 def import_scp_marks(base, scp, default_map, marks):
     """Carry the Latin donor's mark positioning across the graft, so an
     accent sits on the letter it belongs to. Returns the number of
@@ -1336,54 +1445,85 @@ def import_scp_marks(base, scp, default_map, marks):
     Source Code Pro draws its combining marks as spacing glyphs and
     places them entirely in GPOS: 'mark' attaches one to the base's own
     top anchor, which is higher on an ascender than on an x-height
-    letter, and 'mkmk' stacks a second on the first. graft_halfwidth
-    keeps the outline and gives it a 0 advance one cell left, which
-    lands it correctly over an x, o or a — and 229 units too low on b d
-    f h k l, straight through the ascender: 58 of 84 ascender-and-accent
-    pairs drew their ink into one another where the Latin-only faces
-    drew none.
+    letter, 'mkmk' stacks a second on the first, and 'ccmp' lifts the
+    tie bar over an ascender and drops the double macron under a
+    descender. graft_halfwidth keeps the outline and gives it a 0
+    advance one cell left, which lands it correctly over an x, o or a —
+    and 229 units too low on b d f h k l, straight through the
+    ascender: 58 of 84 ascender-and-accent pairs drew their ink into
+    one another where the Latin-only faces drew none.
 
-    The lookups are copied with every glyph name rewritten and the
+    Mark attachment is copied with every glyph name rewritten and the
     coverages re-sorted with their anchor arrays (a mark coverage is
     positional, not a set), then every anchor ON a mark is moved the
     same cell left as its outline was, so attachment lands exactly
-    where the donor's does. The donor's own 'mark' also carries a
-    SinglePos that takes a cell off each mark's advance; ours are 0
-    wide already, so that one is left behind."""
+    where the donor's does. A plain placement moves the other way (it
+    is added to the outline, not measured on it), and the advances the
+    donor takes off its spacing marks are left behind — ours are 0 wide
+    already."""
     if "GPOS" not in scp or "GPOS" not in base:
         return 0
     donor = scp["GPOS"].table
     ours = base["GPOS"].table
     gmap = dict(default_map)
+    gid = base.getGlyphID
     wanted = {}
     for fr in donor.FeatureList.FeatureRecord:
-        if fr.FeatureTag in ("mark", "mkmk"):
+        if fr.FeatureTag in ("mark", "mkmk", "ccmp"):
             for li in fr.Feature.LookupListIndex:
                 wanted.setdefault(li, set()).add(fr.FeatureTag)
-    copied = {}
-    for li in sorted(wanted):
-        kind, _ = _unwrap_pos(donor.LookupList.Lookup[li])
-        if kind not in _MARK_ARRAYS:
-            continue        # the advance adjuster: our marks are 0 wide
-        lookup = copy.deepcopy(donor.LookupList.Lookup[li])
-        kind, subtables = _unwrap_pos(lookup)
-        keep = [entry for entry, sub in zip(lookup.SubTable, subtables)
-                if _remap_mark_subtable(sub, kind, gmap, base.getGlyphID)]
-        if not keep:
+    # a chain context positions nothing itself: it names the lookup that
+    # does, which has to come over with it
+    for li in list(wanted):
+        kind, subtables = _unwrap_pos(donor.LookupList.Lookup[li])
+        if kind != 8:
             continue
+        for sub in subtables:
+            for rec in _pos_records(sub):
+                wanted.setdefault(rec.LookupListIndex, set())
+
+    def remap(lookup, shift):
+        kind, subtables = _unwrap_pos(lookup)
+        keep = []
+        for entry, sub in zip(lookup.SubTable, subtables):
+            if kind in _MARK_ARRAYS:
+                alive = _remap_mark_subtable(sub, kind, gmap, gid)
+            elif kind == 1:
+                alive = _remap_single_pos(sub, gmap, gid, marks)
+            elif kind == 8:
+                alive = _remap_chain_pos(sub, gmap, gid, shift)
+            else:
+                alive = False
+            if alive:
+                keep.append(entry)
         lookup.SubTable = keep
         lookup.SubTableCount = len(keep)
-        _, subtables = _unwrap_pos(lookup)
-        back = {name: -CELL for name in marks}
-        for sub in subtables:
-            _shift_subtable_anchors(kind, sub, back)
-        copied[li] = len(ours.LookupList.Lookup)
-        ours.LookupList.Lookup.append(lookup)
-    if not copied:
+        if keep and kind in _MARK_ARRAYS:
+            _, subs = _unwrap_pos(lookup)
+            for sub in subs:
+                _shift_subtable_anchors(kind, sub, {n: -CELL for n in marks})
+        return bool(keep)
+
+    # which lookups survive, before they are numbered
+    live = sorted(wanted)
+    while True:
+        seen = {old: k for k, old in enumerate(live)}
+        kept = [old for old in live
+                if remap(copy.deepcopy(donor.LookupList.Lookup[old]), seen)]
+        if kept == live:
+            break
+        live = kept
+    if not live:
         return 0
+    first = len(ours.LookupList.Lookup)
+    shift = {old: first + k for k, old in enumerate(live)}
+    for old in live:
+        lookup = copy.deepcopy(donor.LookupList.Lookup[old])
+        remap(lookup, shift)
+        ours.LookupList.Lookup.append(lookup)
     ours.LookupList.LookupCount = len(ours.LookupList.Lookup)
-    for tag in ("mark", "mkmk"):
-        idx = sorted(ours for li, ours in copied.items() if tag in wanted[li])
+    for tag in ("ccmp", "mark", "mkmk"):
+        idx = sorted(shift[old] for old in live if tag in wanted[old])
         if idx:
             _add_feature(ours, tag, idx)
     sort_feature_list(ours)
@@ -1402,7 +1542,7 @@ def import_scp_marks(base, scp, default_map, marks):
         if gdef.MarkAttachClassDef is None:
             gdef.MarkAttachClassDef = otTables.MarkAttachClassDef()
         gdef.MarkAttachClassDef.classDefs = classes
-    return len(copied)
+    return len(live)
 
 
 def copy_line_metrics(base, latin):
@@ -2032,6 +2172,31 @@ def tiling_glyphs(font):
     return out
 
 
+def fullwidth_marks(font):
+    """The 0-advance combining marks Source Han Sans draws INSIDE a
+    full-width cell — the enclosing circle and square, the kana voicing
+    marks, the ideographic tone marks. They ride on the cell before
+    them, so widen_fullwidth has to move them with it.
+
+    Source Han Sans draws them one FULL WIDTH left of the origin, the
+    way graft_halfwidth draws ours one CELL left, so widening the cell
+    to 1200 has to take them 100 units further left — not right. Told
+    from the grafted Latin marks by `_built`: those are ours, the Latin
+    cell is 600 in both families, and they stay put."""
+    hmtx = font["hmtx"]
+    gs = font.getGlyphSet()
+    built = getattr(font, "_built", frozenset())
+    out = set()
+    for cp, name in font.getBestCmap().items():
+        if (name in built or hmtx[name][0] != 0
+                or unicodedata.category(chr(cp)) not in ("Mn", "Me")):
+            continue
+        box = _bounds(gs, name)
+        if box is not None and box[0] >= -FULLWIDTH - 2 and box[2] <= 2:
+            out.add(name)
+    return out
+
+
 def widen_fullwidth(font, cell, skip=()):
     """Term variant: widen every full-width glyph's advance to two cells
     (2 x cell; an n-full-width glyph such as ⸻ to 2n cells) and center
@@ -2066,8 +2231,30 @@ def widen_fullwidth(font, cell, skip=()):
     shifted = tiled = 0
     tiling = tiling_glyphs(font)
     skip = set(skip)
+    full_marks = fullwidth_marks(font)
     for name in font.getGlyphOrder():
         adv, lsb = hmtx.metrics[name]
+        if name in full_marks:
+            # a combining mark carries no advance of its own and rides
+            # on the cell before it, so it has to move with that cell:
+            # Source Han Sans's own full-width marks (the enclosing
+            # circle and square, the kana voicing marks, the ideographic
+            # tone marks) are drawn inside a 1000-unit cell, and leaving
+            # them there put the circle 100 units right of the kanji it
+            # encloses — through its left edge. They hang to the LEFT of
+            # the origin, over the cell that has just been widened, so
+            # they move the other way from the glyph that carries them
+            step = -((2 * cell - FULLWIDTH) // 2)
+            private = glyph_private(font, td, name)
+            if shift_charstring(td.CharStrings[name], step, 0, private):
+                shifted += 1
+            else:
+                pen = T2CharStringPen(pen_width(private, 0), gs)
+                gs[name].draw(TransformPen(pen, (1, 0, 0, 1, step, 0)))
+                redrawn[name] = pen.getCharString(private=private)
+            hmtx.metrics[name] = (0, lsb + step)
+            moved_by[name] = step
+            continue
         if adv <= 0 or adv % FULLWIDTH or name in skip:
             continue
         full = (adv // FULLWIDTH) * 2 * cell

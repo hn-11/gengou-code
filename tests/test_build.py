@@ -2044,3 +2044,65 @@ def test_insert_lookups_first_on_nothing_changes_nothing():
     table.FeatureList.FeatureRecord = []
     build._insert_lookups_first(table, [])
     assert len(table.LookupList.Lookup) == 1
+
+
+def _anchor(x, y):
+    a = otTables.Anchor()
+    a.Format, a.XCoordinate, a.YCoordinate = 1, x, y
+    return a
+
+
+def _mark_base_subtable():
+    """A MarkBasePos in the donor's own glyph order: two marks and two
+    bases, each with one anchor, listed the way SCP numbers them."""
+    sub = otTables.MarkBasePos()
+    sub.Format = 1
+    sub.ClassCount = 1
+    sub.MarkCoverage = _coverage(["grave", "acute"])
+    sub.MarkArray = otTables.MarkArray()
+    sub.MarkArray.MarkRecord = []
+    for x in (10, 20):
+        rec = otTables.MarkRecord()
+        rec.Class, rec.MarkAnchor = 0, _anchor(x, 700)
+        sub.MarkArray.MarkRecord.append(rec)
+    sub.BaseCoverage = _coverage(["b", "a"])
+    sub.BaseArray = otTables.BaseArray()
+    sub.BaseArray.BaseRecord = []
+    for y in (712, 486):
+        rec = otTables.BaseRecord()
+        rec.BaseAnchor = [_anchor(300, y)]
+        sub.BaseArray.BaseRecord.append(rec)
+    return sub
+
+
+def test_remap_mark_subtable_sorts_each_coverage_with_its_anchors():
+    """A mark coverage is not a set: its order is the order of the
+    anchor array beside it, so the two are sorted together. Sorting one
+    alone would hand every accent the next letter's anchor."""
+    sub = _mark_base_subtable()
+    gmap = {"grave": "cid01", "acute": "cid02", "a": "cid03", "b": "cid04"}
+    gid = {"cid01": 9, "cid02": 4, "cid03": 7, "cid04": 2}.get
+    assert build._remap_mark_subtable(sub, 4, gmap, gid)
+    assert sub.MarkCoverage.glyphs == ["cid02", "cid01"]     # by our ids
+    assert [r.MarkAnchor.XCoordinate for r in sub.MarkArray.MarkRecord] == [20, 10]
+    assert sub.BaseCoverage.glyphs == ["cid04", "cid03"]
+    assert [r.BaseAnchor[0].YCoordinate
+            for r in sub.BaseArray.BaseRecord] == [712, 486]
+
+
+def test_remap_mark_subtable_drops_a_coverage_we_cannot_fill():
+    """A donor whose bases we never grafted leaves nothing to attach
+    to, and an empty coverage would match everywhere."""
+    sub = _mark_base_subtable()
+    assert not build._remap_mark_subtable(
+        sub, 4, {"grave": "cid01", "acute": "cid02"}, {"cid01": 1, "cid02": 2}.get)
+
+
+def test_shift_subtable_anchors_moves_the_mark_and_leaves_the_base():
+    """The outline of a grafted mark is a cell left of the donor's, so
+    the anchor ON it has to be too — the base's does not move."""
+    sub = _mark_base_subtable()
+    moved = build._shift_subtable_anchors(4, sub, {"grave": -600})
+    assert moved == 1
+    assert [r.MarkAnchor.XCoordinate for r in sub.MarkArray.MarkRecord] == [-590, 20]
+    assert [r.BaseAnchor[0].XCoordinate for r in sub.BaseArray.BaseRecord] == [300, 300]

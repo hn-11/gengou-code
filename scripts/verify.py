@@ -216,6 +216,43 @@ def main():
           f"every advance in the font is on the grid ({len(hmtx.metrics)} glyphs; "
           f"off: {[(n, hmtx[n][0]) for n in off_grid[:5]]})")
 
+    # a coverage table is searched by glyph id, so its list has to be
+    # in that order — and the mark coverages are parallel to their
+    # anchor arrays, so a copy that sorts one without the other puts
+    # every accent on the wrong letter (build._remap_mark_subtable)
+    unsorted, covs = [], 0
+    for tag in ("GSUB", "GPOS"):
+        if tag not in tf:
+            continue
+
+        def walk(obj, seen=None, tag=tag):
+            nonlocal covs
+            if seen is None:
+                seen = set()
+            if id(obj) in seen:
+                return
+            seen.add(id(obj))
+            if isinstance(obj, (list, tuple)):
+                for item in obj:
+                    walk(item, seen)
+                return
+            if not hasattr(obj, "__dict__"):
+                return
+            for attr, value in vars(obj).items():
+                if attr.endswith("Coverage") or attr == "Coverage":
+                    for cov in (value if isinstance(value, list) else [value]):
+                        names = getattr(cov, "glyphs", None) or []
+                        covs += 1
+                        ids = [tf.getGlyphID(n) for n in names]
+                        if ids != sorted(ids):
+                            unsorted.append((tag, attr, len(names)))
+                elif isinstance(value, (list, tuple)) or hasattr(value, "__dict__"):
+                    walk(value, seen)
+
+        walk(tf[tag].table.LookupList.Lookup)
+    check(not unsorted, f"every coverage is in glyph-id order "
+                        f"({covs} coverages; off: {unsorted[:4]})")
+
     # line metrics: Source Code Pro's, hhea and typo alike, USE_TYPO_METRICS
     hhea, os2 = tf["hhea"], tf["OS/2"]
     got = ((hhea.ascent, hhea.descent, hhea.lineGap),
@@ -424,6 +461,11 @@ def main():
         if "GPOS" in tf else set()
     for tag in ("kern", "halt", "palt"):
         check(tag not in gpos, f"GPOS has no {tag} ({sorted(gpos)})")
+    # ... and the donor's own mark positioning is there: 'mark' puts an
+    # accent on the letter, 'mkmk' stacks a second on the first, 'ccmp'
+    # lifts the tie bar over an ascender (build.import_scp_marks)
+    for tag in ("mark", "mkmk", "ccmp"):
+        check(tag in gpos, f"GPOS carries {tag} ({sorted(gpos)})")
     # vert must still reach the characters that need it: Source Han
     # Sans's own lookups substitute FROM the glyphs the graft replaced
     # (build.repoint_features), so a missing re-point looks exactly like
@@ -764,7 +806,7 @@ def main():
     # left, got the x-height case right and drew the accent through the
     # stem of b d f h k l: 58 of 84 pairs shared ink (import_scp_marks
     # carries the donor's 'mark' and 'mkmk' over)
-    through = {}
+    through, pairs = {}, 0
     for base in "bdfhklt":
         for mark in ACCENTS:
             if ord(base) not in cmap or ord(mark) not in cmap:
@@ -779,11 +821,116 @@ def main():
                 boxes.append(None if pen.bounds is None else
                              (pen.bounds[1] + pos.y_offset,
                               pen.bounds[3] + pos.y_offset))
+            pairs += 1
             if None in boxes or boxes[1][0] < boxes[0][1]:
                 through[base + mark] = (None if None in boxes else
                                         (round(boxes[0][1]), round(boxes[1][0])))
     check(not through, f"an accent clears the letter it sits on "
-                       f"({7 * len(ACCENTS)} pairs; through: {through})")
+                       f"({pairs} pairs; through: {through})")
+
+    # and a second accent is lifted clear of the first ('mkmk'). Not
+    # every pair needs the lift — a flat macron under a ring keeps its
+    # place in the donor too — but without the feature, or without the
+    # GDEF classes its lookup flag reads, NONE of them move and the two
+    # accents draw on top of one another
+    lifted = probes = 0
+    for base in "xz":
+        for first, second in zip(ACCENTS, ACCENTS[1:] + ACCENTS[:1]):
+            text = base + first + second
+            if any(ord(c) not in cmap for c in text):
+                continue
+            infos, positions = shape_infos(text, {})
+            if len(infos) != 3:
+                continue          # composed: nothing left to stack
+            probes += 1
+            lifted += positions[2].y_offset > 0
+    check(probes and lifted, f"a second accent is lifted clear of the "
+                             f"first ({lifted} of {probes} stacked)")
+
+    # the lift is read through GDEF: 'mkmk' asks which marks it may
+    # stack on by the mark attachment class in its lookup flag, and a
+    # font that carries the lookup without the classes stacks nothing
+    classes = getattr(getattr(tf.get("GDEF"), "table", None),
+                      "MarkAttachClassDef", None)
+    filtered = [lk.LookupFlag >> 8 for lk in tf["GPOS"].table.LookupList.Lookup
+                if lk.LookupFlag >> 8]
+    check(not filtered or (classes is not None
+                           and set(filtered) <= set(classes.classDefs.values())),
+          f"GDEF names the mark classes GPOS filters on ({sorted(set(filtered))}; "
+          f"GDEF has {sorted(set((classes.classDefs.values() if classes else ())))})")
+
+    # the two double-span marks straddle the pair they join: Source
+    # Code Pro pulls them half a cell left in GPOS, and dropping that
+    # with the advance beside it centred the tie on the first letter —
+    # or, with no placement at all, 154 units left of where the line
+    # starts
+    def placed(text, feats=None):
+        """[(xMin, xMax), ...] where a run's ink actually lands: the
+        pen's own advance, plus what GPOS moves each glyph by."""
+        infos, positions = shape_infos(text, feats or {})
+        out, pen_x = [], 0
+        for info, pos in zip(infos, positions):
+            pen = BoundsPen(arrow_gs)
+            arrow_gs[glyph_order[info.codepoint]].draw(pen)
+            out.append(None if pen.bounds is None else
+                       (pen.bounds[0] + pen_x + pos.x_offset,
+                        pen.bounds[2] + pen_x + pos.x_offset))
+            pen_x += pos.x_advance
+        return out
+
+    ties = {}
+    for base, mark, after in (("a", "\u0361", "b"), ("g", "\u035f", "j")):
+        if any(ord(c) not in cmap for c in (base, mark, after)):
+            continue
+        boxes = placed(base + mark + after)
+        if len(boxes) != 3:
+            continue
+        adv = hmtx[cmap[ord(base)]][0]
+        box = boxes[1]
+        if box is None or not 0 <= box[0] < adv < box[1]:
+            ties[base + mark + after] = (None if box is None else
+                                         (round(box[0]), round(box[1])))
+    check(not ties, f"the tie bar straddles the pair it joins (off: {ties})")
+
+    # and an enclosing mark stays around the character it encloses: it
+    # hangs a full width LEFT of the origin, so the Term widening has to
+    # take it further left, not leave it on the 1000-unit cell
+    around = {}
+    for base in "\u56fd\u4e00":
+        if ord(base) not in cmap or 0x20DD not in cmap:
+            continue
+        boxes = placed(base + "\u20dd")
+        if len(boxes) != 2:
+            continue
+        if None in boxes:
+            around[base] = None
+            continue
+        off = (boxes[1][0] + boxes[1][1]) / 2 - (boxes[0][0] + boxes[0][1]) / 2
+        if abs(off) > 2 or boxes[1][0] > boxes[0][0] or boxes[1][1] < boxes[0][1]:
+            around[base] = (round(off), tuple(round(v) for v in boxes[1]))
+    check(not around, f"an enclosing mark stays around its character "
+                      f"(off centre: {around})")
+
+    # a full-width base carries its own anchors: Source Han Sans hangs
+    # the Bopomofo tone marks off ㄓ, and widening it to two cells moves
+    # its ink 100u right — leave the anchor behind (shift_anchors) and
+    # the mark stands over the letter instead of after it
+    tone = {}
+    for base, mark in (("\u3113", "\u02ea"), ("\u3113", "\u02eb")):
+        if ord(base) not in cmap or ord(mark) not in cmap:
+            continue
+        boxes = placed(base + mark)
+        if len(boxes) != 2:
+            continue
+        # the mark hangs off the letter's own right edge — 107 units
+        # inside it in Light through 151 in Bold, the same in both
+        # families. Left behind by the widening it sits 100 further in,
+        # back over the letter
+        gap = None if None in boxes else boxes[0][1] - boxes[1][0]
+        if gap is None or not 0 < gap <= 180:
+            tone[base + mark] = gap if gap is None else round(gap)
+    check(not tone, f"a Bopomofo tone mark hangs off its letter's ink, "
+                    f"not its cell (off: {tone})")
 
     # the two imports need each other: SCP's variant features have rules
     # on what ccmp composes (cv02's single-storey g̃) and ccmp has rules
