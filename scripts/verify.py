@@ -627,11 +627,11 @@ def main():
                      f"{2 * len(VTILING)} probes; off: {vseam})")
 
     # the dashes that exist to butt together. Source Han Sans draws ⸺
-    # 1626 units wide in a 1672 advance — a 92-unit joint — and the grid
-    # step rounds that to two full widths: centred there the joint was
-    # 420, and 820 in Term (build.fit_to_grid stretches them instead).
-    # A sixteenth of the advance is the bound; the design is a
-    # twentieth, the centred version four times over it
+    # 1580 units of ink in a 1672 advance — a 92-unit joint — and the
+    # grid step rounds that to two full widths: centred there the joint
+    # was 420, and 820 in Term (build.fit_to_grid stretches them
+    # instead). A sixteenth of the advance is the bound; the design is
+    # an eighteenth of it, the centred version three times over the bound
     joints = {}
     for ch in "⸺⸻":
         if ord(ch) not in cmap:
@@ -655,9 +655,11 @@ def main():
     # composition or has its base substituted, and what is left does not
     # overlap the accent
     ccmp = {}
+    probes = 0
     for base, mark in CCMP_PROBES:
         if ord(base) not in cmap:
             continue       # SCP Italic has no Cyrillic ї to decompose
+        probes += 1
         infos, _ = shape_infos(base + mark, {})
         names = [glyph_order[i.codepoint] for i in infos]
         if len(names) > 1 and names[0] == cmap[ord(base)]:
@@ -671,7 +673,7 @@ def main():
                 boxes.append(pen.bounds)
             if boxes[0] and boxes[1] and boxes[0][3] > boxes[1][1]:
                 ccmp[base + mark] = (round(boxes[0][3]), round(boxes[1][1]))
-    check(not ccmp, f"the donor's ccmp composes ({len(CCMP_PROBES)} probes; "
+    check(not ccmp, f"the donor's ccmp composes ({probes} probes; "
                     f"off: {ccmp})")
 
     # ... and nothing ELSE grew with the advance. A Source Han Sans glyph

@@ -1588,7 +1588,7 @@ def fit_to_grid(font, cell, steps=None):
     A tiling character is stretched into its step instead of centred
     in it (tiling_glyphs; the two that get here are the two-em and
     three-em dashes ⸺ ⸻, which exist to butt together). Source Han
-    Sans draws ⸺ 1626 units of ink wide in a 1672 advance, so the step
+    Sans draws ⸺ 1580 units of ink wide in a 1672 advance, so the step
     rounds it to 2000 — and centred there, a run of them broke every
     420 units where the design leaves 92.
 

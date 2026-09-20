@@ -1756,7 +1756,7 @@ def test_sync_lsb_sets_bearings_from_the_outlines():
 def test_fit_to_grid_stretches_a_tiling_glyph_into_its_step():
     """A character drawn to butt against the next one must fill the step
     the grid rounds it up to, not sit centred in it: Source Han Sans's
-    two-em dash is 1626 units of ink in a 1672 advance and the step is
+    two-em dash is 1580 units of ink in a 1672 advance and the step is
     2000, so centring left a 420-unit hole in a run of them."""
     font = _cff_font_with_widths({"emdash": 824, "plain": 824}, x0=12)
     build.set_cmap(font, {0x2E3A: "emdash"}, add_new=True)
@@ -1879,7 +1879,7 @@ def test_ccmp_remap_sorts_a_coverage_and_renumbers_its_callee():
     st = otTables.ChainContextSubst()
     st.Format = 3
     st.BacktrackCoverage = []
-    st.InputCoverage = [_coverage(["b", "a"])]
+    st.InputCoverage = [_coverage(["a", "b"])]
     st.LookAheadCoverage = [_coverage(["c"])]
     rec = otTables.SubstLookupRecord()
     rec.SequenceIndex, rec.LookupListIndex = 0, 4
