@@ -170,7 +170,7 @@ Sumi Moji JP の欧文層（Source Code Pro の文字 + Monaspace の記号・�
 3. TTC のファイル名（のちに TTC 自体を廃止）
 4. `.github/workflows/release.yml` のリリース資産名と `SUMI_VERSION` 環境変数名
 5. `scripts/verify.py` の `FAMILY_METRICS` 判定（ファミリー名のトークン）
-6. README / CHANGELOG / LICENSE の名前と、リポジトリ名・`git remote`
+6. README / LICENSE の名前と、リポジトリ名・`git remote`
 
 命名上の注意:
 
