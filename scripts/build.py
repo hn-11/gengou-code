@@ -3976,6 +3976,57 @@ def cell_fit(box, cell=CELL, bearing=LETTER_BEARING):
     return sx, (cell - ink * sx) / 2 - box[0] * sx
 
 
+def notdef_to_cell(base, latin, cell):
+    """Redraw .notdef from the Latin donor, one cell wide. Returns
+    whether it was replaced.
+
+    A terminal allots a column by East Asian Width, not by what the
+    font draws, and a codepoint no font in the fallback chain covers is
+    almost always Neutral -- one column. Source Han Sans's .notdef is
+    full width, so a single uncovered codepoint drew a two-column box
+    in a one-column slot and pushed the rest of the line along: in the
+    Term faces, 1200 units into a 600-unit cell. That is the one thing
+    a terminal font must not do, and it did not take an exotic
+    character -- until this build the italic faces reached .notdef for
+    ten Greek Extended codepoints their own upright drew.
+
+    The other way round costs nothing: a box narrower than its column
+    leaves white, and nothing moves. So the donor's own .notdef, which
+    is drawn for this cell, is the one to use.
+
+    Runs before the grid passes and pins the glyph, so neither the
+    family's step map nor the Term widening puts it back.
+    """
+    name = ".notdef"
+    cff = base["CFF "].cff
+    td = cff[cff.fontNames[0]]
+    if name not in td.CharStrings or name not in latin.getGlyphOrder():
+        return False
+    # the vertical origin before the box changes: VORG states it
+    # outright, and vmtx says it as a top side bearing off the glyph's
+    # own yMax, so a new box has to be paid for on the vmtx side or the
+    # two stop agreeing (verify.py checks that they do)
+    origin = vmtx_origin(base, name) if "vmtx" in base else None
+    private = glyph_private(base, td, name)
+    donor = latin.getGlyphSet()
+    pen = T2CharStringPen(pen_width(private, cell), donor)
+    donor[name].draw(pen)
+    cs = pen.getCharString(private=private)
+    td.CharStrings[name] = cs
+    base["hmtx"].metrics[name] = (cell, charstring_lsb(cs))
+    if origin is not None:
+        box = charstring_box(cs)
+        base["vmtx"].metrics[name] = (base["vmtx"].metrics[name][0],
+                                      otRound(origin - (box[3] if box else 0)))
+        base._vorigin.pop(name, None)
+    note_redrawn(base, {name: cs})
+    pinned = getattr(base, "_pinned_cell", None)
+    if pinned is None:
+        pinned = base._pinned_cell = set()
+    pinned.add(name)
+    return True
+
+
 def narrow_letters(font, cell, blocks=LETTER_BLOCKS):
     """Condense an alphabetic glyph Source Han Sans draws wider than the
     cell into it, in place.
@@ -4886,6 +4937,9 @@ def build_face(job):
     latin = TTFont(latin_path)
     base = TTFont(Path(env["SHS_DIR"]) / shs_file)
     n_scp, replaced, default_map, marks = graft_halfwidth(base, latin)
+    # before any grid pass, so the Term widening never sees a full-width
+    # advance here (see notdef_to_cell)
+    notdef_to_cell(base, latin, CELL)
     # the locl forms first: SCP's ccmp composes the Greek breathing
     # marks from them, so they have to exist before that graft runs
     locl_order, locl_where = _locl_lookups(latin["GSUB"].table)

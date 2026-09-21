@@ -169,7 +169,16 @@ def add_missing_from_mona(font, mona, chars, dy, k):
 # is centred in the cell and condensed only where its ink will not fit
 # -- the rule narrow_letters applies to these same two scripts on the JP
 # side, for the same reason.
-SANS_BLOCKS = ((0x0370, 0x04FF),)
+#
+# Greek Extended is in the range because Source Code Pro's upright draws
+# sixteen of its codepoints (the koronis, psili, dasia and perispomeni
+# spacing forms) and its italic draws none, so the italic faces reached
+# .notdef where their own upright had the letter -- at Source Han Sans's
+# full width on the JP side, which moved the rest of the line. The
+# `upright` bound below keeps the import to those sixteen: Source Sans
+# draws 233 of the block, and a family whose italic reaches past its
+# upright is the defect this donor exists to undo.
+SANS_BLOCKS = ((0x0370, 0x04FF), (0x1F00, 0x1FFF))
 
 
 def add_missing_from_sans(font, sans, upright):

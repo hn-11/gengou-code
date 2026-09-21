@@ -1085,6 +1085,38 @@ def test_widen_fullwidth_spares_the_ligatures_it_is_given():
         assert pen.bounds[0] == want_lsb == hmtx[g][1]
 
 
+def test_notdef_to_cell_takes_the_donors_box_and_keeps_it():
+    """Source Han Sans's .notdef is full width, and a terminal gives an
+    uncovered codepoint one column, so the box pushed the rest of the
+    line along -- 1200 units into a 600-unit cell in the Term faces.
+    The donor's .notdef is drawn for the cell. It has to survive both
+    grid passes afterwards, including a family step map that still
+    carries the donor's full width for the name."""
+    font = _cff_font_with_widths({"a": 602, "kanji": 1000})
+    font["hmtx"].metrics[".notdef"] = (1000, 107)
+    latin = _cff_font_with_widths({"x": 600})
+    latin["hmtx"].metrics[".notdef"] = (600, 62)
+
+    assert build.notdef_to_cell(font, latin, 600) is True
+    assert font["hmtx"].metrics[".notdef"][0] == 600
+    # the family's reference still says full width; the pin wins
+    build.fit_to_grid(font, 600, steps={".notdef": 1000})
+    assert font["hmtx"].metrics[".notdef"][0] == 600
+    # and the Term pass only widens a full-width advance
+    build.widen_fullwidth(font, 600)
+    assert font["hmtx"].metrics[".notdef"][0] == 600
+    assert font["hmtx"].metrics["kanji"][0] == 1200      # this one does
+
+
+def test_notdef_to_cell_leaves_a_donor_without_one_alone():
+    font = _cff_font_with_widths({"a": 602})
+    font["hmtx"].metrics[".notdef"] = (1000, 107)
+    latin = _cff_font_with_widths({"x": 600})
+    latin.setGlyphOrder([g for g in latin.getGlyphOrder() if g != ".notdef"])
+    assert build.notdef_to_cell(font, latin, 600) is False
+    assert font["hmtx"].metrics[".notdef"][0] == 1000
+
+
 def test_narrow_letters_puts_a_wide_cyrillic_on_the_cell():
     """Source Code Pro Italic has no Cyrillic, so the italic faces keep
     Source Han Sans's own, and grid_step rounded the widest of them up to
