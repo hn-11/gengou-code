@@ -3030,6 +3030,50 @@ def test_anchor_loose_letters_leaves_a_lookup_with_too_few_bases_alone():
         .BaseCoverage.glyphs == ["b0"]
 
 
+def test_fit_anchor_rules_keys_by_lookup_and_subtable():
+    """What a variable font's masters share. The rule is fitted once, on
+    the default master, and handed to the others, so the key has to name
+    the same subtable in every one of them."""
+    marks = {"acute": (0, _anchor(0, 0))}
+    font = _drawn_gpos_font(
+        {**_HEIGHTS, "loose": 500, "acute": 100},
+        _letters_cmap(_HEIGHTS, {0x0301: "acute", 0x5A: "loose"}),
+        [_edge_markbase(marks, _HEIGHTS, 20, top=True)])
+    rules = build.fit_anchor_rules(font)
+    assert list(rules) == [(0, 0)]
+    assert rules[(0, 0)] == (True, 0, 20)      # top edge, centred, +20
+
+
+def test_anchor_loose_letters_uses_the_rule_it_is_handed():
+    """Handed a rule, it does not refit: that is what keeps a variable
+    font's masters placing the same letters. Here the handed rule says
+    something the face's own anchors do not, and the handed one wins."""
+    marks = {"acute": (0, _anchor(0, 0))}
+    font = _drawn_gpos_font(
+        {**_HEIGHTS, "loose": 500, "acute": 100},
+        _letters_cmap(_HEIGHTS, {0x0301: "acute", 0x5A: "loose"}),
+        [_edge_markbase(marks, _HEIGHTS, 20, top=True)])
+    assert build.anchor_loose_letters(font, rules={(0, 0): (True, 7, 99)}) == 1
+    sub = font["GPOS"].table.LookupList.Lookup[0].SubTable[0]
+    got = sub.BaseArray.BaseRecord[sub.BaseCoverage.glyphs.index("loose")]
+    assert (got.BaseAnchor[0].XCoordinate,
+            got.BaseAnchor[0].YCoordinate) == (57, 599)   # 50+7, 500+99
+
+
+def test_anchor_loose_letters_handed_nothing_places_nothing():
+    """An empty rule set is how the variable path could have degraded in
+    silence -- every master agreeing perfectly on having done nothing.
+    The builders turn a count of 0 into an error for that reason."""
+    marks = {"acute": (0, _anchor(0, 0))}
+    font = _drawn_gpos_font(
+        {**_HEIGHTS, "loose": 500, "acute": 100},
+        _letters_cmap(_HEIGHTS, {0x0301: "acute", 0x5A: "loose"}),
+        [_edge_markbase(marks, _HEIGHTS, 20, top=True)])
+    assert build.anchor_loose_letters(font, rules={}) == 0
+    assert "loose" not in (font["GPOS"].table.LookupList.Lookup[0]
+                           .SubTable[0].BaseCoverage.glyphs)
+
+
 def test_anchor_loose_letters_skips_what_is_not_a_letter():
     marks = {"acute": (0, _anchor(0, 0))}
     font = _drawn_gpos_font(

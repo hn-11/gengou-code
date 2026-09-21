@@ -1714,6 +1714,8 @@ def anchor_loose_letters(font, tag="mark", rules=None):
     `rules` supplies those fits from elsewhere (fit_anchor_rules), which
     is how a variable font's masters are kept in step.
     """
+    if rules is None:
+        rules = fit_anchor_rules(font, tag)
     gs = font.getGlyphSet()
     cmap = font.getBestCmap()
     letters = {gn for cp, gn in cmap.items()
@@ -1725,8 +1727,7 @@ def anchor_loose_letters(font, tag="mark", rules=None):
         for j, sub in enumerate(subs):
             if sub.ClassCount != 1:
                 continue      # one class here; more would need the class too
-            rule = (rules.get((i, j)) if rules is not None
-                    else _anchor_rule(gs, sub))
+            rule = rules.get((i, j))
             if rule is None:
                 continue
             use_top, dx, dy = rule

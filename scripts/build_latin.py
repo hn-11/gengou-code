@@ -350,6 +350,13 @@ def build_face(job):
     # these as marks (and so zero their spacing advance) in the first
     # place; before the bbox, which the new anchors do not move
     loose = build.anchor_loose_letters(base)
+    if not loose:
+        # placing none means every rule was turned away, and the face
+        # ships the defect this pass exists to undo -- an accent on any
+        # unanchored letter a whole cell right, on the next character.
+        # These donors leave about 2,800 letters to place
+        raise RuntimeError("no letter was given a fitted base anchor; "
+                           "see build.anchor_loose_letters")
     print(f"  letters given a fitted base anchor: {loose}")
     build.add_stat(base, weight, italic)
     build.prune_orphan_names(base)

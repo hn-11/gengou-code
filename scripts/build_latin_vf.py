@@ -513,6 +513,12 @@ def build_style(style, env, out_dir):
     if len(set(loose.values())) != 1:
         raise RuntimeError(f"{style}: fitted base anchors diverged across "
                            f"masters: {loose}")
+    if not loose[default_wght]:
+        # as on the static path: none placed means every rule was turned
+        # away, and both guards above would still pass -- the masters
+        # agree perfectly on having done nothing
+        raise RuntimeError(f"{style}: no letter was given a fitted base "
+                           f"anchor; see build.anchor_loose_letters")
     shapes = {w: _mark_coverage_shape(bases[w]) for w in wghts}
     if len({tuple(s) for s in shapes.values()}) != 1:
         raise RuntimeError(f"{style}: mark-to-base coverage diverged across "
