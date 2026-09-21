@@ -348,23 +348,28 @@ def _cff_with_greek(inks, *, cmap_extra=()):
     return fb.font
 
 
-def test_add_missing_from_sans_fills_only_what_the_upright_also_draws():
-    """Three rules at once: a codepoint the face already has is left
-    alone, one the upright faces do not draw is not taken even though
-    the donor has it, and what is taken is one cell wide."""
+def test_add_missing_from_sans_takes_the_block_inside_the_upright_set():
+    """Three rules at once: a codepoint the face already has is taken
+    over anyway, so the block comes from one donor; one the upright
+    faces do not draw is not taken even though the donor has it; and
+    what is taken is one cell wide.
+
+    The replacement is what fixes pi: Source Code Pro Italic draws it
+    and does not anchor it, and leaving the face's own glyph in place
+    left that one letter of the block behind its own donor."""
     face = _cff_with_greek({0x03B1: 300})              # alpha already drawn
     donor = _cff_with_greek({0x03B1: 300, 0x03B2: 700,
                              0x03B3: 300, 0x03B4: 300})
     before = face.getBestCmap()[0x03B1]
     added, condensed, anchors = build_latin.add_missing_from_sans(
         face, donor, {0x03B1, 0x03B2, 0x03B4})        # gamma withheld
-    assert (added, condensed) == (2, 1)                # beta's 700 does not fit
+    assert (added, condensed) == (3, 1)                # beta's 700 does not fit
     assert anchors == 0                                # this donor has no GPOS
     cmap = face.getBestCmap()
     assert 0x03B3 not in cmap                          # not in the upright set
-    assert cmap[0x03B1] == before                      # untouched
-    assert {cmap[0x03B2], cmap[0x03B4]} <= set(face.getGlyphOrder())
-    for cp in (0x03B2, 0x03B4):
+    assert cmap[0x03B1] != before                      # the donor's now
+    assert {cmap[0x03B1], cmap[0x03B2], cmap[0x03B4]} <= set(face.getGlyphOrder())
+    for cp in (0x03B1, 0x03B2, 0x03B4):
         assert face["hmtx"].metrics[cmap[cp]][0] == build_latin.CELL
 
 

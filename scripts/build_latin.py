@@ -173,9 +173,17 @@ SANS_BLOCKS = ((0x0370, 0x04FF),)
 
 
 def add_missing_from_sans(font, sans, upright):
-    """Append the Greek and Cyrillic of `sans` for the codepoints this
-    face has none, one cell each. Returns (added, condensed, base
-    anchors carried across).
+    """Draw the Greek and Cyrillic of `sans` into this face, one cell
+    each, for the whole of SANS_BLOCKS -- replacing what the face has
+    where it has anything. Returns (added, condensed, base anchors
+    carried across).
+
+    The whole block, not the gaps: Source Code Pro's italic draws one
+    letter in it, a pi it does not anchor, so an accent over pi sat a
+    cell and a half to the right, on top of whatever followed. Source
+    Sans anchors its own. Taking the block from one donor also retires
+    the exception -- there is no longer a "what this face already has"
+    for the block to be inconsistent about.
 
     `upright` is the codepoint set the upright faces draw, and bounds
     this one: Source Sans covers ten letters in these blocks that Source
@@ -192,8 +200,12 @@ def add_missing_from_sans(font, sans, upright):
     donor_map, placements = {}, {}
     for lo, hi in SANS_BLOCKS:
         for cp in range(lo, hi + 1):
-            if cp in cmap or cp not in sans_cm or cp not in upright:
+            if cp not in sans_cm or cp not in upright:
                 continue
+            # set_cmap below replaces the entry, so a glyph the face
+            # already had for this codepoint is left behind unreached
+            # (nothing but cmap points at it -- checked for pi, the one
+            # such glyph Source Code Pro Italic draws in the block)
             src = sans_cm[cp]
             # the same rule narrow_letters puts on these two scripts on
             # the JP side, from the same place
@@ -214,7 +226,7 @@ def add_missing_from_sans(font, sans, upright):
     build.set_cmap(font, new, add_new=True)
     anchors = build.import_donor_base_anchors(font, sans, donor_map, placements)
     taken_apart = build.import_donor_decompositions(font, sans, donor_map)
-    print(f"  Greek and Cyrillic SCP Italic lacks, from Source Sans: "
+    print(f"  Greek and Cyrillic from Source Sans: "
           f"{len(new)} ({condensed} condensed, {anchors} base anchors, "
           f"{taken_apart} decomposed)")
     return len(new), condensed, anchors
