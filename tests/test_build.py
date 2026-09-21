@@ -1381,6 +1381,24 @@ def test_set_names():
     assert os2.version >= 4
 
 
+def test_set_names_credits_the_face_own_family_not_the_base():
+    """nameID 0 and 5 name the family the face is actually in. A Term
+    face saying "Gengou JP" filed it under a family it is not in, and
+    nerdpatch.rename marks whatever it finds -- so the Nerd Fonts Term
+    face's version string named the non-Term Nerd Fonts family."""
+    font = _cff_font()
+    build.set_names(font, "Term", "SemiBold", False, version="6.0.0")
+    name = font["name"]
+    assert name.getDebugName(1) == "Gengou JP Term SemiBold"
+    assert name.getDebugName(0).startswith("Gengou JP Term:")
+    assert name.getDebugName(5).startswith("Version 6.0.0;Gengou JP Term")
+    # and the base family keeps naming itself
+    plain = _cff_font()
+    build.set_names(plain, "", "SemiBold", False, version="6.0.0")
+    assert plain["name"].getDebugName(0).startswith("Gengou JP:")
+    assert plain["name"].getDebugName(5).startswith("Version 6.0.0;Gengou JP;")
+
+
 # --- donor_credits (Latin donor's own composed name IDs 0 / 9) -----------
 
 def test_donor_credits_parses_scp_and_monaspace_in_order():

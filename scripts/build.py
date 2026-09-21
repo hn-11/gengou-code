@@ -52,7 +52,8 @@ Usage:
 Env (SHS_DIR required, the rest default):
   SHS_DIR   = dir with SourceHanSansJP-<Weight>.otf
   LATIN_DIR = dist/latin (default) — scripts/build_latin.py's output; it
-              needs SCP_VF_U / SCP_VF_I / MONA_VF and must run first
+              needs SCP_VF_U / SCP_VF_I / SS_VF_I / MONA_VF and must run
+              first
 
 Env (optional):
   GENGOU_VERSION = our own release version, e.g. "3.1.0" — stamps
@@ -3201,15 +3202,20 @@ def set_names(font, suffix, weight, italic, italic_angle=-12.0, version=None,
         major, minor = version.split(".")[:2]
         cff_version = f"{major}.{minor}"
         font["head"].fontRevision = float(cff_version)
-        version_str = f"Version {version};{family_base}"
+        version_str = f"Version {version};{base_family}"
         if base_credit:
             version_str += f";SHS {shs_rev:.3f}"
         unique_version = version
     else:
         cff_version = f"{shs_rev:.3f}"
-        version_str = f"Version {shs_rev:.3f};{family_base}"
+        version_str = f"Version {shs_rev:.3f};{base_family}"
         unique_version = cff_version
-    copyright_parts = [f"{family_base}: {PROJECT_COPYRIGHT}."]
+    # base_family, not family_base: a Term face's own family carries the
+    # suffix, and naming it "Gengou JP" here left nameID 0 and 5 pointing
+    # at a family the face is not in -- which nerdpatch.rename then
+    # marked, giving a Gengou JP Term Nerd Font Mono face a version
+    # string reading "Gengou JP Nerd Font Mono"
+    copyright_parts = [f"{base_family}: {PROJECT_COPYRIGHT}."]
     designer_parts = []
     if base_credit:
         copyright_parts.append(f"{base_credit}: {shs_copyright}")
