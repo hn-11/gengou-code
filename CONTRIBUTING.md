@@ -74,11 +74,13 @@ python scripts/verify.py dist/GengouJP-Regular.otf
 ```
 
 グリフの合成漏れやメトリクスの崩れなど、シェイピングまわりの回帰を
-チェックします。結合アクセントは `scripts/verifylib.py` の 3 ゲート
-——全アンカーが自分のグリフの上にある・全文字がベースに入っている・
-シェーパーが全ベースと全マークをアンカーどおりに置く（等式）——で、
-サンプルではなく面全体を見ます（可変フォントは各ロケーションに
-instantiate して同じゲートを通します）。変更を提出する前に、少なくとも
+チェックします。結合アクセントは `scripts/verifylib.py` の
+`check_marks`（8 ゲート: feature と GDEF、ルックアップ型で歩いた feature
+到達性、言語システム、全アンカーの構造、マーク主導のカバレッジ、GPOS
+から読んだ模型に対するシェーパーの等式、mkmk の等式、アセンダー字の
+貫通）で、サンプルではなく面全体を見ます（可変フォントは既定・両端・
+名前付きインスタンス・マスターの各ロケーションに instantiate して
+同じゲートを通します）。変更を提出する前に、少なくとも
 `Regular` 面で通ることを確認してください。CI（`.github/workflows/ci.yml`）でも push / PR 時に
 同じ検証が走ります（単体テストと lint を 1 ジョブ、Regular Upright / Regular Italic / Light Italic を
 ファミリー別に 1 ジョブずつ（Regular Upright の 2 ジョブは JP 面への Nerd

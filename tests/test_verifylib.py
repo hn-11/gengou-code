@@ -729,20 +729,18 @@ def test_check_marks_runs_every_gate_and_passes_a_sound_face():
     assert _all_marks(font) == []
 
 
-def test_check_anchor_placement_holds_a_mark_anchor_to_its_ink_bands_median():
-    """A mark given a neighbour's anchor sits on its own ink still and
+def test_check_anchor_placement_holds_a_mark_anchor_to_the_edge_its_lookup_attaches_by():
+    """A mark given another mark's anchor sits on its own ink still and
     attaches exactly through it -- the italic caron with the .cap
     form's, 169 up, drew through b's ascender and passed every other
-    gate but the JP clearance probe."""
+    gate but the JP clearance probe. Against the ink bottom an above-
+    mark's anchor sits within the donor's few dozen units."""
     anchors, heights = _ruled()
-    marks = {f"m{i}": None for i in range(16)}
-    heights.update(dict.fromkeys(marks, 500))
-    even = _mark_font(anchors, heights, marks=marks)
-    assert _placement(even) == []
-    font = _mark_font(anchors, heights, marks=marks)
+    assert _placement(_mark_font(anchors, heights)) == []
+    font = _mark_font(anchors, heights)
     sub = font["GPOS"].table.LookupList.Lookup[0].SubTable[0]
-    sub.MarkArray.MarkRecord[sub.MarkCoverage.glyphs.index("m3")].MarkAnchor.YCoordinate += 169
-    assert any("against its band" in m for m in _placement(font))
+    sub.MarkArray.MarkRecord[0].MarkAnchor.YCoordinate += 169
+    assert _placement(font)
 
 
 def test_check_marks_clear_catches_an_accent_through_an_ascender():

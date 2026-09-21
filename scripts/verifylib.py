@@ -5,7 +5,6 @@ harmonize_latin.py share.
 """
 
 import math
-import statistics
 import sys
 import unicodedata
 from pathlib import Path
@@ -676,17 +675,15 @@ _MARK_Y_PAST_INK = 250       # measured 130
 # where a second accent stacks (Mark2Array): measured from 86 below the
 # ink bottom to 2 short of the ink top
 _MARK2_BELOW_INK = 150       # measured 86
-# within a lookup the donor gives every mark drawn at one height the
-# same anchor -- (300, 500) for the above-marks, (300, 680) for their
-# .cap forms -- so a mark's anchor is held to the median over the marks
-# whose ink centre is within _MARK_BAND of its own. A mark given a
-# neighbour's anchor (the caron with the .cap form's, 169 up, when a
-# build paired a stale record list with a fresh coverage) sits on its
-# own ink still, and the attach gate uses whatever anchor it finds;
-# this is what says so. Measured deviation 78, at Bold, where the two
-# bands nearly meet
-_MARK_BAND = 80
-_MARK_ANCHOR_SPREAD = 120    # measured 78
+# a mark's anchor against the ink edge its lookup attaches by: an
+# above-mark's sits a little below its ink bottom (the donor's 500
+# against ink from 570, its .cap forms' 680 against ink from 700), a
+# below-mark's a little above its ink top. Measured -104..-4 above and
+# -11..130 below. A mark given another's anchor (the caron with the
+# .cap form's, 169 up, when a build paired a stale record list with a
+# fresh coverage) sits on its own ink still and the attach gate uses
+# whatever anchor it finds; this is what says so
+_MARK_Y_FROM_EDGE = {True: (-150, 40), False: (-60, 180)}
 # the ascender letters and the above-accents an accent must clear: with
 # the anchors right, the mark's ink starts above the letter's; drawn
 # through the stem of b d f h k l (58 of 84 pairs, on the first graft)
@@ -864,9 +861,12 @@ def check_anchor_placement(tf, check, gs, label=""):
     class lookup is an anchor that places nothing (mutant 5). The
     fitted rule's own offsets are bounded too, since a uniform drift of
     every anchor moves the fit rather than any anchor's residual
-    (mutant 4). A mark's anchor must sit on the mark's ink (mutant 2),
-    which the attach gate cannot ask, deriving its expectation from
-    that same anchor; and a Mark2 anchor between the ink bottom and the
+    (mutant 4). A mark's anchor must sit on the mark's ink (mutant 2)
+    -- and, where the lookup's rule says which edge it attaches by,
+    within the donor's distance of that edge, which is what tells a
+    mark given another mark's anchor from one given its own -- which
+    the attach gate cannot ask, deriving its expectation from that
+    same anchor; and a Mark2 anchor between the ink bottom and the
     ink top of the mark another stacks on (mutant 1), lifting it by
     something from wght 300 up (the italic donor's grave, acute, breve
     and ring did not, and drew x̀́ as one accent on the other)."""
@@ -875,13 +875,19 @@ def check_anchor_placement(tf, check, gs, label=""):
     cmap = tf.getBestCmap()
     rev = {g: cp for cp, g in cmap.items()}
 
-    def mark_off(gn, anchor):
+    def mark_off(gn, anchor, top=None):
         box = build._bounds(gs, gn)
         if anchor is None or not box:
             return None
         x, y = anchor.XCoordinate, anchor.YCoordinate
+        if top is None:
+            lo, hi = box[1] - _MARK_Y_PAST_INK, box[3] + _MARK_Y_PAST_INK
+        else:
+            near, far = _MARK_Y_FROM_EDGE[top]
+            edge = box[1] if top else box[3]
+            lo, hi = edge + near, edge + far
         if (abs(x - (box[0] + box[2]) / 2) > _MARK_X_FROM_CENTRE * build.CELL
-                or not box[1] - _MARK_Y_PAST_INK <= y <= box[3] + _MARK_Y_PAST_INK):
+                or not lo <= y <= hi):
             return (gn, x, y, tuple(round(v) for v in box))
         return None
 
@@ -916,23 +922,10 @@ def check_anchor_placement(tf, check, gs, label=""):
                     or not lo <= y <= hi):
                 off.setdefault(i, []).append(
                     (gn, x, y, tuple(round(v) for v in box)))
-        rows = []
         for gn, rec in zip(sub.MarkCoverage.glyphs, sub.MarkArray.MarkRecord):
-            bad = mark_off(gn, rec.MarkAnchor)
+            bad = mark_off(gn, rec.MarkAnchor, top)
             if bad:
                 off.setdefault(i, []).append(bad)
-            box = build._bounds(gs, gn)
-            if box and rec.MarkAnchor is not None:
-                rows.append((gn, (box[1] + box[3]) / 2, rec.MarkAnchor))
-        if len(rows) >= 16:
-            for gn, mid, anchor in rows:
-                alike = [a for _, c, a in rows if abs(c - mid) <= _MARK_BAND]
-                mx = statistics.median(a.XCoordinate for a in alike)
-                my = statistics.median(a.YCoordinate for a in alike)
-                if max(abs(anchor.XCoordinate - mx), abs(anchor.YCoordinate - my)) > _MARK_ANCHOR_SPREAD:
-                    off.setdefault(i, []).append(
-                        (gn, anchor.XCoordinate, anchor.YCoordinate,
-                         "against its band's", (mx, my)))
     lift_due = tf["OS/2"].usWeightClass >= LIFT_FROM_WEIGHT if "OS/2" in tf else True
     for i, sub in _mark_mark_subtables(tf):
         ones = {}
