@@ -2834,3 +2834,75 @@ def test_import_donor_base_anchors_leaves_a_base_the_face_already_has():
         ours, theirs, {"donor_alpha": "alpha"}, {}) == 0
     sub = ours["GPOS"].table.LookupList.Lookup[0].SubTable[0]
     assert sub.BaseArray.BaseRecord[0].BaseAnchor[0].XCoordinate == 300
+
+
+# --- import_donor_decompositions -------------------------------------------
+
+class _GsubFont:
+    """A GSUB with 'ccmp' over the given lookups, plus a cmap."""
+
+    def __init__(self, lookups, cmap):
+        table = otTables.GSUB()
+        table.LookupList = _FakeLookupList(lookups)
+        fr = FakeFeatureRecord("ccmp", FakeFeature(list(range(len(lookups)))))
+        table.FeatureList = FakeFeatureList([fr])
+        table.ScriptList = FakeScriptList([])
+        self._tables = {"GSUB": FakeTable(table)}
+        self._cmap = dict(cmap)
+
+    def __contains__(self, key):
+        return key in self._tables
+
+    def __getitem__(self, key):
+        return self._tables[key]
+
+    def getBestCmap(self):
+        return self._cmap
+
+
+def _multiple(mapping):
+    st = otTables.MultipleSubst()
+    st.Format, st.mapping = 1, dict(mapping)
+    lk = otTables.Lookup()
+    lk.LookupType, lk.LookupFlag, lk.SubTable = 2, 0, [st]
+    lk.SubTableCount = 1
+    return lk
+
+
+def test_import_donor_decompositions_copies_a_rule_whose_outputs_we_have():
+    """The letter comes apart into glyphs the face already has at the
+    same codepoints, so the face's own ccmp carries on from there."""
+    ours = _GsubFont([_single({"a": "b"})],
+                     {0x0131: "our_dotlessi", 0x0308: "our_diaeresis",
+                      0x0457: "our_yi"})
+    theirs = _GsubFont([_multiple({"yi": ["dotlessi", "diaeresis"]})],
+                       {0x0131: "dotlessi", 0x0308: "diaeresis", 0x0457: "yi"})
+
+    assert build.import_donor_decompositions(ours, theirs, {"yi": "our_yi"}) == 1
+
+    table = ours["GSUB"].table
+    # at the front, because a shaper runs a stage in LookupList order and
+    # this has to happen before the marks are composed
+    assert table.LookupList.Lookup[0].LookupType == 2
+    assert table.LookupList.Lookup[0].SubTable[0].mapping == {
+        "our_yi": ["our_dotlessi", "our_diaeresis"]}
+    # the lookup that was there is renumbered, and ccmp names the new one
+    assert table.LookupList.Lookup[1].LookupType == 1
+    assert table.FeatureList.FeatureRecord[0].Feature.LookupListIndex == [0, 1]
+
+
+def test_import_donor_decompositions_leaves_a_rule_we_cannot_resolve():
+    """An output the face has no glyph for would have to be grafted, and
+    grafting a mark means guessing at its advance and its anchors."""
+    ours = _GsubFont([], {0x0457: "our_yi"})      # no dotless i, no diaeresis
+    theirs = _GsubFont([_multiple({"yi": ["dotlessi", "diaeresis"]})],
+                       {0x0131: "dotlessi", 0x0308: "diaeresis", 0x0457: "yi"})
+    assert build.import_donor_decompositions(ours, theirs, {"yi": "our_yi"}) == 0
+    assert ours["GSUB"].table.LookupList.Lookup == []
+
+
+def test_import_donor_decompositions_ignores_a_letter_we_did_not_import():
+    ours = _GsubFont([], {0x0131: "our_dotlessi", 0x0308: "our_diaeresis"})
+    theirs = _GsubFont([_multiple({"yi": ["dotlessi", "diaeresis"]})],
+                       {0x0131: "dotlessi", 0x0308: "diaeresis", 0x0457: "yi"})
+    assert build.import_donor_decompositions(ours, theirs, {}) == 0

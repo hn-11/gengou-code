@@ -1645,6 +1645,71 @@ def import_donor_base_anchors(base, donor, glyph_map, placements):
     return added
 
 
+def import_donor_decompositions(base, donor, glyph_map):
+    """Carry across the donor's 'ccmp' rules that take one of the
+    imported letters apart. Returns the number of rules copied.
+
+    Some letters are positioned by decomposition rather than by an
+    anchor: both Adobe donors take Cyrillic ï (U+0457) to a dotless i
+    and a diaeresis, so the acute that follows stacks on the diaeresis
+    instead of landing on top of it. import_donor_base_anchors has
+    nothing to give those -- there is no base anchor to copy, because
+    the letter is never a base.
+
+    Only one-to-many rules, and only where every output is a glyph this
+    face already has at the same codepoint: the face's own ccmp then
+    carries on from there (it already composes the diaeresis and the
+    acute into one mark; what it lacked was the letter coming apart).
+    Nothing is grafted, so a rule whose outputs are unencoded in the
+    donor is left behind rather than guessed at.
+
+    The new lookup goes to the front of the LookupList, because a
+    shaper runs a stage's lookups in that order and this one has to
+    happen before the marks are composed."""
+    if "GSUB" not in donor or "GSUB" not in base:
+        return 0
+    ours = base["GSUB"].table
+    records = [fr for fr in ours.FeatureList.FeatureRecord
+               if fr.FeatureTag == "ccmp"]
+    if not records:
+        return 0
+    donor_cmap = {gn: cp for cp, gn in donor.getBestCmap().items()}
+    our_cmap = base.getBestCmap()
+    order, _ = _ccmp_lookups(donor["GSUB"].table)
+    mapping = {}
+    for i in order:
+        kind, subs = _unwrap(donor["GSUB"].table.LookupList.Lookup[i])
+        if kind != 2:                       # MultipleSubst
+            continue
+        for sub in subs:
+            for src, seq in getattr(sub, "mapping", {}).items():
+                ours_src = glyph_map.get(src)
+                if ours_src is None or ours_src in mapping:
+                    continue
+                out = []
+                for g in seq:
+                    cp = donor_cmap.get(g)
+                    if cp is None or cp not in our_cmap:
+                        out = None
+                        break
+                    out.append(our_cmap[cp])
+                if out:
+                    mapping[ours_src] = out
+    if not mapping:
+        return 0
+    st = otTables.MultipleSubst()
+    st.Format = 1
+    st.mapping = mapping
+    lookup = otTables.Lookup()
+    lookup.LookupType, lookup.LookupFlag, lookup.SubTable = 2, 0, [st]
+    lookup.SubTableCount = 1
+    _insert_lookups_first(ours, [lookup])
+    for fr in records:
+        fr.Feature.LookupListIndex = sorted(set(fr.Feature.LookupListIndex) | {0})
+        fr.Feature.LookupCount = len(fr.Feature.LookupListIndex)
+    return len(mapping)
+
+
 def _remap_single_pos(sub, gmap, gid, marks):
     """Rewrite a SinglePos subtable in our glyph names, keeping the
     placement it carries and dropping the advance.

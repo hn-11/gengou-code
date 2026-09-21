@@ -210,8 +210,10 @@ def add_missing_from_sans(font, sans, upright):
             placements[name] = (sx, dx)
     build.set_cmap(font, new, add_new=True)
     anchors = build.import_donor_base_anchors(font, sans, donor_map, placements)
+    taken_apart = build.import_donor_decompositions(font, sans, donor_map)
     print(f"  Greek and Cyrillic SCP Italic lacks, from Source Sans: "
-          f"{len(new)} ({condensed} condensed, {anchors} base anchors)")
+          f"{len(new)} ({condensed} condensed, {anchors} base anchors, "
+          f"{taken_apart} decomposed)")
     return len(new), condensed, anchors
 
 
