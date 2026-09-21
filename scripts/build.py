@@ -444,8 +444,16 @@ class VFSource:
             self._cache[key] = inst
         return self._cache[key]
 
-    def matched(self, target_units, slant=None, erode=True):
-        key = (round(target_units), slant if slant is None else round(slant), erode)
+    def matched(self, target_units, slant=None, master=False):
+        """The instance whose '=' bar measures `target_units` (in our
+        units), sheared to `slant`. master=True asks for a variable
+        font's master: an outline that must stay point-compatible with
+        the same glyph at the other masters, so it takes neither of
+        the two pathops passes -- no erosion below the axis floor
+        (below) and no overlap removal in draw_clean (keeps_overlaps)
+        -- since a boolean op on a fixed outline is not an
+        interpolatable deformation."""
+        key = (round(target_units), slant if slant is None else round(slant), master)
         if key in self._cache:
             return self._cache[key]
         pre_scale_target = target_units / self.scale
@@ -453,6 +461,7 @@ class VFSource:
         wght = self._converge(pre_scale_target, axes)
         inst = self._instance(dict(axes, wght=wght))
         inst.wght = wght
+        inst.master = master
         # slant the axis could not deliver (SCP Italic is -12, Monaspace's
         # slnt floor is -11); mona_transform() shears the remainder in
         inst.residual_slant = (slant - axes["slnt"]
@@ -464,12 +473,12 @@ class VFSource:
         # erodes the outlines by it — see erode_path(). A VF master can't
         # take that path (erosion is a pathops boolean op on a fixed
         # outline, not an interpolatable deformation — see docs/
-        # gengou-plan.md 段階2): erode=False clamps at the floor
-        # (the binary search already can't go past the axis bounds) and
-        # only reports the shortfall, leaving `erode` unset so
-        # mona_glyphset() hands back the outline as instanced.
+        # gengou-plan.md 段階2): a master clamps at the floor (the
+        # binary search already can't go past the axis bounds) and only
+        # reports the shortfall, leaving `erode` unset so mona_glyphset()
+        # hands back the outline as instanced.
         shortfall = t - pre_scale_target
-        if erode:
+        if not master:
             inst.erode = max(0.0, shortfall / 2)
             if abs(shortfall) > 1.0 and not inst.erode:
                 print(f"  WARNING: wght search off by {shortfall:+.1f}u "
@@ -559,6 +568,13 @@ def mona_glyphset(mona):
     gs = mona.getGlyphSet()
     d = getattr(mona, "erode", 0.0)
     return _ErodedGlyphSet(gs, d) if d > 0.5 else gs
+
+
+def keeps_overlaps(donor):
+    """Whether outlines drawn from `donor` skip draw_clean's overlap
+    removal: a variable font's master does (VFSource.matched(master=
+    True)), for the reason given there."""
+    return getattr(donor, "master", False)
 
 
 def pen_width(private, advance):
@@ -2239,7 +2255,7 @@ def copy_line_metrics(base, latin):
     sliced the bottom off 111 codepoints, 101 of them box drawing — a
     terminal font's frames and rules breaking in exactly the renderers
     that read this field. 454 is what the Latin family already declares
-    for the same ink (build_latin.harmonise_win measures 1060 / 454), so
+    for the same ink (build_latin.harmonize_win_metrics measures 1060 / 454), so
     this is the JP faces catching up to their own Latin layer rather
     than a new policy. Two codepoints stay outside it, the vertical kana
     repeat marks U+3031 and U+3032 at -549; covering them would cost
@@ -2435,7 +2451,7 @@ ARROW_SOURCE = {
 }
 
 
-def stretch_arrows(font, added, fullwidth, slant=0.0, chars=ARROWS_H + ARROWS_V):
+def stretch_arrows(font, added, fullwidth, slant=0.0):
     """The fwid forms of the arrows: full-width arrows built from the
     ligature glyphs (ARROW_SOURCE) so they share head and stroke with
     '->' '=>' '<=>', but keep Source Han Sans's full-width advance and
@@ -2450,7 +2466,7 @@ def stretch_arrows(font, added, fullwidth, slant=0.0, chars=ARROWS_H + ARROWS_V)
     gs = font.getGlyphSet()
     t = math.tan(math.radians(-slant))
     swapped = {}
-    for ch in chars:
+    for ch in ARROWS_H + ARROWS_V:
         cp = ord(ch)
         seq, op = ARROW_SOURCE[ch]
         if cp not in fullwidth or seq not in added:
@@ -3631,7 +3647,8 @@ def replace_from_mona(font, mona, chars, dy, k):
         private = td.FDArray[td.FDSelect[gid]].Private
         adv = font["hmtx"].metrics[name][0]
         pen = T2CharStringPen(pen_width(private, adv), font.getGlyphSet())
-        draw_clean([(mona_gs, src, mona_transform(mona, 0, dy, k))], pen)
+        draw_clean([(mona_gs, src, mona_transform(mona, 0, dy, k))], pen,
+                   simplify=not keeps_overlaps(mona))
         cs = pen.getCharString(private=private)
         td.CharStrings.charStringsIndex[td.CharStrings.charStrings[name]] = cs
         font["hmtx"].metrics[name] = (adv, charstring_lsb(cs))
@@ -3640,7 +3657,7 @@ def replace_from_mona(font, mona, chars, dy, k):
     return replaced
 
 
-def add_glyphs(font, mona, alts, ligatures, dy=None, cell=CELL):
+def add_glyphs(font, mona, alts, ligatures, dy, cell=CELL):
     """Append the imported ligature glyphs at `cell` per input character;
     return {seq: glyph name}. Alternate (.alt) designs are appended too
     and recorded in `alts`."""
@@ -3648,9 +3665,6 @@ def add_glyphs(font, mona, alts, ligatures, dy=None, cell=CELL):
     td, cmap, fd_index, private, vdon = append_context(font)
     mona_gs = mona_glyphset(mona)
     mona_names = set(mona.getGlyphOrder())
-
-    if dy is None:
-        dy = mona_baseline_shift(font, mona, k)
 
     added = {}
     n_alt = 0
@@ -3675,7 +3689,8 @@ def add_glyphs(font, mona, alts, ligatures, dy=None, cell=CELL):
         # composed sequences (':=' etc.) overlap by construction — the same
         # pathops pass the .alt path uses removes the seams
         draw_clean([(mona_gs, gname, mona_transform(mona, dx, dy, k))
-                    for gname, dx in zip(spec["glyphs"], offsets)], pen)
+                    for gname, dx in zip(spec["glyphs"], offsets)], pen,
+                   simplify=not keeps_overlaps(mona))
         name = alloc_glyph_name(font)
         append_glyph(font, td, name, pen.getCharString(private=private),
                      fd_index, width, None, vdon)
@@ -3688,7 +3703,8 @@ def add_glyphs(font, mona, alts, ligatures, dy=None, cell=CELL):
         if any(g.endswith(".alt") for g in alt_glyphs):
             pen = T2CharStringPen(pen_width(private, width), font.getGlyphSet())
             draw_clean([(mona_gs, gname, mona_transform(mona, dx, dy, k))
-                        for gname, dx in zip(alt_glyphs, offsets)], pen)
+                        for gname, dx in zip(alt_glyphs, offsets)], pen,
+                       simplify=not keeps_overlaps(mona))
             alt_name = alloc_glyph_name(font)
             append_glyph(font, td, alt_name, pen.getCharString(private=private),
                          fd_index, width, None, vdon)
@@ -3716,7 +3732,7 @@ class _LookupRef:
         self.lookup_index = index
 
 
-def _guard_subtables(font, gsub, seq_map, lig_lookup):
+def _guard_subtables(font, seq_map, lig_lookup):
     """Context guards around the combined ligature lookup, the part of
     Monaspace's calt that a plain LigatureSubst cannot express.
 
@@ -4091,7 +4107,7 @@ def add_gsub(font, added, alts, ligatures, variant_maps=None,
             gsub, otl.buildLigatureSubstSubtable(groups[grp]))
 
     guarded_lookup = _new_lookup(
-        gsub, *_guard_subtables(font, gsub, combined, combined_lookup))
+        gsub, *_guard_subtables(font, combined, combined_lookup))
     for tag in ("calt", "liga"):
         _add_feature(gsub, tag, [guarded_lookup])
     for grp in sorted(group_lookups):
@@ -5250,7 +5266,7 @@ def main():
 
     if only is None:
         # a full build must not leave faces from an older roster (e.g. the
-        # dropped ExtraLight/Light) for the release zip to pick up
+        # a weight dropped from FACES) for the release zip to pick up
         stale = sorted(out_dir.glob("GengouJP*.otf"))
         for f in stale:
             f.unlink()

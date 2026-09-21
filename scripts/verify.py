@@ -176,10 +176,9 @@ def main():
     # every codepoint Gengou has is one cell in both families — the
     # ligature-paired arrows and operators, Greek, box drawing, SCP-only
     # Latin (ł ğ ₽), '−' — and Source Han Sans's own full-width symbols
-    # (① ※) stay two cells. Italic: Source Code Pro Italic has no Greek,
-    # so Source Han Sans's proportional glyphs stay, and fit_to_grid puts
-    # them on the step their advance is nearest — the cell, at 587-663
-    # across the weights (grid_step)
+    # (① ※) stay two cells. The italic faces' Greek comes from Source
+    # Sans (build_latin.add_missing_from_sans), a cell wide by
+    # construction like the upright's from Source Code Pro
     policy = {"\u2192": exp_half, "\u2026": exp_half, "\u2500": exp_half,
               "\u2212": exp_half, "\u2460": exp_full, "\u203b": exp_full,
               "\u0142": exp_half, "\u011f": exp_half, "\u20bd": exp_half}
@@ -195,10 +194,11 @@ def main():
             off_policy[ch] = got
     check(not off_policy, f"width policy ({len(policy)} probes; off: {off_policy})")
 
-    # and the Greek and Cyrillic the italic faces keep from Source Han
-    # Sans, which build.narrow_letters condenses into the cell: both
-    # scripts are East_Asian_Width A, so every terminal allots them one
-    # column, and a full width would paint over the next character
+    # and every Greek and Cyrillic letter, whichever donor drew it (and
+    # build.narrow_letters, should one ever stand on Source Han Sans's
+    # own glyph): both scripts are East_Asian_Width A, so every terminal
+    # allots them one column, and a full width would paint over the
+    # next character
     greek_cyrillic = {cp: hmtx[g][0] for cp, g in cmap.items()
                       if 0x370 <= cp <= 0x4FF}
     full = {cp for cp, adv in greek_cyrillic.items() if adv != exp_half}

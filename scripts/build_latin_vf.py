@@ -15,7 +15,7 @@ Masters sit at the SCP VF's own master locations, read back from the CFF2
 VarStore (confirm_scp_master_wghts) — not assumed — plus the
 Regular and Bold positions (see the axis paragraph below). Monaspace
 is bar-matched per master with erosion DISABLED (VFSource.matched
-erode=False): erosion is a pathops boolean op on a fixed outline, not an
+master=True): erosion is a pathops boolean op on a fixed outline, not an
 interpolatable deformation, so a VF master can't take that path (see
 docs/gengou-plan.md 段階2) — below SCP wght ≈366 Monaspace's punctuation
 just stays at its own wght-200 floor instead. That is not slight: at the
@@ -238,8 +238,8 @@ def mona_floor_wght(scp, mona_source, slant):
     """The SCP wght at which Monaspace's bar-matching first hits its own
     wght floor (Monaspace wght 200's '=' bar, at our scale, equals SCP's
     bar there). A master goes here: below it every master carries the
-    SAME clamped Monaspace outline (so interpolation stays constant, as
-    the static faces' erode=False matching is), above it Monaspace
+    SAME clamped Monaspace outline (so interpolation stays constant --
+    a master's matching clamps, see VFSource.matched), above it Monaspace
     tracks SCP's bar — without this master the VF would interpolate
     Monaspace linearly from the floor at wght 200 up to the 400 master,
     putting e.g. Light's punctuation too heavy. `scp` is a
@@ -264,43 +264,24 @@ def scp_base_at(vf, wght):
 
 
 def graft_master(base, mona_source, slant, sans_source=None, upright=None):
-    """Monaspace punctuation/ligatures onto one SCP master, in place —
-    same helpers build_latin.py's static build_face uses, but bar-matched
-    with erosion disabled (erode=False: a VF master can't take the
-    non-interpolatable erosion path, see module docstring) while
-    build.draw_clean runs with simplify=False (monkeypatched by the
-    caller — every add_glyphs/replace_from_mona/add_missing_from_mona call
-    below resolves `draw_clean` as build's own module global)."""
+    """build_latin.graft onto one SCP master, in place, with the donors
+    matched on this master's own '=' bar as master=True instances (no
+    erosion, no overlap removal: see VFSource.matched). Returns (the
+    bar, the Monaspace instance) for the caller's report.
+
+    For an italic the Greek and Cyrillic come from Source Sans, seated
+    as on the static italic faces. The anchors that writes are the
+    donor's read at THIS master's weight, so the masters' GPOS can
+    differ where the donor's own anchors move with weight; varLib
+    merges those into variable anchors backed by a GDEF VarStore
+    rather than taking the default master's -- which is what we want,
+    and what makes the COVERAGE the thing that has to agree (step 4b
+    below says so if it does not)."""
     target = build.bar_thickness(base, base.getBestCmap()[ord("=")])
-    mona = mona_source.matched(target, slant, erode=False)
-    dy = build.mona_baseline_shift(base, mona, MONA_K)
-    alts = {}
-    added = build.add_glyphs(base, mona, alts, build.LIGATURES, dy, cell=CELL)
-    build.replace_from_mona(base, mona,
-                            build.MONA_STANDALONE + build.MONA_AMBIGUOUS, dy, MONA_K)
-    build_latin.add_missing_from_mona(base, mona, build.MONA_AMBIGUOUS, dy, MONA_K)
-    if sans_source is not None:
-        # the italic masters' Greek and Cyrillic, from the same donor and
-        # seated the same way as the static italic faces. Matched on this
-        # master's own bar, erode=False for the reason Monaspace is: a
-        # master cannot take the non-interpolatable erosion path. The
-        # outlines stay interpolatable because every master takes them
-        # from one variable font at a different location, and cell_fit
-        # only scales and shifts them
-        build_latin.add_missing_from_sans(
-            base, sans_source.matched(target, erode=False), upright)
-        # the anchors this writes are the donor's, read at THIS master's
-        # weight, so the masters' GPOS can differ where the donor's own
-        # anchors move with weight. varLib merges those differences into
-        # variable anchors backed by a GDEF VarStore rather than taking
-        # the default master's -- which is what we want, and what makes
-        # the COVERAGE the thing that has to agree. The check at step 4b
-        # below is what says so if it does not
-    build_latin.remap_scp_stylistic_sets(base)
-    build.add_gsub(base, added, alts, build.LIGATURES)
+    mona = mona_source.matched(target, slant, master=True)
+    sans = sans_source.matched(target, master=True) if sans_source is not None else None
+    build_latin.graft(base, mona, sans, upright)
     build.classify_unicode_marks(base)
-    if "DSIG" in base:
-        del base["DSIG"]
     return target, mona
 
 
@@ -476,20 +457,12 @@ def build_style(style, env, out_dir):
     #    that's only needed to match Monaspace, below)
     bases = {w: scp_base_at(vf_meta, w) for w in wghts}
 
-    # 2. Monaspace grafting: erode=False + simplify=False (see module
-    #    docstring). draw_clean is monkeypatched only for the duration of
-    #    this loop — every build.add_glyphs / replace_from_mona /
-    #    add_missing_from_mona call below resolves the bare name
-    #    `draw_clean` as build's own module global at call time.
-    original_draw_clean = build.draw_clean
-    build.draw_clean = lambda draws, pen: original_draw_clean(draws, pen, simplify=False)
-    try:
-        targets, monas = {}, {}
-        for w in wghts:
-            targets[w], monas[w] = graft_master(bases[w], mona_source, ref_angle,
-                                                sans_source, upright)
-    finally:
-        build.draw_clean = original_draw_clean
+    # 2. Monaspace grafting, the donors as masters (no erosion, no
+    #    overlap removal -- see the module docstring)
+    targets, monas = {}, {}
+    for w in wghts:
+        targets[w], monas[w] = graft_master(bases[w], mona_source, ref_angle,
+                                            sans_source, upright)
 
     # 3. glyph order must match across masters for varLib.build to merge
     #    the CFF2 charstrings at all
@@ -540,7 +513,7 @@ def build_style(style, env, out_dir):
         ("Source Code Pro", bases[default_wght]),
         ("Monaspace", monas[default_wght]),
         *([("Source Sans", sans_source.matched(targets[default_wght],
-                                               erode=False))] if italic else []))
+                                               master=True))] if italic else []))
 
     # 5. designspace: in-memory sources (no masters written to disk) at
     #    their SCP-linear design coordinate, the user axis map (varLib
@@ -630,8 +603,7 @@ def main():
     env = build.env_paths(dict.fromkeys(build_latin.VF_ENV))
     out_dir = build.ROOT / "dist" / "latin"
     styles = [only] if only else list(STYLES)
-    # the two styles are independent (and each monkeypatches module
-    # state, so separate processes): build them side by side
+    # the two styles are independent: build them side by side
     build.run_faces([(style, env, str(out_dir)) for style in styles], _build_style_job,
                     label=lambda job: job[0], on_result=lambda job, msg: print(msg),
                     pool_from=2)

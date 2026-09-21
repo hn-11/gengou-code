@@ -487,7 +487,7 @@ def test_guard_subtables_structure():
         ("less", "hyphen"): "lig_lh",
     }
 
-    subtables = build._guard_subtables(font, None, ligatures, 0)
+    subtables = build._guard_subtables(font, ligatures, 0)
     assert len(subtables) == 1
     st = subtables[0]
     assert st.Format == 1
@@ -670,7 +670,7 @@ def test_guard_subtables_keep_the_skip_only_for_lookahead_guards():
                    "lig_gge", "lig_ee", "lig_eee"]
     font = _tt_font(glyph_order, {ord(">"): "greater", ord("="): "equal"},
                     {g: 600 for g in glyph_order})
-    subtables = build._guard_subtables(font, None, {
+    subtables = build._guard_subtables(font, {
         ("greater", "equal"): "lig_ge", ("greater", "greater"): "lig_gg",
         ("greater", "greater", "equal"): "lig_gge",
         ("equal", "equal"): "lig_ee",

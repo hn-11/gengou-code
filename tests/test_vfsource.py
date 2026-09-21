@@ -81,8 +81,8 @@ def test_floor_clamps_and_reports_the_surplus(vf_path):
     inst = src.matched(30)            # thinner than the wght-200 floor (40)
     assert inst.wght == pytest.approx(200, abs=1.5)
     assert inst.erode == pytest.approx(5, abs=0.2)   # 10u surplus, per side
-    assert build.bar_thickness(src.matched(30, erode=False), "equal") == pytest.approx(40, abs=0.2)
-    assert not hasattr(src.matched(30, erode=False), "erode")
+    assert build.bar_thickness(src.matched(30, master=True), "equal") == pytest.approx(40, abs=0.2)
+    assert not hasattr(src.matched(30, master=True), "erode")
 
 
 def test_matched_caches_by_rounded_target(vf_path):
@@ -90,7 +90,7 @@ def test_matched_caches_by_rounded_target(vf_path):
     a = src.matched(70)
     assert src.matched(70.3) is a
     assert src.matched(71) is not a
-    assert src.matched(70, erode=False) is not a
+    assert src.matched(70, master=True) is not a
 
 
 def test_search_probes_without_instancing(vf_path, monkeypatch):

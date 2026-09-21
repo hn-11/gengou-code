@@ -145,7 +145,8 @@ def add_missing_from_mona(font, mona, chars, dy, k):
         if cp in cmap or cp not in mona_cm:
             continue
         pen = build.T2CharStringPen(build.pen_width(private, CELL), mona_gs)
-        build.draw_clean([(mona_gs, mona_cm[cp], build.mona_transform(mona, 0, dy, k))], pen)
+        build.draw_clean([(mona_gs, mona_cm[cp], build.mona_transform(mona, 0, dy, k))],
+                         pen, simplify=not build.keeps_overlaps(mona))
         name = build.alloc_glyph_name(font)
         build.append_glyph(font, td, name, pen.getCharString(private=private),
                            fd_index, CELL, None, vdon)
@@ -230,7 +231,8 @@ def add_missing_from_sans(font, sans, upright):
                                     build.LETTER_BEARING)
             condensed += sx != 1.0
             pen = build.T2CharStringPen(build.pen_width(private, CELL), sans_gs)
-            build.draw_clean([(sans_gs, src, (sx, 0, 0, 1, dx, 0))], pen)
+            build.draw_clean([(sans_gs, src, (sx, 0, 0, 1, dx, 0))], pen,
+                             simplify=not build.keeps_overlaps(sans))
             name = build.alloc_glyph_name(font)
             build.append_glyph(font, td, name, pen.getCharString(private=private),
                                fd_index, CELL, None, vdon)
@@ -332,18 +334,7 @@ def build_face(job):
     base = static_base(_copy_instance(scp))
     round_outlines(base)
     fix_zone_order(base)
-    dy = build.mona_baseline_shift(base, mona, MONA_K)
-    alts = {}
-    added = build.add_glyphs(base, mona, alts, build.LIGATURES, dy, cell=CELL)
-    build.replace_from_mona(base, mona,
-                            build.MONA_STANDALONE + build.MONA_AMBIGUOUS, dy, MONA_K)
-    add_missing_from_mona(base, mona, build.MONA_AMBIGUOUS, dy, MONA_K)
-    if sans is not None:
-        add_missing_from_sans(base, sans, upright_cmap(env["SCP_VF_U"]))
-    remap_scp_stylistic_sets(base)
-    build.add_gsub(base, added, alts, build.LIGATURES)
-    if "DSIG" in base:
-        del base["DSIG"]
+    added = graft(base, mona, sans, upright_cmap(env["SCP_VF_U"]) if sans else None)
     use_typo_metrics(base)
     base["OS/2"].recalcUnicodeRanges(base)
     build.recalc_codepage_range(base)
@@ -380,6 +371,32 @@ def build_face(job):
     build.write_face(base, out, base.getGlyphOrder())
     return (f"{label}: wght {wght} bar {target:.1f} ligs={len(added)} "
             f"glyphs={base['maxp'].numGlyphs} -> {out.name}")
+
+
+def graft(base, mona, sans=None, upright=None):
+    """The Latin layer's grafts onto one Source Code Pro instance, in
+    place: Monaspace's ligatures and the punctuation they are cut with
+    (at the baseline shift that aligns the two '=' signs), the
+    characters Source Code Pro lacks, for an italic Source Sans's Greek
+    and Cyrillic (`sans`, bounded by the upright's codepoints
+    `upright`), then the stylistic-set remap and the GSUB the ligatures
+    need. Returns add_glyphs' {sequence: ligature glyph}. The static
+    faces and every master of the variable fonts take exactly this
+    sequence; what differs between them is the donor instances passed
+    in (a master's are matched with master=True)."""
+    dy = build.mona_baseline_shift(base, mona, MONA_K)
+    alts = {}
+    added = build.add_glyphs(base, mona, alts, build.LIGATURES, dy, cell=CELL)
+    build.replace_from_mona(base, mona,
+                            build.MONA_STANDALONE + build.MONA_AMBIGUOUS, dy, MONA_K)
+    add_missing_from_mona(base, mona, build.MONA_AMBIGUOUS, dy, MONA_K)
+    if sans is not None:
+        add_missing_from_sans(base, sans, upright)
+    remap_scp_stylistic_sets(base)
+    build.add_gsub(base, added, alts, build.LIGATURES)
+    if "DSIG" in base:
+        del base["DSIG"]
+    return added
 
 
 def upright_cmap(path):
