@@ -41,7 +41,9 @@ from fontTools.pens.t2CharStringPen import T2CharStringPen
 from fontTools.ttLib import TTFont
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import anchors  # noqa: E402
 import build  # noqa: E402
+import vfsource  # noqa: E402
 from verifylib import static_faces  # noqa: E402
 
 CELL = build.CELL   # 600
@@ -56,7 +58,7 @@ def static_base(scp):
     by the CFF charset's cid names (the VF's post names are gone with
     CFF2's charset; fontTools rebuilds a format-3 post), and hmtx left
     side bearings measured from the instanced outlines (the instancer
-    leaves the VF's default-master bearings in place — build.sync_lsb)."""
+    leaves the VF's default-master bearings in place — vfsource.sync_lsb)."""
     inst = scp
     convertCFF2ToCFF(inst)
     inst.recalcBBoxes = False
@@ -64,7 +66,7 @@ def static_base(scp):
     inst.save(buf)
     buf.seek(0)
     base = TTFont(buf)
-    build.sync_lsb(base)
+    vfsource.sync_lsb(base)
     return base
 
 
@@ -91,7 +93,7 @@ def round_outlines(font):
         pen = T2CharStringPen(build.pen_width(private, hmtx[name][0]), gs)
         build.draw_clean([(gs, name, (1, 0, 0, 1, 0, 0))], pen)
         build.set_charstring(td, name, pen.getCharString(private=private))
-    build.sync_lsb(font)
+    vfsource.sync_lsb(font)
 
 
 # the Private-dict entries the CFF spec stores as integer deltas or
@@ -142,15 +144,15 @@ def add_missing_from_mona(font, mona, chars, dy, k):
     """Characters Source Code Pro lacks but Monaspace has (⇔): append the
     one-cell Monaspace glyph and map it."""
     td, cmap, fd_index, private, vdon = build.append_context(font)
-    mona_cm, mona_gs = mona.getBestCmap(), build.mona_glyphset(mona)
+    mona_cm, mona_gs = mona.getBestCmap(), vfsource.mona_glyphset(mona)
     new = {}
     for ch in chars:
         cp = ord(ch)
         if cp in cmap or cp not in mona_cm:
             continue
         pen = build.T2CharStringPen(build.pen_width(private, CELL), mona_gs)
-        build.draw_clean([(mona_gs, mona_cm[cp], build.mona_transform(mona, 0, dy, k))],
-                         pen, simplify=not build.keeps_overlaps(mona))
+        build.draw_clean([(mona_gs, mona_cm[cp], vfsource.mona_transform(mona, 0, dy, k))],
+                         pen, simplify=not vfsource.keeps_overlaps(mona))
         name = build.alloc_glyph_name(font)
         build.append_glyph(font, td, name, pen.getCharString(private=private),
                            fd_index, CELL, None, vdon)
@@ -236,7 +238,7 @@ def add_missing_from_sans(font, sans, upright):
             condensed += sx != 1.0
             pen = build.T2CharStringPen(build.pen_width(private, CELL), sans_gs)
             build.draw_clean([(sans_gs, src, (sx, 0, 0, 1, dx, 0))], pen,
-                             simplify=not build.keeps_overlaps(sans))
+                             simplify=not vfsource.keeps_overlaps(sans))
             name = build.alloc_glyph_name(font)
             build.append_glyph(font, td, name, pen.getCharString(private=private),
                                fd_index, CELL, None, vdon)
@@ -247,12 +249,12 @@ def add_missing_from_sans(font, sans, upright):
             donor_map.setdefault(src, []).append(name)
             placements[name] = (sx, dx)
     build.set_cmap(font, new, add_new=True)
-    anchors = build.import_donor_base_anchors(font, sans, donor_map, placements)
-    taken_apart = build.import_donor_decompositions(font, sans, donor_map)
+    anchored = anchors.import_donor_base_anchors(font, sans, donor_map, placements)
+    taken_apart = anchors.import_donor_decompositions(font, sans, donor_map)
     print(f"  Greek and Cyrillic from Source Sans: "
-          f"{len(new)} ({condensed} condensed, {anchors} base anchors, "
+          f"{len(new)} ({condensed} condensed, {anchored} base anchors, "
           f"{taken_apart} decomposed)")
-    return len(new), condensed, anchors
+    return len(new), condensed, anchored
 
 
 def remap_scp_stylistic_sets(font):
@@ -313,24 +315,24 @@ def build_face(job):
     weight, italic, env, out_dir = job
     label = f"{weight}{' Italic' if italic else ''}"
     wght = build.WEIGHT_CLASS[weight]
-    scp_src = build._vf_source(env["SCP_VF_I" if italic else "SCP_VF_U"], 1.0,
+    scp_src = vfsource._vf_source(env["SCP_VF_I" if italic else "SCP_VF_U"], 1.0,
                                {"wght": 0})
     # SCP's exact blend at its named instance's wght; round_outlines
     # rounds it point by point below (the instancer's own operand
     # rounding drifts an outline several units along a path —
-    # build.unrounded_cff2_instancing)
-    with build.unrounded_cff2_instancing():
+    # vfsource.unrounded_cff2_instancing)
+    with vfsource.unrounded_cff2_instancing():
         scp = scp_src.at(wght)
     # the stroke weight Monaspace is matched to: this instance's own bar
     target = build.bar_thickness(scp, scp.getBestCmap()[ord("=")])
     ref_angle = (scp["post"].italicAngle or -12.0) if italic else None
-    mona_src = build._vf_source(env["MONA_VF"], MONA_K,
+    mona_src = vfsource._vf_source(env["MONA_VF"], MONA_K,
                                 {"wght": 0, "wdth": 100, "slnt": 0})
     mona = mona_src.matched(target, ref_angle)
     # the italic faces' Greek and Cyrillic, matched on the same '=' bar
     # as Monaspace is. No slant argument: Source Sans ships a drawn
     # italic at the same -11 degrees, so there is no residual to shear
-    sans = (build._vf_source(env["SS_VF_I"], 1.0, {"wght": 0}).matched(target)
+    sans = (vfsource._vf_source(env["SS_VF_I"], 1.0, {"wght": 0}).matched(target)
             if italic else None)
     credits = credits_from(("Source Code Pro", scp), ("Monaspace", mona),
                            *([("Source Sans", sans)] if italic else []))
@@ -348,11 +350,11 @@ def build_face(job):
                          ref_angle if ref_angle is not None else -12.0,
                          version=env.get("GENGOU_VERSION"), credits=credits,
                          family_base=FAMILY, ps_base=PS_FAMILY, base_credit=None)
-    build.classify_unicode_marks(base)
+    anchors.classify_unicode_marks(base)
     # after classify_unicode_marks, which is what makes the shaper treat
     # these as marks (and so zero their spacing advance) in the first
     # place; before the bbox, which the new anchors do not move
-    loose = build.anchor_loose_letters(base)
+    loose = anchors.anchor_loose_letters(base)
     if loose < LOOSE_FLOOR:
         # a count, not a truthiness test: one rule turned away leaves the
         # rest placing thousands, and a pass that placed 37 letters where
@@ -361,17 +363,17 @@ def build_face(job):
         # next character -- with every gate green
         raise RuntimeError(f"only {loose} letters were given a fitted base "
                            f"anchor, against a floor of {LOOSE_FLOOR}; "
-                           f"see build.anchor_loose_letters")
+                           f"see anchors.anchor_loose_letters")
     print(f"  letters given a fitted base anchor: {loose}")
     # the marks' side of the same gap, and the italic's stacked-accent
     # lift copied from the upright at this weight (both no-ops on the
     # upright; see the two functions)
-    print(f"  marks given a lookup's anchor: {build.anchor_loose_marks(base)}")
+    print(f"  marks given a lookup's anchor: {anchors.anchor_loose_marks(base)}")
     if italic:
-        with build.unrounded_cff2_instancing():
-            model = build._vf_source(env["SCP_VF_U"], 1.0, {"wght": 0}).at(wght)
+        with vfsource.unrounded_cff2_instancing():
+            model = vfsource._vf_source(env["SCP_VF_U"], 1.0, {"wght": 0}).at(wght)
         print(f"  stacked-accent anchors lifted as the upright's: "
-              f"{build.mirror_stack_lift(base, model)}")
+              f"{anchors.mirror_stack_lift(base, model)}")
     build.add_stat(base, weight, italic)
     build.prune_orphan_names(base)
     build.update_bbox(base)
@@ -397,10 +399,10 @@ def graft(base, mona, sans=None, upright=None):
     faces and every master of the variable fonts take exactly this
     sequence; what differs between them is the donor instances passed
     in (a master's are matched with master=True)."""
-    dy = build.mona_baseline_shift(base, mona, MONA_K)
+    dy = vfsource.mona_baseline_shift(base, mona, MONA_K)
     alts = {}
-    added = build.add_glyphs(base, mona, alts, build.LIGATURES, dy, cell=CELL)
-    build.replace_from_mona(base, mona,
+    added = vfsource.add_glyphs(base, mona, alts, build.LIGATURES, dy, cell=CELL)
+    vfsource.replace_from_mona(base, mona,
                             build.MONA_STANDALONE + build.MONA_AMBIGUOUS, dy, MONA_K)
     add_missing_from_mona(base, mona, build.MONA_AMBIGUOUS, dy, MONA_K)
     if sans is not None:

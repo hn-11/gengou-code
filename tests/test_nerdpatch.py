@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import build  # noqa: E402
 import nerdpatch  # noqa: E402
 import verifylib  # noqa: E402
+from conftest import make_cff_font  # noqa: E402
 
 
 @pytest.mark.parametrize("name, want", [
@@ -71,18 +72,15 @@ def _face(family="Gengou JP", ps="GengouJP-Regular", win=(1160, 288)):
     pen = T2CharStringPen(600, None)
     _rect(pen, 0, -280, 600, 1040)
     charstrings["uniE0B0"] = pen.getCharString()
-    fb = FontBuilder(1000, isTTF=False)
-    fb.setupGlyphOrder([".notdef", "A", "uniE0B0"])
-    fb.setupCharacterMap({ord("A"): "A", 0xE0B0: "uniE0B0"})
-    fb.setupCFF(ps, {"FullName": ps}, charstrings, {})
-    fb.setupHorizontalMetrics({".notdef": (600, 0), "A": (600, 50), "uniE0B0": (600, 0)})
-    fb.setupHorizontalHeader(ascent=984, descent=-273)
-    fb.setupNameTable({"familyName": family, "styleName": "Regular", "psName": ps,
-                       "uniqueFontIdentifier": f"5.0.0;GNGO;{ps}"})
-    fb.setupOS2(usWinAscent=win[0], usWinDescent=win[1])
-    fb.setupPost()
+    font = make_cff_font([".notdef", "A", "uniE0B0"], charstrings,
+                         {ord("A"): "A", 0xE0B0: "uniE0B0"},
+                         {".notdef": (600, 0), "A": (600, 50), "uniE0B0": (600, 0)},
+                         ps=ps, font_info={"FullName": ps}, ascent=984, descent=-273,
+                         names={"familyName": family, "styleName": "Regular", "psName": ps,
+                                "uniqueFontIdentifier": f"5.0.0;GNGO;{ps}"},
+                         os2={"usWinAscent": win[0], "usWinDescent": win[1]})
     buf = io.BytesIO()
-    fb.font.save(buf)
+    font.save(buf)
     buf.seek(0)
     return TTFont(buf)
 

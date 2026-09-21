@@ -14,6 +14,7 @@ from fontTools.varLib.models import piecewiseLinearMap
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
+import anchors  # noqa: E402
 import build  # noqa: E402
 import build_latin_vf as vf  # noqa: E402
 from conftest import make_font  # noqa: E402
@@ -214,7 +215,7 @@ def test_add_stat_family_form_italic_file_declares_ital_1():
     assert _stat_values(font)["ital"] == [("Italic", 1, 0, None)]
 
 
-# --- build.classify_unicode_marks -----------------------------------------
+# --- anchors.classify_unicode_marks -----------------------------------------
 
 def _font_with_gdef(cmap, classes):
     order = [".notdef", *sorted(set(cmap.values()))]
@@ -233,7 +234,7 @@ def test_classify_unicode_marks_marks_only_unclassified_mn():
     font = _font_with_gdef({0x41: "A", 0x300: "grave", 0x35F: "dblmacronbelow",
                             0x361: "dblinvbreve", 0x20DD: "enclcircle"},
                            {"A": 1, "grave": 3})
-    fixed = build.classify_unicode_marks(font)
+    fixed = anchors.classify_unicode_marks(font)
     assert sorted(fixed) == ["dblinvbreve", "dblmacronbelow"]
     defs = font["GDEF"].table.GlyphClassDef.classDefs
     assert defs["A"] == 1 and defs["grave"] == 3
@@ -244,7 +245,7 @@ def test_classify_unicode_marks_marks_only_unclassified_mn():
 def test_classify_unicode_marks_noop_without_gdef():
     font = _font_with_gdef({0x300: "grave"}, {})
     del font["GDEF"]
-    assert build.classify_unicode_marks(font) == []
+    assert anchors.classify_unicode_marks(font) == []
 
 
 # --- master_extents / master_scp_wghts seed guard ----------------------------

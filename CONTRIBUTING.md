@@ -14,7 +14,11 @@ pip install -r requirements.txt
 ビルドは2段階です。まず `scripts/build_latin.py` が Source Code Pro VF・
 Monaspace VF・Source Sans 3 VF Italic（斜体のギリシャ・キリル）から
 欧文レイヤー Gengou を `dist/latin` に組み、
-次に `scripts/build.py` がそれを Source Han Sans JP に接ぎ木します。
+次に `scripts/build.py` がそれを Source Han Sans JP に接ぎ木します
+（`build.py` は両段階の共通ヘルパーと JP の接ぎ木、`vfsource.py` は
+VF のインスタンス化と Monaspace の合成、`anchors.py` は欧文レイヤーが
+足す mark アンカー、`nerdpatch.py` は Nerd Fonts の接ぎ木、`verifylib.py`
+は 3 本の verifier が共有する検査）。
 それぞれが読む環境変数:
 
 | 変数 | 読むスクリプト | 内容 | 入手元 |

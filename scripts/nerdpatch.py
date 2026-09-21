@@ -92,6 +92,7 @@ Usage:
 Env (required): NF_SYMBOLS = path to SymbolsNerdFontMono-Regular.ttf
 """
 
+import math
 import os
 import re
 import sys
@@ -106,6 +107,7 @@ from fontTools.ttLib.tables._c_m_a_p import CmapSubtable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build  # noqa: E402
+from build import _bounds, _unwrap_pos  # noqa: E402
 from build_latin import fit_win_metrics  # noqa: E402
 from verifylib import static_faces  # noqa: E402
 
@@ -261,7 +263,7 @@ def graft_symbols(font, symbols):
     Returns (icons grafted, the names redrawn over the face's own glyphs
     — the only ones that had hints to lose —, {name: box} for every
     glyph written, and what the redrawn ones were before). The last two
-    are build.update_bbox_after's, so the extents can be widened by what
+    are update_bbox_after's, so the extents can be widened by what
     this touched instead of measured over all 30,000 glyphs."""
     scm, sgs = symbols.getBestCmap(), symbols.getGlyphSet()
     ctx = icon_context(font, symbols)
@@ -320,7 +322,7 @@ def graft_symbols(font, symbols):
             # what it was, before the outline goes: update_bbox_after
             # cannot take a contribution back out of an aggregate, so it
             # has to be told what it is losing
-            dropped.update(build.glyph_extent_state(font, [name]))
+            dropped.update(glyph_extent_state(font, [name]))
             pen = T2CharStringPen(build.pen_width(own, cell), sgs)
             sgs[scm[cp]].draw(TransformPen(pen, xform))
             cs = pen.getCharString(private=own)
@@ -354,7 +356,7 @@ def graft_symbols(font, symbols):
     # the Term faces carry a contextual rule whose backtrack is every
     # glyph the widening did not move; these icons are one cell and were
     # appended after it ran, so they have to join it (build.py)
-    build.extend_realign_bases(font, new.values())
+    extend_realign_bases(font, new.values())
     return len(new) + len(replaced), list(replaced), written, dropped
 
 
@@ -587,7 +589,7 @@ def patch_face(src, out_dir, symbols_path):
     # 19,500 this pass never touched). False when one of the redrawn
     # Powerline glyphs was holding an extreme up, and then there is
     # nothing for it but to measure
-    if not build.update_bbox_after(font, written, dropped):
+    if not update_bbox_after(font, written, dropped):
         build.update_bbox(font)
     if covered:
         # the source's win metrics covered its box (Gengou's policy):
@@ -662,6 +664,168 @@ def main():
     jobs = [(src, out_dir, env["NF_SYMBOLS"]) for src, out_dir in sources]
     build.run_faces(jobs, _job, label=lambda job: Path(job[0]).name,
                     on_result=lambda job, out: None)
+
+# --- the bbox after a graft (moved from build.py: only this file appends
+# glyphs to a finished face) ---
+
+def extend_realign_bases(font, names):
+    """Add `names` to the backtrack of the Term mark correction, for
+    glyphs appended after widen_fullwidth ran. Returns the number of
+    subtables extended.
+
+    realign_halfwidth_marks freezes its backtrack at widening time — the
+    glyphs the widening did not move — and nerdpatch.py then appends
+    10,402 one-cell icons to the finished face. None of them were in it,
+    so in GengouJPTermNFM-* a full-width mark after an icon kept the
+    widening's -100: U+F120 + U+20DD drew the ring at -465..465 where
+    the same one-cell base two rows up puts it at -365..565."""
+    gpos = getattr(font.get("GPOS"), "table", None)
+    if gpos is None or not names:
+        return 0
+    gid = font.getGlyphID
+    ours = set()
+    for fr in gpos.FeatureList.FeatureRecord:
+        if fr.FeatureTag == "dist":
+            ours.update(fr.Feature.LookupListIndex)
+    done = 0
+    for index in sorted(ours):
+        kind, subtables = _unwrap_pos(gpos.LookupList.Lookup[index])
+        if kind != 8:
+            continue
+        for sub in subtables:
+            covs = getattr(sub, "BacktrackCoverage", None)
+            if not covs:
+                continue
+            cov = covs[-1]      # the base, behind the run of marks
+            cov.glyphs = sorted(set(cov.glyphs) | set(names), key=gid)
+            done += 1
+    return done
+
+
+def glyph_extent_state(font, names):
+    """What update_bbox_after needs to know about glyphs a pass is about
+    to rewrite: {name: (box, hmtx pair, vmtx pair or None)} as they are
+    now. Read before the outline is swapped, or the old state is gone."""
+    gs = font.getGlyphSet()
+    return {n: (_bounds(gs, n),
+                font["hmtx"].metrics[n],
+                font["vmtx"].metrics[n] if "vmtx" in font else None)
+            for n in names}
+
+
+def _extent_candidates(box, metrics, axis):
+    """What one glyph offers each of the four extents _update_extents
+    computes: (advance, side bearing, far-side bearing, extent), the
+    last three None for a glyph with no ink."""
+    adv, sb = metrics
+    if box is None:
+        return adv, None, None, None
+    size = int(math.ceil(box[2 + axis]) - math.floor(box[axis]))
+    return adv, sb, adv - sb - size, sb + size
+
+
+def _loses_extent(table, fields, old, new, axis):
+    """Whether rewriting one glyph can lower any of `table`'s extents.
+
+    Only where the old outline was holding an extreme up AND the new one
+    does not reach it: a rewrite that keeps the advance, or draws at
+    least as far, takes nothing away. Being strict about the advance
+    alone would refuse every face here, since the glyphs the graft
+    redraws keep the cell they had."""
+    was = _extent_candidates(*old, axis)
+    now = _extent_candidates(*new, axis)
+    for i, (field, better) in enumerate(zip(fields, (max, min, min, max))):
+        if was[i] is None or was[i] != getattr(table, field):
+            continue                      # it was not holding this one up
+        # safe only where the new outline reaches at least as far as the
+        # one it replaced, so the extreme survives in the same glyph
+        if now[i] is None or better(was[i], now[i]) != now[i]:
+            return True
+    return False
+
+
+def update_bbox_after(font, written, dropped):
+    """Set the extents after a pass that appended glyphs and rewrote a
+    named few, without measuring the ones it left alone. Returns True
+    when it could, False when the caller has to measure the font whole.
+
+    The face arrives carrying the extents of everything it had —
+    update_bbox set them when it was built — so the new values are those
+    combined with what this pass wrote. Combining only runs one way: a
+    maximum can take another candidate, but it cannot give one back. A
+    glyph the pass REWROTE is therefore a problem exactly when its old
+    outline was holding one of those extremes up, because the old
+    aggregate is then too generous and nothing short of measuring says
+    by how much. `dropped` is what those glyphs were
+    (glyph_extent_state), each is checked against every extreme, and a
+    hit returns False rather than a guess.
+
+    `written`: {name: box or None} for every glyph the pass wrote.
+    """
+    head = font["head"]
+    hbox = (head.xMin, head.yMin, head.xMax, head.yMax)
+    hh = ("advanceWidthMax", "minLeftSideBearing",
+          "minRightSideBearing", "xMaxExtent")
+    vv = ("advanceHeightMax", "minTopSideBearing",
+          "minBottomSideBearing", "yMaxExtent")
+    horizontal = "hmtx" in font and "hhea" in font
+    vertical = "vmtx" in font and "vhea" in font
+    for name, (box, hm, vm) in dropped.items():
+        now = written.get(name)
+        if box is not None:
+            edges = ((math.floor(box[0]), hbox[0], math.floor, min, 0),
+                     (math.floor(box[1]), hbox[1], math.floor, min, 1),
+                     (math.ceil(box[2]), hbox[2], math.ceil, max, 2),
+                     (math.ceil(box[3]), hbox[3], math.ceil, max, 3))
+            for was, edge, round_to, better, i in edges:
+                if was != edge:
+                    continue              # it was not holding this edge
+                if now is None or better(was, round_to(now[i])) != round_to(now[i]):
+                    return False
+        if horizontal and _loses_extent(font["hhea"], hh, (box, hm),
+                                        (now, font["hmtx"].metrics[name]), 0):
+            return False
+        if vertical and vm is not None and _loses_extent(
+                font["vhea"], vv, (box, vm),
+                (now, font["vmtx"].metrics[name]), 1):
+            return False
+
+    inked = {n: b for n, b in written.items() if b is not None}
+    box = [min([hbox[0]] + [math.floor(b[0]) for b in inked.values()]),
+           min([hbox[1]] + [math.floor(b[1]) for b in inked.values()]),
+           max([hbox[2]] + [math.ceil(b[2]) for b in inked.values()]),
+           max([hbox[3]] + [math.ceil(b[3]) for b in inked.values()])]
+    if "CFF2" not in font:
+        cff = font["CFF "].cff
+        cff[cff.fontNames[0]].FontBBox = box
+    head.xMin, head.yMin, head.xMax, head.yMax = box
+    if horizontal:
+        _extend_extents(font["hhea"], hh, font["hmtx"].metrics,
+                        written, inked, 0)
+    if vertical:
+        _extend_extents(font["vhea"], vv, font["vmtx"].metrics,
+                        written, inked, 1)
+    return True
+
+
+def _extend_extents(table, fields, metrics, written, inked, axis):
+    """_update_extents' four numbers, widened by the glyphs one pass
+    wrote instead of recomputed over every glyph in the font."""
+    adv_max, min_sb, min_far, max_extent = fields
+    advances = [metrics[n][0] for n in written if n in metrics]
+    if advances:
+        setattr(table, adv_max, max(getattr(table, adv_max), *advances))
+    sizes = {n: int(math.ceil(b[2 + axis]) - math.floor(b[axis]))
+             for n, b in inked.items() if n in metrics}
+    if not sizes:
+        return
+    sb = {n: metrics[n][1] for n in sizes}
+    setattr(table, min_sb, min(getattr(table, min_sb), *sb.values()))
+    setattr(table, min_far, min(getattr(table, min_far),
+                                *(metrics[n][0] - sb[n] - sizes[n]
+                                  for n in sizes)))
+    setattr(table, max_extent, max(getattr(table, max_extent),
+                                   *(sb[n] + sizes[n] for n in sizes)))
 
 
 if __name__ == "__main__":

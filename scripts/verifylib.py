@@ -15,6 +15,7 @@ from fontTools.pens.boundsPen import BoundsPen
 from fontTools.varLib.models import piecewiseLinearMap
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import anchors  # noqa: E402
 import build  # noqa: E402
 
 # every Type 2 hint operator; a glyph carrying any of them counts as hinted
@@ -459,7 +460,7 @@ def check_stat(tf, check, weight, italic):
 def check_gdef_marks(tf, check, cmap):
     """GDEF is there and every combining mark in the cmap is class 3.
 
-    build.classify_unicode_marks exists because the donor leaves two of
+    anchors.classify_unicode_marks exists because the donor leaves two of
     them (U+035F, U+0361 — the double tie bars) unclassed, and a mark a
     shaper reads as a base glyph positions as one. verify.py required
     GDEF on the JP faces; the Latin faces and the variable fonts, where
@@ -716,7 +717,7 @@ MARK_FEATURES = frozenset({"mark", "abvm", "blwm", "vert"})
 MKMK_FEATURES = frozenset({"mkmk", "vert"})
 # the combining marks the donor anchors on a handful of letters only
 # (a lookup of 1-4 bases each: the left angle above, the horn, the
-# tilde overlay) and no rule extends -- see build.anchor_loose_letters.
+# tilde overlay) and no rule extends -- see anchors.anchor_loose_letters.
 # Every other Latin mark must reach every letter
 SPARSE_MARKS = frozenset({0x031A, 0x031B, 0x0334})
 MARK_RANGES = ((0x0300, 0x036F), (0x1AB0, 0x1AFF), (0x1DC0, 0x1DFF))
@@ -745,7 +746,7 @@ _ANCHOR_X_SLACK = 0.167      # measured 70 of 600
 _ANCHOR_X_FROM_CENTRE = 0.60  # measured 0.42 Latin, 0.51 JP
 _ANCHOR_Y_PAST_EDGE = 150    # measured 40 / 48
 _ANCHOR_Y_INTO_INK = 350     # measured 184 / 197
-# the rule a lookup's anchors follow (build._anchor_rule: a median
+# the rule a lookup's anchors follow (anchors._anchor_rule: a median
 # offset from the ink centre and from the ink edge) is itself bounded:
 # a uniform drift of every anchor passes each anchor's own band and
 # moves the fit instead. Measured over every face: dx 0..58 above and
@@ -780,7 +781,7 @@ _MARK_Y_FROM_EDGE = {True: (-150, 40), False: (-60, 180)}
 CLEAR_BASES = "bdfhklt"
 CLEAR_MARKS = STACKABLE_MARKS + "\u030c"
 _BOPOMOFO = frozenset(range(0x3100, 0x3130)) | frozenset(range(0x31A0, 0x31C0))
-DOUBLE_SPAN = build.DOUBLE_SPAN
+DOUBLE_SPAN = anchors.DOUBLE_SPAN
 
 
 def ink_spill(bounds, advance, cmap, cell):
@@ -854,7 +855,7 @@ def _letters(tf, gs):
     letters = {g for cp, g in cmap.items()
                if any(lo <= cp <= hi for lo, hi in LETTER_RANGES)
                and unicodedata.category(chr(cp)).startswith("L")}
-    letters |= build._letter_variants(tf, letters)
+    letters |= anchors._letter_variants(tf, letters)
     return {g for g in letters if build._bounds(gs, g)}
 
 
@@ -945,7 +946,7 @@ def check_anchor_placement(tf, check, gs, label=""):
     themselves. A base anchor must lie inside the letter's ink plus a
     sixth of the advance, within 0.6 of the advance from the ink's
     centre, and on the right side of whichever ink edge its lookup's
-    own anchors track (build._anchor_rule); a NULL anchor in a one-
+    own anchors track (anchors._anchor_rule); a NULL anchor in a one-
     class lookup is an anchor that places nothing (mutant 5). The
     fitted rule's own offsets are bounded too, since a uniform drift of
     every anchor moves the fit rather than any anchor's residual
@@ -980,7 +981,7 @@ def check_anchor_placement(tf, check, gs, label=""):
         return None
 
     for i, sub in _mark_base_subtables(tf):
-        rule = build._anchor_rule(gs, sub)
+        rule = anchors._anchor_rule(gs, sub)
         top = rule[0] if rule else None
         if rule and (abs(rule[1]) > _RULE_DX[rule[0]] * max(hmtx[g][0] for g in sub.BaseCoverage.glyphs)
                      or abs(rule[2]) > _RULE_DY):
@@ -1049,7 +1050,7 @@ def check_anchor_coverage(tf, check, gs, label=""):
     letter: the lookups covering the mark cover, between them, every
     letter and every variant GSUB makes of one.
 
-    build.anchor_loose_letters' own invariant, read back by mark rather
+    anchors.anchor_loose_letters' own invariant, read back by mark rather
     than by lookup. Read by lookup, "a lookup with fewer bases than the
     rule needs is the donor's own and asks nothing" excused a lookup
     cut from 833 bases to 15 (mutant 12): the fewer bases survived,

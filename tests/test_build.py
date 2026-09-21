@@ -18,8 +18,11 @@ from fontTools.ttLib.tables import otTables
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import anchors  # noqa: E402
 import build  # noqa: E402
-from conftest import make_font  # noqa: E402
+import nerdpatch  # noqa: E402
+import vfsource  # noqa: E402
+from conftest import make_cff_font, make_font  # noqa: E402
 
 # --- SCP feature tag remapping -------------------------------------------
 
@@ -433,7 +436,7 @@ def test_erode_path_shrinks_every_side():
     pen.lineTo((100, 30))
     pen.lineTo((0, 30))
     pen.closePath()
-    out = build.erode_path(bar, 5)
+    out = vfsource.erode_path(bar, 5)
     assert tuple(round(v) for v in out.bounds) == (5, 5, 95, 25)
 
 
@@ -444,11 +447,11 @@ def test_mona_glyphset_only_erodes_when_floor_was_hit():
         def getGlyphSet(self):
             return self.gs
     m = Mona()
-    assert build.mona_glyphset(m) is m.gs   # no erode attr
+    assert vfsource.mona_glyphset(m) is m.gs   # no erode attr
     m.erode = 0.2
-    assert build.mona_glyphset(m) is m.gs   # below threshold
+    assert vfsource.mona_glyphset(m) is m.gs   # below threshold
     m.erode = 6.0
-    assert isinstance(build.mona_glyphset(m), build._ErodedGlyphSet)
+    assert isinstance(vfsource.mona_glyphset(m), vfsource._ErodedGlyphSet)
 
 
 # --- tiny TTF fixtures for the tests below --------------------------------
@@ -805,17 +808,10 @@ def _cff_font():
         pen.closePath()
         charstrings[g] = pen.getCharString()
 
-    fb = FontBuilder(1000, isTTF=False)
-    fb.setupGlyphOrder(glyph_order)
-    fb.setupCharacterMap({ord("A"): "A"})
-    fb.setupCFF("TestPS", {"FullName": "Test Full", "FamilyName": "Test Family"},
-               charstrings, {})
-    fb.setupHorizontalMetrics({".notdef": (0, 0), "A": (600, 0)})
-    fb.setupHorizontalHeader(ascent=800, descent=-200)
-    fb.setupNameTable({"familyName": "Test", "styleName": "Regular"})
-    fb.setupOS2()
-    fb.setupPost()
-    return fb.font
+    return make_cff_font(glyph_order, charstrings, {ord("A"): "A"},
+                         {".notdef": (0, 0), "A": (600, 0)}, ps="TestPS",
+                         font_info={"FullName": "Test Full", "FamilyName": "Test Family"},
+                         family="Test", style="Regular")
 
 
 def _cff_font_with_widths(widths, x0=0):
@@ -832,16 +828,9 @@ def _cff_font_with_widths(widths, x0=0):
         pen.lineTo((x0 + 100, 100))
         pen.closePath()
         charstrings[g] = pen.getCharString()
-    fb = FontBuilder(1000, isTTF=False)
-    fb.setupGlyphOrder(glyph_order)
-    fb.setupCharacterMap({0xE000 + i: g for i, g in enumerate(widths)})
-    fb.setupCFF("T", {}, charstrings, {})
-    fb.setupHorizontalMetrics({".notdef": (0, 0), **{g: (w, x0) for g, w in widths.items()}})
-    fb.setupHorizontalHeader(ascent=800, descent=-200)
-    fb.setupNameTable({"familyName": "T", "styleName": "R"})
-    fb.setupOS2()
-    fb.setupPost()
-    return fb.font
+    return make_cff_font(glyph_order, charstrings,
+                         {0xE000 + i: g for i, g in enumerate(widths)},
+                         {".notdef": (0, 0), **{g: (w, x0) for g, w in widths.items()}})
 
 
 def test_append_glyph_takes_the_donor_s_vertical_origin_not_its_bearing():
@@ -1752,20 +1741,15 @@ def _extents_font():
             pen.lineTo((x0, y1))
             pen.closePath()
         charstrings[g] = pen.getCharString()
-    fb = FontBuilder(1000, isTTF=False)
-    fb.setupGlyphOrder(glyph_order)
-    fb.setupCharacterMap({ord("A"): "A", ord("B"): "B", ord(" "): "space"})
-    fb.setupCFF("Test", {"FullName": "Test"}, charstrings, {})
-    fb.setupHorizontalMetrics({".notdef": (600, 0), "A": (600, 20),
-                               "B": (700, -40), "space": (600, 0)})
-    fb.setupHorizontalHeader(ascent=800, descent=-200)
-    fb.setupVerticalMetrics({g: (1000, 100) for g in glyph_order})
-    fb.setupVerticalHeader(ascent=880, descent=-120)
-    fb.setupNameTable({"familyName": "Test", "styleName": "Regular"})
-    fb.setupOS2()
-    fb.setupPost()
+    font = make_cff_font(glyph_order, charstrings,
+                         {ord("A"): "A", ord("B"): "B", ord(" "): "space"},
+                         {".notdef": (600, 0), "A": (600, 20), "B": (700, -40),
+                          "space": (600, 0)},
+                         ps="Test", font_info={"FullName": "Test"},
+                         family="Test", style="Regular",
+                         vmetrics={g: (1000, 100) for g in glyph_order}, vhea=(880, -120))
     buf = io.BytesIO()
-    fb.font.save(buf)
+    font.save(buf)
     buf.seek(0)
     return TTFont(buf), boxes
 
@@ -1821,11 +1805,11 @@ def test_sync_lsb_sets_bearings_from_the_outlines():
     metrics["A"] = (600, 0)          # stale: the outline starts at 20
     metrics["space"] = (600, 7)      # blank glyph: left alone
 
-    assert build.sync_lsb(font) == 1
+    assert vfsource.sync_lsb(font) == 1
 
     assert metrics["A"] == (600, 20) and metrics["B"] == (700, -40)
     assert metrics["space"] == (600, 7)
-    assert build.sync_lsb(font) == 0
+    assert vfsource.sync_lsb(font) == 0
 
 
 def test_fit_to_grid_stretches_a_tiling_glyph_into_its_step():
@@ -1894,29 +1878,20 @@ def _vtiling_font():
                 pen.lineTo(pt)
             pen.closePath()
         charstrings[g] = pen.getCharString()
-    fb = FontBuilder(1000, isTTF=False)
-    fb.setupGlyphOrder(order)
-    fb.setupCharacterMap({0x2502: "vrule1", 0x2588: "block1",
-                          0x2581: "eighth1", 0x2580: "upper1",
-                          0x2506: "dash1", 0x2541: "diag1",
-                          0x2592: "shade1", 0x2500: "hrule1",
-                          0x2503: "heavy1"})
-    fb.setupCFF("T", {}, charstrings, {})
     metrics = {".notdef": (0, 0)}
     for g in order[1:]:
         wide = g.endswith("F") or g == "heavy1"
         box = min(pt[0] for c in shapes[g] for pt in c)
         metrics[g] = (1000 if wide else 600, box)
-    fb.setupHorizontalMetrics(metrics)
-    fb.setupHorizontalHeader(ascent=984, descent=-273)
-    fb.setupNameTable({"familyName": "T", "styleName": "R"})
-    fb.setupOS2()
-    fb.setupPost()
-    fb.addOpenTypeFeatures("feature fwid {\n" + "".join(
+    font = make_cff_font(order, charstrings,
+                         {0x2502: "vrule1", 0x2588: "block1", 0x2581: "eighth1",
+                          0x2580: "upper1", 0x2506: "dash1", 0x2541: "diag1",
+                          0x2592: "shade1", 0x2500: "hrule1", 0x2503: "heavy1"},
+                         metrics, ascent=984, descent=-273)
+    _with_gsub(font, "feature fwid {\n" + "".join(
         f"  sub {one} by {one[:-1]}F;\n"
         for one in ("vrule1", "block1", "eighth1", "upper1", "dash1",
                     "diag1", "shade1", "hrule1")) + "} fwid;\n")
-    font = fb.font
     # a character whose full-width form is the glyph itself: feaLib will
     # not write `sub X by X`, so it goes straight into the table
     gsub = font["GSUB"].table
@@ -2396,12 +2371,12 @@ def test_extend_realign_bases_adds_glyphs_appended_after_the_widening():
     assert build.realign_halfwidth_marks(font, {"mark": -100}, {"cjk": 100}) == 1
     chain = font["GPOS"].table.LookupList.Lookup[-1]
     assert chain.SubTable[0].BacktrackCoverage[-1].glyphs == ["half"]
-    assert build.extend_realign_bases(font, ["cjk", "half"]) == 4
+    assert nerdpatch.extend_realign_bases(font, ["cjk", "half"]) == 4
     gid = font.getGlyphID
     for sub in chain.SubTable:
         names = sub.BacktrackCoverage[-1].glyphs
         assert names == sorted(set(names), key=gid) == sorted(["half", "cjk"], key=gid)
-    assert build.extend_realign_bases(font, []) == 0
+    assert nerdpatch.extend_realign_bases(font, []) == 0
 
 
 def _ligature(components, name):
@@ -2449,7 +2424,7 @@ def test_classify_unicode_marks_follows_a_mark_through_its_substitutes():
         gsub.table.LookupList.Lookup.append(lookup)
     font["GSUB"] = gsub
 
-    fixed = build.classify_unicode_marks(font)
+    fixed = anchors.classify_unicode_marks(font)
     classes = font["GDEF"].table.GlyphClassDef.classDefs
     # the cmap'd mark, its variant, the variant's variant, and the
     # stack of two marks — but not the ligature a base takes part in
@@ -2457,7 +2432,7 @@ def test_classify_unicode_marks_follows_a_mark_through_its_substitutes():
     assert classes["stack"] == 3
     assert classes["mark"] == classes["cap"] == classes["capalt"] == 3
     assert classes["base"] == 1 and "lig" not in classes
-    assert build.classify_unicode_marks(font) == []      # idempotent
+    assert anchors.classify_unicode_marks(font) == []      # idempotent
 
 
 class _Tbl:
@@ -2687,7 +2662,7 @@ def _extent_font(*, box=(0, -200, 600, 800), hhea=(600, 10, 20, 500),
 
 def test_update_bbox_after_widens_the_box_and_the_extents():
     font = _extent_font(hmtx={"icon": (600, 30)})
-    assert build.update_bbox_after(font, {"icon": (30, -300, 700, 900)}, {})
+    assert nerdpatch.update_bbox_after(font, {"icon": (30, -300, 700, 900)}, {})
     head = font["head"]
     assert (head.xMin, head.yMin, head.xMax, head.yMax) == (0, -300, 700, 900)
     assert font["CFF "].cff["T"].FontBBox == [0, -300, 700, 900]
@@ -2701,7 +2676,7 @@ def test_update_bbox_after_widens_the_box_and_the_extents():
 
 def test_update_bbox_after_leaves_extents_a_new_glyph_cannot_beat():
     font = _extent_font(hmtx={"icon": (600, 100)})
-    assert build.update_bbox_after(font, {"icon": (100, 0, 200, 100)}, {})
+    assert nerdpatch.update_bbox_after(font, {"icon": (100, 0, 200, 100)}, {})
     h = font["hhea"]
     assert (h.advanceWidthMax, h.minLeftSideBearing) == (600, 10)
     assert (h.minRightSideBearing, h.xMaxExtent) == (20, 500)
@@ -2716,7 +2691,7 @@ def test_update_bbox_after_refuses_when_a_redrawn_glyph_held_the_box_up():
     declaring ink it no longer has."""
     font = _extent_font(box=(0, -200, 600, 1060), hmtx={"pl": (600, 0)})
     dropped = {"pl": ((0, -200, 600, 1060), (600, 0), None)}
-    assert build.update_bbox_after(font, {"pl": (0, -200, 600, 1000)},
+    assert nerdpatch.update_bbox_after(font, {"pl": (0, -200, 600, 1000)},
                                    dropped) is False
     assert font["head"].yMax == 1060                # untouched, caller remeasures
 
@@ -2726,7 +2701,7 @@ def test_update_bbox_after_refuses_when_a_redrawn_glyph_held_an_extent_up():
     that replaced it sits at 40."""
     font = _extent_font(hhea=(600, 10, 20, 500), hmtx={"pl": (600, 40)})
     dropped = {"pl": ((10, 0, 100, 100), (600, 10), None)}
-    assert build.update_bbox_after(font, {"pl": (40, 0, 130, 100)},
+    assert nerdpatch.update_bbox_after(font, {"pl": (40, 0, 130, 100)},
                                    dropped) is False
 
 
@@ -2736,7 +2711,7 @@ def test_update_bbox_after_allows_a_rewrite_that_reaches_as_far():
     open for the JP faces, whose redrawn glyphs keep their cell."""
     font = _extent_font(hhea=(600, 10, 20, 500), hmtx={"pl": (600, 10)})
     dropped = {"pl": ((10, 0, 100, 100), (600, 10), None)}
-    assert build.update_bbox_after(font, {"pl": (10, 0, 100, 100)}, dropped)
+    assert nerdpatch.update_bbox_after(font, {"pl": (10, 0, 100, 100)}, dropped)
     assert font["hhea"].minLeftSideBearing == 10
 
 
@@ -2746,7 +2721,7 @@ def test_update_bbox_after_checks_the_vertical_extents_too():
     font = _extent_font(hmtx={"pl": (600, 40)}, vertical=True)
     font["vmtx"].metrics["pl"] = (1000, 50)         # was 5, which WAS the min
     dropped = {"pl": ((40, 0, 100, 100), (600, 40), (1000, 5))}
-    assert build.update_bbox_after(font, {"pl": (40, 0, 100, 100)},
+    assert nerdpatch.update_bbox_after(font, {"pl": (40, 0, 100, 100)},
                                    dropped) is False
 
 
@@ -2800,9 +2775,9 @@ def _markbase(marks, bases):
     st.BaseCoverage.glyphs = list(bases)
     st.BaseArray = otTables.BaseArray()
     st.BaseArray.BaseRecord = []
-    for anchors in bases.values():
+    for anchor_list in bases.values():
         rec = otTables.BaseRecord()
-        rec.BaseAnchor = list(anchors)
+        rec.BaseAnchor = list(anchor_list)
         st.BaseArray.BaseRecord.append(rec)
     st.BaseArray.BaseCount = len(bases)
     lk = otTables.Lookup()
@@ -2849,7 +2824,7 @@ def test_pair_mark_lookups_matches_on_the_marks_each_one_attaches():
                        {0x0301: "acute", 0x0327: "cedilla"},
                        [".notdef", "acute", "cedilla"])
     # ours: 0 is bottom, 1 is top; theirs: 0 is top, 1 is bottom
-    assert build.pair_mark_lookups(ours, theirs) == {0: 1, 1: 0}
+    assert anchors.pair_mark_lookups(ours, theirs) == {0: 1, 1: 0}
 
 
 def test_pair_mark_lookups_gives_up_rather_than_guess():
@@ -2861,7 +2836,7 @@ def test_pair_mark_lookups_gives_up_rather_than_guess():
                      {0x0301: "acute"}, [".notdef", "acute"])
     theirs = _GposFont([_markbase(top, {})], {0x0301: "acute"},
                        [".notdef", "acute"])
-    assert build.pair_mark_lookups(ours, theirs) == {}
+    assert anchors.pair_mark_lookups(ours, theirs) == {}
 
 
 def test_pair_mark_lookups_refuses_a_tie():
@@ -2873,7 +2848,7 @@ def test_pair_mark_lookups_refuses_a_tie():
                      [".notdef", "acute"])
     theirs = _GposFont([_markbase(top, {}), _markbase(top, {})],
                        {0x0301: "acute"}, [".notdef", "acute"])
-    assert build.pair_mark_lookups(ours, theirs) == {}
+    assert anchors.pair_mark_lookups(ours, theirs) == {}
 
 
 def _cff_font_with_heights(heights):
@@ -2890,17 +2865,9 @@ def _cff_font_with_heights(heights):
         pen.lineTo((100, heights.get(g, 100)))
         pen.closePath()
         charstrings[g] = pen.getCharString()
-    fb = FontBuilder(1000, isTTF=False)
-    fb.setupGlyphOrder(glyph_order)
-    fb.setupCharacterMap({0xE000 + i: g for i, g in enumerate(heights)})
-    fb.setupCFF("T", {}, charstrings, {})
-    fb.setupHorizontalMetrics({".notdef": (0, 0),
-                               **{g: (600, 0) for g in heights}})
-    fb.setupHorizontalHeader(ascent=800, descent=-200)
-    fb.setupNameTable({"familyName": "T", "styleName": "R"})
-    fb.setupOS2()
-    fb.setupPost()
-    return fb.font
+    return make_cff_font(glyph_order, charstrings,
+                         {0xE000 + i: g for i, g in enumerate(heights)},
+                         {".notdef": (0, 0), **{g: (600, 0) for g in heights}})
 
 
 def _drawn_gpos_font(heights, cmap, lookups):
@@ -2945,7 +2912,7 @@ def test_anchor_loose_letters_gives_a_letter_the_rule_its_neighbours_follow():
         _letters_cmap(_HEIGHTS, {0x0301: "acute", 0x5A: "loose"}),
         [_edge_markbase(marks, _HEIGHTS, 20, top=True)])
 
-    assert build.anchor_loose_letters(font) == 1
+    assert anchors.anchor_loose_letters(font) == 1
     sub = font["GPOS"].table.LookupList.Lookup[0].SubTable[0]
     assert "loose" in sub.BaseCoverage.glyphs
     assert sub.BaseCoverage.glyphs == sorted(sub.BaseCoverage.glyphs,
@@ -2980,7 +2947,7 @@ def test_anchor_loose_letters_takes_the_x_of_the_letter_it_is_built_on():
          0x004C: "L", 0x1E3A: "Lbar", 0x0301: "acute"},
         [covered])
 
-    assert build.anchor_loose_letters(font) == 1      # Lbar only; L is covered
+    assert anchors.anchor_loose_letters(font) == 1      # Lbar only; L is covered
     sub = font["GPOS"].table.LookupList.Lookup[0].SubTable[0]
     got = sub.BaseArray.BaseRecord[sub.BaseCoverage.glyphs.index("Lbar")]
     assert got.BaseAnchor[0].XCoordinate == 20        # L's, not the centre 50
@@ -3001,7 +2968,7 @@ def test_anchor_loose_letters_does_not_follow_a_compatibility_mapping():
         {**{0x41 + i: g for i, g in enumerate(filler)},
          0x0077: "w", 0x02B7: "wsuper", 0x0301: "acute"},
         [covered])
-    assert build.anchor_loose_letters(font) == 1
+    assert anchors.anchor_loose_letters(font) == 1
     sub = font["GPOS"].table.LookupList.Lookup[0].SubTable[0]
     got = sub.BaseArray.BaseRecord[sub.BaseCoverage.glyphs.index("wsuper")]
     assert got.BaseAnchor[0].XCoordinate == 50        # the rule's, not w's 11
@@ -3019,7 +2986,7 @@ def test_anchor_loose_letters_reads_a_below_mark_lookup_off_the_ink_bottom():
         _letters_cmap(_HEIGHTS, {0x0327: "cedilla", 0x5A: "loose"}),
         [_edge_markbase(marks, _HEIGHTS, -14, top=False)])
 
-    assert build.anchor_loose_letters(font) == 1
+    assert anchors.anchor_loose_letters(font) == 1
     sub = font["GPOS"].table.LookupList.Lookup[0].SubTable[0]
     got = sub.BaseArray.BaseRecord[sub.BaseCoverage.glyphs.index("loose")]
     # the ink bottom is 0, so -14; read off the top it would be 486
@@ -3038,7 +3005,7 @@ def test_anchor_loose_letters_leaves_a_lookup_that_follows_no_rule_alone():
         {**_HEIGHTS, "loose": 500, "acute": 100},
         _letters_cmap(_HEIGHTS, {0x0301: "acute", 0x5A: "loose"}),
         [scattered])
-    assert build.anchor_loose_letters(font) == 0
+    assert anchors.anchor_loose_letters(font) == 0
     assert font["GPOS"].table.LookupList.Lookup[0].SubTable[0] \
         .BaseCoverage.glyphs == list(_HEIGHTS)
 
@@ -3049,7 +3016,7 @@ def test_anchor_loose_letters_leaves_a_lookup_with_too_few_bases_alone():
         {"b0": 400, "loose": 500, "acute": 100},
         {0x0301: "acute", 0x41: "b0", 0x5A: "loose"},
         [_markbase(marks, {"b0": [_anchor(50, 420)]})])
-    assert build.anchor_loose_letters(font) == 0
+    assert anchors.anchor_loose_letters(font) == 0
     assert font["GPOS"].table.LookupList.Lookup[0].SubTable[0] \
         .BaseCoverage.glyphs == ["b0"]
 
@@ -3063,7 +3030,7 @@ def test_fit_anchor_rules_keys_by_lookup_and_subtable():
         {**_HEIGHTS, "loose": 500, "acute": 100},
         _letters_cmap(_HEIGHTS, {0x0301: "acute", 0x5A: "loose"}),
         [_edge_markbase(marks, _HEIGHTS, 20, top=True)])
-    rules = build.fit_anchor_rules(font)
+    rules = anchors.fit_anchor_rules(font)
     assert list(rules) == [(0, 0)]
     assert rules[(0, 0)] == (True, 0, 20)      # top edge, centred, +20
 
@@ -3077,7 +3044,7 @@ def test_anchor_loose_letters_uses_the_rule_it_is_handed():
         {**_HEIGHTS, "loose": 500, "acute": 100},
         _letters_cmap(_HEIGHTS, {0x0301: "acute", 0x5A: "loose"}),
         [_edge_markbase(marks, _HEIGHTS, 20, top=True)])
-    assert build.anchor_loose_letters(font, rules={(0, 0): (True, 7, 99)}) == 1
+    assert anchors.anchor_loose_letters(font, rules={(0, 0): (True, 7, 99)}) == 1
     sub = font["GPOS"].table.LookupList.Lookup[0].SubTable[0]
     got = sub.BaseArray.BaseRecord[sub.BaseCoverage.glyphs.index("loose")]
     assert (got.BaseAnchor[0].XCoordinate,
@@ -3093,7 +3060,7 @@ def test_anchor_loose_letters_handed_nothing_places_nothing():
         {**_HEIGHTS, "loose": 500, "acute": 100},
         _letters_cmap(_HEIGHTS, {0x0301: "acute", 0x5A: "loose"}),
         [_edge_markbase(marks, _HEIGHTS, 20, top=True)])
-    assert build.anchor_loose_letters(font, rules={}) == 0
+    assert anchors.anchor_loose_letters(font, rules={}) == 0
     assert "loose" not in (font["GPOS"].table.LookupList.Lookup[0]
                            .SubTable[0].BaseCoverage.glyphs)
 
@@ -3104,7 +3071,7 @@ def test_anchor_loose_letters_skips_what_is_not_a_letter():
         {**_HEIGHTS, "period": 100, "acute": 100},
         _letters_cmap(_HEIGHTS, {0x0301: "acute", 0x2E: "period"}),
         [_edge_markbase(marks, _HEIGHTS, 20, top=True)])
-    assert build.anchor_loose_letters(font) == 0
+    assert anchors.anchor_loose_letters(font) == 0
 
 
 def test_import_donor_base_anchors_moves_the_anchor_with_the_outline():
@@ -3115,7 +3082,7 @@ def test_import_donor_base_anchors_moves_the_anchor_with_the_outline():
     theirs = _GposFont([_markbase(marks, {"donor_alpha": [_anchor(400, 500)]})],
                        {0x0301: "acute"}, [".notdef", "acute", "donor_alpha"])
 
-    added = build.import_donor_base_anchors(
+    added = anchors.import_donor_base_anchors(
         ours, theirs, {"donor_alpha": ["alpha"]}, {"alpha": (0.5, 20)})
 
     assert added == 1
@@ -3135,7 +3102,7 @@ def test_import_donor_base_anchors_leaves_a_base_the_face_already_has():
                      {0x0301: "acute"}, [".notdef", "acute", "alpha"])
     theirs = _GposFont([_markbase(marks, {"donor_alpha": [_anchor(9, 9)]})],
                        {0x0301: "acute"}, [".notdef", "acute", "donor_alpha"])
-    assert build.import_donor_base_anchors(
+    assert anchors.import_donor_base_anchors(
         ours, theirs, {"donor_alpha": ["alpha"]}, {}) == 0
     sub = ours["GPOS"].table.LookupList.Lookup[0].SubTable[0]
     assert sub.BaseArray.BaseRecord[0].BaseAnchor[0].XCoordinate == 300
@@ -3154,7 +3121,7 @@ def test_import_donor_base_anchors_serves_every_codepoint_one_glyph_draws():
     theirs = _GposFont([_markbase(marks, {"donor_phi": [_anchor(300, 500)]})],
                        {0x0301: "acute"}, [".notdef", "acute", "donor_phi"])
 
-    added = build.import_donor_base_anchors(
+    added = anchors.import_donor_base_anchors(
         ours, theirs, {"donor_phi": ["phi", "phi_symbol"]},
         {"phi": (1.0, 0), "phi_symbol": (1.0, 0)})
 
@@ -3245,7 +3212,7 @@ def test_import_donor_decompositions_keeps_the_donor_condition():
     before a combining acute and nowhere else."""
     ours, theirs = _yi_face(), _yi_donor()
 
-    assert build.import_donor_decompositions(
+    assert anchors.import_donor_decompositions(
         ours, theirs, {"yi": ["our_yi"]}) == 1
 
     table = ours["GSUB"].table
@@ -3274,7 +3241,7 @@ def test_import_donor_decompositions_drops_a_rule_no_context_reaches():
     theirs = _GsubFont([_multiple({"yi": ["dotlessi", "diaeresis"]})],
                        {0x0131: "dotlessi", 0x0308: "diaeresis",
                         0x0457: "yi", 0x0301: "acute"})
-    assert build.import_donor_decompositions(
+    assert anchors.import_donor_decompositions(
         ours, theirs, {"yi": ["our_yi"]}) == 0
     assert len(ours["GSUB"].table.LookupList.Lookup) == 1     # nothing added
 
@@ -3284,7 +3251,7 @@ def test_import_donor_decompositions_drops_a_context_it_cannot_reproduce():
     rule would fire everywhere instead of before that one mark."""
     ours = _yi_face()
     del ours._cmap[0x0301]                       # no acute in this face
-    assert build.import_donor_decompositions(
+    assert anchors.import_donor_decompositions(
         ours, _yi_donor(), {"yi": ["our_yi"]}) == 0
     assert len(ours["GSUB"].table.LookupList.Lookup) == 1
 
@@ -3293,7 +3260,7 @@ def test_import_donor_decompositions_leaves_a_rule_we_cannot_resolve():
     """An output the face has no glyph for would have to be grafted, and
     grafting a mark means guessing at its advance and its anchors."""
     ours = _GsubFont([], {0x0457: "our_yi", 0x0301: "our_acute"})
-    assert build.import_donor_decompositions(
+    assert anchors.import_donor_decompositions(
         ours, _yi_donor(), {"yi": ["our_yi"]}) == 0
     assert ours["GSUB"].table.LookupList.Lookup == []
 
@@ -3302,7 +3269,7 @@ def test_import_donor_decompositions_ignores_a_letter_we_did_not_import():
     ours = _GsubFont([], {0x0131: "our_dotlessi", 0x0308: "our_diaeresis"})
     theirs = _GsubFont([_multiple({"yi": ["dotlessi", "diaeresis"]})],
                        {0x0131: "dotlessi", 0x0308: "diaeresis", 0x0457: "yi"})
-    assert build.import_donor_decompositions(ours, theirs, {}) == 0
+    assert anchors.import_donor_decompositions(ours, theirs, {}) == 0
 
 
 # --- the marks' side of the anchor gap, and the stacked-accent lift ------
@@ -3343,7 +3310,7 @@ def test_anchor_loose_marks_gives_an_uncovered_mark_the_lookups_anchor():
                                                for g, h in _HEIGHTS.items()})])
     _gdef_marks(font, [*marks, "candra", "tall", "dbl"])
 
-    assert build.anchor_loose_marks(font) == 1
+    assert anchors.anchor_loose_marks(font) == 1
     sub = font["GPOS"].table.LookupList.Lookup[0].SubTable[0]
     assert "candra" in sub.MarkCoverage.glyphs
     assert "tall" not in sub.MarkCoverage.glyphs and "dbl" not in sub.MarkCoverage.glyphs
@@ -3363,7 +3330,7 @@ def test_anchor_loose_marks_needs_a_lookup_big_enough_to_speak_for_a_mark():
                             [_markbase(marks, {g: [_anchor(50, h + 20)]
                                                for g, h in _HEIGHTS.items()})])
     _gdef_marks(font, [*marks, "candra"])
-    assert build.anchor_loose_marks(font) == 0
+    assert anchors.anchor_loose_marks(font) == 0
 
 
 def _markmark(mark1, mark2):
@@ -3383,9 +3350,9 @@ def _markmark(mark1, mark2):
     st.Mark2Coverage.glyphs = list(mark2)
     st.Mark2Array = otTables.Mark2Array()
     st.Mark2Array.Mark2Record = []
-    for anchors in mark2.values():
+    for anchor_list in mark2.values():
         rec = otTables.Mark2Record()
-        rec.Mark2Anchor = list(anchors)
+        rec.Mark2Anchor = list(anchor_list)
         st.Mark2Array.Mark2Record.append(rec)
     st.Mark2Array.MarkCount = len(mark2)
     lk = otTables.Lookup()
@@ -3418,7 +3385,7 @@ def test_mirror_stack_lift_copies_the_uprights_lift_onto_a_collapsed_anchor():
     designer's and stays."""
     ours = _mkmk_font({"grave": (500, 500), "acute": (500, 640)})
     model = _mkmk_font({"grave": (500, 611), "acute": (500, 700)})
-    assert build.mirror_stack_lift(ours, model) == 1
+    assert anchors.mirror_stack_lift(ours, model) == 1
     assert _mark2_y(ours, "grave") == 611
     assert _mark2_y(ours, "acute") == 640
 
@@ -3427,7 +3394,7 @@ def test_mirror_stack_lift_leaves_what_the_model_does_not_lift():
     """At wght 200 the upright collapses too; there is nothing to copy."""
     ours = _mkmk_font({"grave": (500, 500), "acute": (500, 500)})
     model = _mkmk_font({"grave": (500, 500), "acute": (500, 500)})
-    assert build.mirror_stack_lift(ours, model) == 0
+    assert anchors.mirror_stack_lift(ours, model) == 0
     assert _mark2_y(ours, "grave") == 500
 
 
@@ -3446,7 +3413,7 @@ def test_letter_variants_follows_single_and_alternate_substitutions_two_steps():
     _with_gsub(font, "feature locl { sub a by a.srb; } locl;\n"
                      "feature ss01 { sub a.srb by a.srb2; } ss01;\n"
                      "feature salt { sub b from [b.alt]; } salt;\n")
-    assert build._letter_variants(font, {"a", "b", "c"}) == {"a.srb", "a.srb2", "b.alt"}
+    assert anchors._letter_variants(font, {"a", "b", "c"}) == {"a.srb", "a.srb2", "b.alt"}
 
 
 def test_anchor_loose_letters_covers_what_gsub_makes_of_a_letter():
@@ -3458,7 +3425,7 @@ def test_anchor_loose_letters_covers_what_gsub_makes_of_a_letter():
         heights, _letters_cmap(_HEIGHTS, {0x0301: "acute", 0x7A: "z"}),
         [_edge_markbase(marks, _HEIGHTS, 20, top=True)])
     _with_gsub(font, "feature locl { sub z by z.srb; } locl;\n")
-    assert build.anchor_loose_letters(font) == 2
+    assert anchors.anchor_loose_letters(font) == 2
     sub = font["GPOS"].table.LookupList.Lookup[0].SubTable[0]
     got = sub.BaseArray.BaseRecord[sub.BaseCoverage.glyphs.index("z.srb")].BaseAnchor[0]
     assert (got.XCoordinate, got.YCoordinate) == (50, 540)
@@ -3506,7 +3473,7 @@ def test_anchor_loose_marks_keeps_every_other_marks_anchor_across_two_insertions
     before = {g: (r.MarkAnchor.XCoordinate, r.MarkAnchor.YCoordinate)
               for g, r in zip(*[(s.MarkCoverage.glyphs, s.MarkArray.MarkRecord)
                                 for s in [font["GPOS"].table.LookupList.Lookup[0].SubTable[0]]][0])}
-    assert build.anchor_loose_marks(font) == 2
+    assert anchors.anchor_loose_marks(font) == 2
     sub = font["GPOS"].table.LookupList.Lookup[0].SubTable[0]
     after = {g: (r.MarkAnchor.XCoordinate, r.MarkAnchor.YCoordinate)
              for g, r in zip(sub.MarkCoverage.glyphs, sub.MarkArray.MarkRecord)}

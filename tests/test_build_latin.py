@@ -21,7 +21,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import build  # noqa: E402
 import build_latin  # noqa: E402
 import test_build as tb  # noqa: E402 -- reuse its GSUB fakes
-from conftest import make_font  # noqa: E402
+from conftest import make_cff_font, make_font  # noqa: E402
 
 # --- fix_zone_order -------------------------------------------------------
 
@@ -322,7 +322,6 @@ def _cff_with_greek(inks, *, cmap_extra=()):
     """A CFF font whose Greek glyphs are rectangles of the given ink
     widths, keyed by codepoint. 'A' comes along because append_context
     keys the FD and its Private dict off it."""
-    from fontTools.fontBuilder import FontBuilder
     from fontTools.pens.t2CharStringPen import T2CharStringPen
     names = {cp: f"uni{cp:04X}" for cp in inks}
     order = [".notdef", "A", *names.values()]
@@ -335,17 +334,11 @@ def _cff_with_greek(inks, *, cmap_extra=()):
         pen.closePath()
         charstrings[g] = pen.getCharString()
     charstrings[".notdef"] = T2CharStringPen(0, None).getCharString()
-    fb = FontBuilder(1000, isTTF=False)
-    fb.setupGlyphOrder(order)
-    fb.setupCharacterMap({ord("A"): "A", **{cp: names[cp] for cp in names},
-                          **dict(cmap_extra)})
-    fb.setupCFF("T", {}, charstrings, {})
-    fb.setupHorizontalMetrics({g: (600, 0) for g in order})
-    fb.setupHorizontalHeader(ascent=800, descent=-200)
-    fb.setupNameTable({"familyName": "T", "styleName": "R"})
-    fb.setupOS2()
-    fb.setupPost()
-    return fb.font
+    font = make_cff_font(order, charstrings,
+                         {ord("A"): "A", **{cp: names[cp] for cp in names},
+                          **dict(cmap_extra)},
+                         {g: (600, 0) for g in order})
+    return font
 
 
 def test_add_missing_from_sans_takes_the_block_inside_the_upright_set():

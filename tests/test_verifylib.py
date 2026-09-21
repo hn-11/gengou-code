@@ -144,7 +144,7 @@ def test_check_stat_wants_this_face_s_own_value(capsys):
 
 
 def test_check_gdef_marks_wants_every_combining_mark_classed(capsys):
-    """build.classify_unicode_marks exists because the donor leaves the
+    """anchors.classify_unicode_marks exists because the donor leaves the
     double tie bars unclassed, and a mark a shaper reads as a base
     positions as one. Deleting the call rebuilt and verified clean."""
     from conftest import make_font
@@ -281,8 +281,8 @@ def _mark_font(anchors, heights=None, advance=600, cmap_extra=(), width=100,
     `fea_extra` is appended verbatim; `langsys` is written before the
     features, `mark_scope` (script/language statements) at the top of
     the mark feature and `mark_tail` at its end."""
+    from conftest import make_cff_font
     from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
-    from fontTools.fontBuilder import FontBuilder
     from fontTools.pens.t2CharStringPen import T2CharStringPen
     heights = heights or {}
     marks = dict(marks)
@@ -295,20 +295,12 @@ def _mark_font(anchors, heights=None, advance=600, cmap_extra=(), width=100,
         pen.lineTo((width, heights.get(g, 500)))
         pen.closePath()
         charstrings[g] = pen.getCharString()
-    fb = FontBuilder(1000, isTTF=False)
-    fb.setupGlyphOrder(order)
-    fb.setupCharacterMap({mark_cp: "acute",
+    font = make_cff_font(order, charstrings,
+                         {mark_cp: "acute",
                           **{cp: g for g, cp in marks.items() if cp is not None},
                           **{0x41 + i: g for i, g in enumerate(anchors)},
-                          **dict(cmap_extra)})
-    fb.setupCFF("T", {}, charstrings, {})
-    fb.setupHorizontalMetrics({".notdef": (0, 0),
-                               **{g: (advance, 0) for g in order[1:]}})
-    fb.setupHorizontalHeader(ascent=800, descent=-200)
-    fb.setupNameTable({"familyName": "T", "styleName": "R"})
-    fb.setupOS2()
-    fb.setupPost()
-    font = fb.font
+                          **dict(cmap_extra)},
+                         {".notdef": (0, 0), **{g: (advance, 0) for g in order[1:]}})
     mx, my = mark_anchor or (width // 2, 0)
     classes = "\n".join(f"markClass {g} <anchor {mx} {my}> @TOP;"
                         for g in ["acute", *marks])

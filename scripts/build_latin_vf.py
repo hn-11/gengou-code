@@ -91,8 +91,10 @@ from fontTools.varLib.instancer import instantiateVariableFont
 from fontTools.varLib.models import normalizeValue, piecewiseLinearMap
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import anchors  # noqa: E402
 import build  # noqa: E402
 import build_latin  # noqa: E402
+import vfsource  # noqa: E402
 
 CELL = build_latin.CELL     # 600, SCP's own advance
 MONA_K = build_latin.MONA_K  # 600/1240
@@ -106,11 +108,11 @@ STYLES = {
 
 
 def scp_source(scp_path):
-    """The SCP VF as a build.VFSource: wght only, bars in SCP's own units
+    """The SCP VF as a vfsource.VFSource: wght only, bars in SCP's own units
     (scale 1.0). Its matched() search is the one build_latin.py's static
     faces are placed by, so matched_wght() puts the VF's named instances
     exactly where the statics are."""
-    return build._vf_source(scp_path, 1.0, {"wght": 0})
+    return vfsource._vf_source(scp_path, 1.0, {"wght": 0})
 
 
 def weight_positions():
@@ -248,7 +250,7 @@ def mona_floor_wght(scp, mona_source, slant):
     return scp.matched_wght(mona_source.floor_bar(slant))
 
 
-unrounded_cff2_instancing = build.unrounded_cff2_instancing   # the masters' instancing
+unrounded_cff2_instancing = vfsource.unrounded_cff2_instancing   # the masters' instancing
 
 
 def scp_base_at(vf, wght):
@@ -282,7 +284,7 @@ def graft_master(base, mona_source, slant, sans_source=None, upright=None):
     mona = mona_source.matched(target, slant, master=True)
     sans = sans_source.matched(target, master=True) if sans_source is not None else None
     build_latin.graft(base, mona, sans, upright)
-    build.classify_unicode_marks(base)
+    anchors.classify_unicode_marks(base)
     return target, mona
 
 
@@ -293,7 +295,7 @@ def _mark_coverage_shape(font):
     -- but a base present at one weight and absent at another is a
     structure varLib has no way to interpolate."""
     return [(i, j, tuple(sub.BaseCoverage.glyphs), tuple(sub.MarkCoverage.glyphs))
-            for i, subs in build._mark_base_lookups(font)
+            for i, subs in anchors._mark_base_lookups(font)
             for j, sub in enumerate(subs)]
 
 
@@ -437,12 +439,12 @@ def build_style(style, env, out_dir):
     lo_u, default_u, hi_u, axis_map, to_scp = user_axis(
         weight_pos, scp_design, scp_breaks, axis.minValue)
     ref_angle = (vf_meta["post"].italicAngle or -12.0) if italic else None
-    mona_source = build._vf_source(env["MONA_VF"], MONA_K,
+    mona_source = vfsource._vf_source(env["MONA_VF"], MONA_K,
                                    {"wght": 0, "wdth": 100, "slnt": 0})
     # Source Code Pro Italic draws no Cyrillic and one Greek letter, so
     # the italic masters take both scripts from Source Sans 3 Italic,
     # bounded by what the upright faces draw (build_latin)
-    sans_source = (build._vf_source(env["SS_VF_I"], 1.0, {"wght": 0})
+    sans_source = (vfsource._vf_source(env["SS_VF_I"], 1.0, {"wght": 0})
                    if italic else None)
     upright = build_latin.upright_cmap(env["SCP_VF_U"]) if italic else None
     floor = mona_floor_wght(scp, mona_source, ref_angle)
@@ -480,20 +482,20 @@ def build_style(style, env, out_dir):
         build.update_bbox(bases[w])
 
     # 4b. the fitted base anchors for the letters no mark lookup covers
-    #     (build.anchor_loose_letters -- without them a combining accent
+    #     (anchors.anchor_loose_letters -- without them a combining accent
     #     lands a whole cell right, on the next character). The rule is
     #     fitted ONCE, on the default master, and applied to every one:
     #     fitted per master it could admit a lookup at one weight and
     #     reject it at another, and a BaseCoverage that differs between
     #     masters is one varLib cannot merge
-    rules = build.fit_anchor_rules(bases[default_wght])
-    loose = {w: build.anchor_loose_letters(bases[w], rules=rules) for w in wghts}
+    rules = anchors.fit_anchor_rules(bases[default_wght])
+    loose = {w: anchors.anchor_loose_letters(bases[w], rules=rules) for w in wghts}
     if len(set(loose.values())) != 1:
         raise RuntimeError(f"{style}: fitted base anchors diverged across "
                            f"masters: {loose}")
     # the marks' side of the gap, per master: each gets the same marks
     # (what makes the coverage agree) at its own lookup's anchor
-    marks = {w: build.anchor_loose_marks(bases[w]) for w in wghts}
+    marks = {w: anchors.anchor_loose_marks(bases[w]) for w in wghts}
     if len(set(marks.values())) != 1:
         raise RuntimeError(f"{style}: loose marks diverged across masters: {marks}")
     print(f"[{style}] marks given a lookup's anchor: {marks[default_wght]} per master")
@@ -501,9 +503,9 @@ def build_style(style, env, out_dir):
         # the stacked-accent lift the upright gives each mark, read
         # off the upright VF at this master's own weight -- a variable
         # anchor in the result, as it is in the upright
-        upright_src = build._vf_source(env["SCP_VF_U"], 1.0, {"wght": 0})
-        with build.unrounded_cff2_instancing():
-            lifted = {w: build.mirror_stack_lift(bases[w], upright_src.at(w)) for w in wghts}
+        upright_src = vfsource._vf_source(env["SCP_VF_U"], 1.0, {"wght": 0})
+        with vfsource.unrounded_cff2_instancing():
+            lifted = {w: anchors.mirror_stack_lift(bases[w], upright_src.at(w)) for w in wghts}
         print(f"[{style}] stacked-accent anchors lifted as the upright's: {lifted}")
     if loose[default_wght] < build_latin.LOOSE_FLOOR:
         # as on the static path, and a count rather than a truthiness

@@ -540,13 +540,18 @@ scripts/golden.py          # 2つの dist ディレクトリを比較（cmap・�
 が先に走って `dist/latin` を作っていることを前提にする（`LATIN_DIR`
 環境変数、既定 `dist/latin`）。Source Han Sans CJK（SHCJ）は v5 で上流から
 外れたので、このパイプラインには出てこない。VF のインスタンス化・
-太さ二分探索・合字/記号の合成・グラフト用ヘルパー（`VFSource.matched`、
-`draw_clean` / `erode_path`、`replace_from_mona`、`add_glyphs`、`add_gsub` /
-`_guard_subtables`、`import_scp_variants`、`latin_blue_zones` /
-`add_latin_fd`、`autohint_face`、`subroutinize_face` など）は `build.py`
-モジュールに残ったまま `build_latin.py` から import されて使われる形で、
-別モジュールへの複製はしていない。`build.py` 側は同じ関数群を、VF
-インスタンスではなく `dist/latin` の完成品 OTF（`graft_halfwidth`,
+太さ二分探索・Monaspace の合字/記号の合成（`VFSource.matched`、
+`erode_path`、`replace_from_mona`、`add_glyphs`）は `scripts/vfsource.py`
+に、欧文レイヤーがドナーの GPOS に足すアンカー（`anchor_loose_letters` /
+`anchor_loose_marks` / `import_donor_base_anchors` / `mirror_stack_lift` /
+`classify_unicode_marks`）は `scripts/anchors.py` にある——どちらも JP
+ビルドが到達しない関数群で、round 7 で `build.py` から純粋移動した
+（39 定義 1,164 行。接ぎ木後の bbox 更新 `update_bbox_after` は
+`nerdpatch.py` だけが使うのでそちらへ）。両ファイルとも `build.py` の
+共通ヘルパー（`draw_clean`、`append_glyph`、`add_gsub` /
+`_guard_subtables`、`latin_blue_zones` / `add_latin_fd`、`autohint_face`、
+`subroutinize_face` など）を import して使う。`build.py` 側は同じ関数群を、
+VF インスタンスではなく `dist/latin` の完成品 OTF（`graft_halfwidth`,
 `import_scp_variants`, `latin_ligatures` 等が受け取る）に対して呼び出す
 だけになった。
 
