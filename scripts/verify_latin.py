@@ -18,6 +18,7 @@ from verify import CASES  # noqa: E402
 from verifylib import (  # noqa: E402
     Checker,
     check_accents_clear,
+    check_anchor_placement,
     check_coverage_order,
     check_features_work,
     check_gdef_marks,
@@ -181,6 +182,7 @@ def main():
     shape = make_shaper(FONT)
     gs, order = tf.getGlyphSet(), tf.getGlyphOrder()
     check_accents_clear(shape, gs, order, cmap, check)
+    check_anchor_placement(tf, check, gs)
     check_heights(tf, check, gs, cmap)
     check_zones(tf, check, cmap)
     check_mark_features(tf, check, shape, gs, order, cmap)

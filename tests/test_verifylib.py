@@ -265,3 +265,157 @@ def test_check_gdi_family_name_bounds_nameid_1():
         check = verifylib.Checker()
         verifylib.check_gdi_family_name({"name": _Name(family)}, check)
         assert (not check.failed) is want, family
+
+
+# --- check_anchor_placement ---------------------------------------------------
+
+def _anchor_font(anchors, heights=None, advance=600, cmap_extra=(), width=100):
+    """A CFF font whose glyphs are boxes of the given width and heights,
+    carrying one MarkBasePos with the given {glyph: (x, y)} anchors."""
+    from fontTools.fontBuilder import FontBuilder
+    from fontTools.pens.t2CharStringPen import T2CharStringPen
+    from fontTools.ttLib.tables import otTables
+    heights = heights or {}
+    order = [".notdef", "mark", *anchors]
+    charstrings = {}
+    for g in order:
+        pen = T2CharStringPen(0, None)
+        pen.moveTo((0, 0))
+        pen.lineTo((width, 0))
+        pen.lineTo((width, heights.get(g, 500)))
+        pen.closePath()
+        charstrings[g] = pen.getCharString()
+    fb = FontBuilder(1000, isTTF=False)
+    fb.setupGlyphOrder(order)
+    fb.setupCharacterMap({0x0301: "mark",
+                          **{0x41 + i: g for i, g in enumerate(anchors)},
+                          **dict(cmap_extra)})
+    fb.setupCFF("T", {}, charstrings, {})
+    fb.setupHorizontalMetrics({".notdef": (0, 0),
+                               **{g: (advance, 0) for g in order[1:]}})
+    fb.setupHorizontalHeader(ascent=800, descent=-200)
+    fb.setupNameTable({"familyName": "T", "styleName": "R"})
+    fb.setupOS2()
+    fb.setupPost()
+    font = fb.font
+
+    from test_build import (
+        FakeFeature,
+        FakeFeatureList,
+        FakeFeatureRecord,
+        _FakeLookupList,
+    )
+    sub = otTables.MarkBasePos()
+    sub.Format, sub.ClassCount = 1, 1
+    sub.MarkCoverage = otTables.MarkCoverage()
+    sub.MarkCoverage.glyphs = ["mark"]
+    rec = otTables.MarkRecord()
+    rec.Class = 0
+    rec.MarkAnchor = otTables.Anchor()
+    rec.MarkAnchor.Format = 1
+    rec.MarkAnchor.XCoordinate = rec.MarkAnchor.YCoordinate = 0
+    sub.MarkArray = otTables.MarkArray()
+    sub.MarkArray.MarkRecord = [rec]
+    sub.MarkArray.MarkCount = 1
+    sub.BaseCoverage = otTables.BaseCoverage()
+    sub.BaseCoverage.glyphs = list(anchors)
+    sub.BaseArray = otTables.BaseArray()
+    sub.BaseArray.BaseRecord = []
+    for g, (x, y) in anchors.items():
+        a = otTables.Anchor()
+        a.Format, a.XCoordinate, a.YCoordinate = 1, x, y
+        br = otTables.BaseRecord()
+        br.BaseAnchor = [a]
+        sub.BaseArray.BaseRecord.append(br)
+    sub.BaseArray.BaseCount = len(anchors)
+    lk = otTables.Lookup()
+    lk.LookupType, lk.LookupFlag = 4, 0
+    lk.SubTable, lk.SubTableCount = [sub], 1
+
+    table = otTables.GPOS()
+    table.LookupList = _FakeLookupList([lk])
+    table.FeatureList = FakeFeatureList(
+        [FakeFeatureRecord("mark", FakeFeature([0]))])
+
+    class _Wrap:
+        def __init__(self, tb): self.table = tb
+    font["GPOS"] = _Wrap(table)
+    return font
+
+
+def _placement(font):
+    out = []
+    verifylib.check_anchor_placement(
+        font, lambda ok, msg: None if ok else out.append(msg), font.getGlyphSet())
+    return out
+
+
+def _ruled(n=20, **over):
+    """n bases 20 above their own ink top, centred -- the rule the real
+    top-mark lookup follows."""
+    heights = {f"b{i}": 400 + 20 * i for i in range(n)}
+    anchors = {g: (50, h + 20) for g, h in heights.items()}
+    anchors.update(over)
+    return anchors, heights
+
+
+def test_check_anchor_placement_passes_anchors_on_their_glyph():
+    anchors, heights = _ruled()
+    assert _placement(_anchor_font(anchors, heights)) == []
+
+
+def test_check_anchor_placement_catches_a_whole_cell_left():
+    """The escape this exists for: every below-mark anchor moved one
+    cell, so a cedilla draws inside the PREVIOUS character's cell. The
+    probe-set checks shape 27 letters by ten ABOVE-accents and reach one
+    of seven lookups, so they saw none of it."""
+    anchors, heights = _ruled()
+    anchors = {g: (x - 600, y) for g, (x, y) in anchors.items()}
+    assert _placement(_anchor_font(anchors, heights))
+
+
+def test_check_anchor_placement_catches_a_mark_lifted_off_the_letter():
+    """There was no upper bound anywhere: an anchor 2,000 units up put
+    the accent three cells above its letter and every gate passed."""
+    anchors, heights = _ruled()
+    anchors = {g: (x, y + 2000) for g, (x, y) in anchors.items()}
+    assert _placement(_anchor_font(anchors, heights))
+
+
+def test_check_anchor_placement_catches_one_glyph_among_many():
+    """Not an aggregate: one letter's anchor off its own glyph fails,
+    though the other nineteen are right where they belong."""
+    anchors, heights = _ruled(b7=(-900, 520))
+    assert _placement(_anchor_font(anchors, heights))
+
+
+def test_check_anchor_placement_leaves_bopomofo_alone():
+    """Source Han Sans's tone marks go BESIDE the syllable -- anchor x
+    960 on a 1000 cell -- which is a different attachment, and its own."""
+    anchors = {f"b{i}": (960, 0) for i in range(20)}
+    heights = {g: 800 for g in anchors}
+    font = _anchor_font(anchors, heights, advance=1000,
+                        cmap_extra={0x3105 + i: g for i, g in enumerate(anchors)})
+    # the same anchors on Latin bases are a failure
+    assert _placement(_anchor_font(anchors, heights, advance=1000))
+    assert _placement(font) == []
+
+
+def test_check_anchor_placement_catches_an_anchor_just_off_the_ink():
+    """The ink bound alone: 250 is past this glyph's ink and its slack
+    (0..100, plus a sixth of the cell) while still well inside the
+    from-the-centre bound, so only the first clause can see it."""
+    anchors, heights = _ruled()
+    anchors = {g: (250, y) for g, (_x, y) in anchors.items()}
+    assert _placement(_anchor_font(anchors, heights))
+
+
+def test_check_anchor_placement_catches_an_anchor_far_from_a_wide_glyph():
+    """The from-the-centre bound alone. A full-width glyph's slack is
+    wide enough to hold an anchor 610 units from its ink centre, which
+    is most of a cell away from where the mark belongs."""
+    heights = {f"b{i}": 700 + 10 * i for i in range(20)}
+    ok = {g: (450, h + 20) for g, h in heights.items()}
+    assert _placement(_anchor_font(ok, heights, advance=1000, width=900)) == []
+    far = {g: (1060, h + 20) for g, h in heights.items()}
+    assert _placement(_anchor_font(far, heights, advance=1000, width=900))

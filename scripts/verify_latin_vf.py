@@ -25,6 +25,7 @@ import build_latin_vf  # noqa: E402
 from verifylib import (  # noqa: E402
     Checker,
     check_accents_clear,
+    check_anchor_placement,
     check_coverage_order,
     check_features_work,
     check_gdef_marks,
@@ -284,6 +285,7 @@ def main():
     shape_default = make_shaper(FONT, {"wght": axis.defaultValue})
     check_accents_clear(shape_default, default_gs, tf.getGlyphOrder(),
                         vf_cmap, check, " at the default weight")
+    check_anchor_placement(tf, check, default_gs, " at the default weight")
     check_heights(tf, check, default_gs, vf_cmap)
     check_zones(tf, check, vf_cmap)
     check_mark_features(tf, check, shape_default, default_gs,
@@ -313,6 +315,7 @@ def main():
                           check, is_italic, f" at wght {loc}")
         check_mark_features(tf, check, shape_at, gs_at, tf.getGlyphOrder(),
                             vf_cmap, f" at wght {loc}")
+        check_anchor_placement(tf, check, gs_at, f" at wght {loc}")
     check_features_work(shape_default, check, vf_cmap)
     # the nameIDs verify_latin.py requires of the statics; 13 and 14 are
     # the licence and its URL, and dropping all seven passed this file

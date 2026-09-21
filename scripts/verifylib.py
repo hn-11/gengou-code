@@ -741,6 +741,90 @@ STRAY_MARKS = {"U+031A", "U+031B", "U+0334", "U+0344"}
 STRAY_MARKS_ITALIC = STRAY_MARKS | {"U+0310"}
 
 
+# Bounds for check_anchor_placement, from the anchors the ten statics
+# and the two variable fonts actually carry -- 36,269 of them. An
+# anchor sits at most 70 units outside its own glyph's ink and at most
+# 254 from the ink's centre; a top lookup's sits between 184 below the
+# ink top and 40 above it, a below lookup's between 197 above the ink
+# bottom and 48 below. Each bound below is well clear of its measured
+# extreme, because a gate that runs close to legitimate data is a gate
+# that fails on the next weight (this file has done that twice).
+# both x bounds scale with the glyph's own advance, because a
+# full-width glyph legitimately spreads its anchors further than a
+# one-cell one. One cell: 100 and 360. Full width: 167 and 600.
+_ANCHOR_X_SLACK = 0.167      # measured 70 of 600
+# as a share of the glyph's own advance, because a full-width glyph
+# legitimately spreads its anchors further than a one-cell one: the
+# Latin faces measure at most 0.42 of the advance, the JP faces 0.51
+# (Source Han Sans's own CJK anchors, which sit near the cell edge)
+_ANCHOR_X_FROM_CENTRE = 0.60  # measured 0.42 Latin, 0.51 JP
+_ANCHOR_Y_PAST_EDGE = 150    # measured 40 / 48
+_ANCHOR_Y_INTO_INK = 350     # measured 184 / 197
+_BOPOMOFO = frozenset(range(0x3100, 0x3130)) | frozenset(range(0x31A0, 0x31C0))
+
+
+
+def check_anchor_placement(tf, check, gs, label=""):
+    """Every base anchor sits on the glyph it belongs to.
+
+    The other two accent checks shape a probe set -- 27 letters by ten
+    above-accents -- and that reaches ONE of the seven mark-to-base
+    lookups and 215 of the 2,811 anchors a face carries. 88% of them
+    are in the cedilla, below-mark and ogonek lookups, which no probe
+    touched: moving every one of those a whole cell left, so that a
+    cedilla draws inside the PREVIOUS character's cell, passed every
+    gate this repository had. So did zeroing their x, and so did
+    lifting any mark to three cells above its letter -- there was no
+    upper bound anywhere.
+
+    This one has no probe set to miss. It reads the anchors themselves,
+    asserts each lies on its own glyph, and covers every anchor in
+    every lookup at once -- 2,811 per Latin face against the probe
+    set's 215. Which edge a lookup's anchors track
+    comes from the lookup's own anchors (build._anchor_rule), the same
+    way the build fits them; a lookup too small to fit is held to the
+    looser rule that the anchor be somewhere on the glyph at all.
+    """
+    off = {}
+    hmtx = tf["hmtx"].metrics
+    rev = {g: cp for cp, g in tf.getBestCmap().items()}
+    for i, subs in build._mark_base_lookups(tf):
+        for sub in subs:
+            if any(rev.get(g) in _BOPOMOFO for g in sub.BaseCoverage.glyphs):
+                # Source Han Sans's own tone-mark lookups: a Bopomofo tone
+                # mark goes BESIDE the syllable, not over or under it --
+                # anchor x 960 or 0 on a 1000 cell -- so "the mark sits on
+                # the letter" is not the rule they follow. 47 of 48 and 42
+                # of 43 bases; no lookup this build fills has a single one
+                continue
+            rule = build._anchor_rule(gs, sub)
+            top = rule[0] if rule else None
+            for gn, rec in zip(sub.BaseCoverage.glyphs, sub.BaseArray.BaseRecord):
+                anchor = rec.BaseAnchor[0] if rec.BaseAnchor else None
+                box = build._bounds(gs, gn)
+                if anchor is None or not box:
+                    continue
+                x, y = anchor.XCoordinate, anchor.YCoordinate
+                centre = (box[0] + box[2]) / 2
+                cell = max(hmtx[gn][0], build.CELL)
+                spread = _ANCHOR_X_FROM_CENTRE * cell
+                slack = _ANCHOR_X_SLACK * cell
+                if top is True:
+                    lo, hi = box[3] - _ANCHOR_Y_INTO_INK, box[3] + _ANCHOR_Y_PAST_EDGE
+                elif top is False:
+                    lo, hi = box[1] - _ANCHOR_Y_PAST_EDGE, box[1] + _ANCHOR_Y_INTO_INK
+                else:
+                    lo, hi = box[1] - _ANCHOR_Y_INTO_INK, box[3] + _ANCHOR_Y_INTO_INK
+                if (not box[0] - slack <= x <= box[2] + slack
+                        or abs(x - centre) > spread
+                        or not lo <= y <= hi):
+                    off.setdefault(i, []).append(
+                        (gn, x, y, tuple(round(v) for v in box)))
+    worst = {i: (len(v), v[:2]) for i, v in off.items()}
+    check(not off, f"every base anchor sits on its own glyph{label} "
+                   f"(off, by lookup: {worst})")
+
+
 def check_stray_marks(shape, gs, order, cmap, check, italic, label=""):
     """The combining marks that land in the next character's cell.
 

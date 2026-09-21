@@ -15,6 +15,7 @@ import build  # noqa: E402
 from build import FULLWIDTH, _unwrap, _unwrap_pos  # noqa: E402
 from verifylib import (  # noqa: E402
     Checker,
+    check_anchor_placement,
     check_coverage_order,
     check_features_work,
     check_gdi_family_name,
@@ -293,6 +294,10 @@ def main():
               f"(want {build.WEIGHT_CLASS[weight]} for {weight})")
 
     check_coverage_order(tf, check)
+    # the Latin layer's anchors survive the graft into this face, so
+    # they are worth asserting here as well as on the face they came
+    # from: import_scp_marks moves every one of them by a cell
+    check_anchor_placement(tf, check, tf.getGlyphSet())
     check_mark_class_closure(tf, check)
     check_private(tf, check)
 
