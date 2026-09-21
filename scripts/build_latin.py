@@ -181,6 +181,14 @@ def add_missing_from_mona(font, mona, chars, dy, k):
 SANS_BLOCKS = ((0x0370, 0x04FF), (0x1F00, 0x1FFF))
 
 
+# the fewest letters anchor_loose_letters may place before the build is
+# refusing to ship. These donors leave about 2,800 per face; the floor
+# is well under that so an upstream that anchors more of its own
+# alphabet does not trip it, and well over the handful a single
+# surviving rule would place.
+LOOSE_FLOOR = 1500
+
+
 def add_missing_from_sans(font, sans, upright):
     """Draw the Greek and Cyrillic of `sans` into this face, one cell
     each, for the whole of SANS_BLOCKS -- replacing what the face has
@@ -350,13 +358,15 @@ def build_face(job):
     # these as marks (and so zero their spacing advance) in the first
     # place; before the bbox, which the new anchors do not move
     loose = build.anchor_loose_letters(base)
-    if not loose:
-        # placing none means every rule was turned away, and the face
-        # ships the defect this pass exists to undo -- an accent on any
-        # unanchored letter a whole cell right, on the next character.
-        # These donors leave about 2,800 letters to place
-        raise RuntimeError("no letter was given a fitted base anchor; "
-                           "see build.anchor_loose_letters")
+    if loose < LOOSE_FLOOR:
+        # a count, not a truthiness test: one rule turned away leaves the
+        # rest placing thousands, and a pass that placed 37 letters where
+        # it should place 2,800 ships the defect this exists to undo --
+        # an accent on any letter it missed a whole cell right, on the
+        # next character -- with every gate green
+        raise RuntimeError(f"only {loose} letters were given a fitted base "
+                           f"anchor, against a floor of {LOOSE_FLOOR}; "
+                           f"see build.anchor_loose_letters")
     print(f"  letters given a fitted base anchor: {loose}")
     build.add_stat(base, weight, italic)
     build.prune_orphan_names(base)

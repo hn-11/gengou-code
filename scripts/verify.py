@@ -65,8 +65,14 @@ WIN_METRICS = build.WIN_METRICS
 # can stay live and fail on anything NEW. Both are the same root: the
 # second donor's own features are not imported, only its outlines and
 # its base anchors. docs/gengou-plan.md carries the measurements.
-GREEK_ITALIC_GAP = {"\u03c1\u0313\u0301", "\u03b1\u0313\u0300"}
-LOCL_ITALIC_GAP = {("cyrl", "sr")}
+# Keyed by what was MEASURED, not by the probe alone: the language
+# check records two quite different failures under one key -- "renders
+# the other language's letterform" and "shaped into more than one
+# glyph" -- so excusing the key excused either. Injecting a ccmp that
+# split the Serbian b into two glyphs, a defect with nothing to do with
+# the known one, passed on the italic and failed on the upright.
+GREEK_ITALIC_GAP = {"\u03c1\u0313\u0301": 3, "\u03b1\u0313\u0300": 3}
+LOCL_ITALIC_GAP = {("cyrl", "sr"): "unchanged"}
 
 # drawn to tile, so a run of them must show no seam: the full-width low
 # line and overline, the wave dash, a quadrant, and the box-drawing and
@@ -1057,8 +1063,8 @@ def main():
     # only and grafts nothing. Measured, the psili and the accent that
     # follows share about 6,000 square units of ink. The accent mapping
     # itself (the two entries above) the italic does get.
-    known = GREEK_ITALIC_GAP if italic else set()
-    off = {k: v for k, v in greek.items() if k not in known}
+    known = GREEK_ITALIC_GAP if italic else {}
+    off = {k: v for k, v in greek.items() if known.get(k) != v}
     check(not off, f"Greek takes the Greek accents and composes its "
                    f"breathing marks (off: {off}"
                    + (f"; known italic gaps: {sorted(known)}" if known else "")
@@ -1115,16 +1121,24 @@ def main():
             continue
         tagged = shape_infos(text, {}, script=script, language=lang)[0]
         default = shape_infos(text, {}, script=script)[0]
-        if len(tagged) != 1 or tagged[0].codepoint == default[0].codepoint:
-            langs[script, lang] = glyph_order[tagged[0].codepoint]
+        # WHY it failed, not just that it did: "the language form is the
+        # default one" and "the letter came apart" are different defects
+        # and only the first of them is known
+        if len(tagged) != 1:
+            langs[script, lang] = ("split into "
+                                   f"{len(tagged)}", glyph_order[tagged[0].codepoint])
+        elif tagged[0].codepoint == default[0].codepoint:
+            langs[script, lang] = ("unchanged", glyph_order[tagged[0].codepoint])
     # as with the Greek above: this skipped the Cyrillic probe on every
     # italic face, saying the italic donor had no Cyrillic. It has 234
     # letters now. Source Sans's own Serbian locl is not imported --
     # import_scp_locl reads the Latin donor's, and the Greek and
     # Cyrillic come from a second one -- so Serbian italic renders the
     # Russian letterforms. Enumerated rather than skipped.
-    known = LOCL_ITALIC_GAP if italic else set()
-    off = {k: v for k, v in langs.items() if k not in known}
+    # matched on the REASON, so a different defect under the same probe
+    # is not excused by it
+    known = LOCL_ITALIC_GAP if italic else {}
+    off = {k: v for k, v in langs.items() if known.get(k) != v[0]}
     check(not off, f"the donor's language forms are reachable "
                    f"(the Serbian б and the Sami Ŋ; unchanged: {off}"
                    + (f"; known italic gaps: {sorted(known)}" if known else "")

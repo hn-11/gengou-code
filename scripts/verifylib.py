@@ -500,6 +500,16 @@ def check_private(tf, check):
 # one unit from failing on a face that is drawn exactly as its donor
 # drew it. What this catches is a whole cell, 600.
 _LEAN = build.CELL // 4
+# ... but only on the right. Measuring from the ink alone gives a wide
+# letter a wide window on BOTH sides, and every false positive that
+# rule was loosened for was a rightward one. Leftward it kept a
+# half-cell bound: with every base anchor's X zeroed -- the exact shape
+# of bug a fitted dx can produce -- nine of the ten statics passed the
+# ink-only rule with every accent sitting 226 to 318 units left of its
+# letter, over the side bearing. Measured across all ten shipped faces
+# the accent never sits further left than 216 units from its letter's
+# centre, so half a cell keeps 84 units of headroom and catches that.
+_LEAN_LEFT = build.CELL // 2
 # one base per script and per shape the face carries, not seven Latin
 # letters the donor happens to anchor natively. Every one of b d f h k l
 # t is in Source Code Pro's own mark coverage, so this pass could not
@@ -566,9 +576,10 @@ def check_accents_clear(shape, gs, order, cmap, check, label=""):
             lean = None
             if None not in spans:
                 lean = max(spans[0][0] - across[1], across[1] - spans[0][1], 0)
+            off = None if None in across else across[1] - across[0]
             if (None in boxes or boxes[1][0] < boxes[0][1]
-                    or lean is None or lean > _LEAN):
-                off = None if None in across else across[1] - across[0]
+                    or lean is None or lean > _LEAN
+                    or off is None or off < -_LEAN_LEFT):
                 through[base + mark] = (None if None in boxes else
                                         (round(boxes[0][1]), round(boxes[1][0]),
                                          None if off is None else round(off)))
@@ -677,7 +688,7 @@ def check_mark_class_closure(tf, check):
                       f"({len(adrift)} are not, e.g. {sorted(set(adrift))[:3]})")
 
 
-def check_mark_features(tf, check, shape, gs, order, cmap):
+def check_mark_features(tf, check, shape, gs, order, cmap, label=""):
     """The three GPOS features that put a mark where it belongs, the
     GDEF classes their lookups filter on, and that a second accent is
     actually lifted off the first.
@@ -713,8 +724,8 @@ def check_mark_features(tf, check, shape, gs, order, cmap):
                 continue          # composed: nothing left to stack
             probes += 1
             lifted += positions[2].y_offset > 0
-    check(probes and lifted, f"a second accent is lifted off the first "
-                             f"({lifted} of {probes} probes; 'mkmk')")
+    check(probes and lifted, f"a second accent is lifted off the first"
+                             f"{label} ({lifted} of {probes} probes; 'mkmk')")
 
 
 # the combining marks Source Code Pro anchors only to the letters they
@@ -730,7 +741,7 @@ STRAY_MARKS = {"U+031A", "U+031B", "U+0334", "U+0344"}
 STRAY_MARKS_ITALIC = STRAY_MARKS | {"U+0310"}
 
 
-def check_stray_marks(shape, gs, order, cmap, check, italic):
+def check_stray_marks(shape, gs, order, cmap, check, italic, label=""):
     """The combining marks that land in the next character's cell.
 
     Over ACCENT_BASES, not over "E" alone. These marks are drawn as
@@ -767,7 +778,7 @@ def check_stray_marks(shape, gs, order, cmap, check, italic):
     want = STRAY_MARKS_ITALIC if italic else STRAY_MARKS
     check(set(stray) <= want,
           f"no combining mark falls into the next cell but the ones "
-          f"Source Code Pro anchors only to their own letters "
+          f"Source Code Pro anchors only to their own letters{label} "
           f"({stray}; known {sorted(want)})")
 
 

@@ -293,8 +293,8 @@ def main():
     # ... and at the axis extremes and every named instance, not the
     # default alone. A variable font's anchors are merged from the
     # masters, so a value that is wrong only away from the default is
-    # exactly what this file is here to see -- and the accent checks are
-    # the only ones that read positions at all. The Light Italic
+    # exactly what this file is here to see -- and these three are the
+    # checks here that read a position at all. The Light Italic
     # instance is where the statics' own weight extreme first showed a
     # leaning ascender, so it is the one a default-only gate misses.
     seen = {round(axis.defaultValue)}
@@ -310,7 +310,9 @@ def main():
         check_accents_clear(shape_at, gs_at, tf.getGlyphOrder(), vf_cmap,
                             check, f" at wght {loc}")
         check_stray_marks(shape_at, gs_at, tf.getGlyphOrder(), vf_cmap,
-                          check, is_italic)
+                          check, is_italic, f" at wght {loc}")
+        check_mark_features(tf, check, shape_at, gs_at, tf.getGlyphOrder(),
+                            vf_cmap, f" at wght {loc}")
     check_features_work(shape_default, check, vf_cmap)
     # the nameIDs verify_latin.py requires of the statics; 13 and 14 are
     # the licence and its URL, and dropping all seven passed this file
