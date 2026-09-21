@@ -33,7 +33,7 @@ Monaspace VF から欧文レイヤー Gengouを `dist/latin` に組み、
 リファレンスです）。
 
 ```sh
-SCP_VF_U=... SCP_VF_I=... MONA_VF=... \
+SCP_VF_U=... SCP_VF_I=... SS_VF_I=... MONA_VF=... \
   python scripts/build_latin.py           # dist/latin/Gengou-*.otf（10 面）
   python scripts/build_latin.py "Regular" # Regular 系のみ
 SHS_DIR=... \
@@ -136,19 +136,21 @@ NF_SYMBOLS=... python scripts/nerdpatch.py [面のパス | 名前の一部]
 
 上流の固定タグは `.github/actions/fetch-upstreams/action.yml` の
 「Pin upstream releases」ステップ（`SHS_TAG` / `SCP_TAG` / `SCP_VF_ZIP` /
-`MONA_TAG` / `NF_TAG`）に一元化されており、`ci.yml` / `release.yml` は
-このアクションを共有しています。同じステップに各アセットの SHA-256
-（`SHS_SHA` / `SCP_SHA` / `MONA_SHA` / `NF_SHA`）も置いてあり、取得した
-zip がこれと一致しなければ展開せずにその場で落ちます。GitHub のリリース
-資産はタグを変えずに差し替えられるので、**タグだけではどのバイト列で
-ビルドしたかを言えない**ためです。キャッシュキーもタグではなくハッシュ
-から作っています。
+`SS_TAG` / `MONA_TAG` / `NF_TAG`）に一元化されており、`ci.yml` /
+`release.yml` はこのアクションを共有しています。同じステップに各アセットの
+SHA-256（`SHS_SHA` / `SCP_SHA` / `SS_SHA` / `MONA_SHA` / `NF_SHA`）も
+置いてあり、取得した zip がこれと一致しなければ展開せずにその場で
+落ちます。GitHub のリリース資産はタグを変えずに差し替えられるので、
+**タグだけではどのバイト列でビルドしたかを言えない**ためです。
+キャッシュキーは**タグとハッシュの両方**から作ります。ハッシュだけだと、
+タグを手で上げてハッシュを直し忘れたときにキーが変わらず、検証が入って
+いる取得ステップごとキャッシュヒットで飛ばされてしまうためです。
 
 通常は手で更新する必要はありません。`upstream-sync.yml`（毎週月曜 実行、
 `workflow_dispatch` でも起動可）が検知から出荷までを通しで回します:
 
 1. `scripts/bump_pins.py` が各上流の `releases/latest` を引き、ピンを書き
-   換える。書き換える前に 4 つのアセットを実際に取得してハッシュを取るので、
+   換える。書き換える前に 5 つのアセットを実際に取得してハッシュを取るので、
    上流がアセット名を変えた場合はここで落ちる。**タグが動いていないのに
    ハッシュが変わっていた場合も落ちる** —— それは資産が差し替えられたと
    いうことで、ピンを黙って書き換えるとハッシュを置いている意味がなくなる
@@ -169,7 +171,9 @@ Issue は起票しません。PR 自体が同じ情報に加えて「そのピ�
 これは自動化の対象外です。
 
 手で追従する場合は `.github/actions/fetch-upstreams/action.yml` のピンを
-書き換えるだけで済みます（キャッシュキーはピンから自動導出される）。
+書き換えます（キャッシュキーはピンから自動導出される）。**タグと
+SHA-256 は必ず対で書き換えてください**——片方だけ動かすと、ピンの中身と
+ビルドに使われるバイト列が食い違ったまま通ってしまいます。
 
 ## Issue / Pull Request
 

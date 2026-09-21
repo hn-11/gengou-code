@@ -325,7 +325,7 @@ Nerd Fonts 版のための `Symbols Nerd Font Mono` を取得して環境変数�
 
 ```sh
 pip install -r requirements.txt
-SCP_VF_U=... SCP_VF_I=... MONA_VF=... \
+SCP_VF_U=... SCP_VF_I=... SS_VF_I=... MONA_VF=... \
   python scripts/build_latin.py           # dist/latin/Gengou-*.otf（10 面）
   python scripts/build_latin_vf.py        # dist/latin/Gengou[wght].otf, -Italic[wght].otf
 SHS_DIR=... \

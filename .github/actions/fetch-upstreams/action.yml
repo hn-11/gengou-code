@@ -59,14 +59,19 @@ runs:
       id: up
       with:
         path: upstreams
-        # Key derives from the pins above so a bump busts the cache automatically.
-        # SCP_TAG as well as SCP_VF_ZIP: bump_pins.py derives the zip name
-        # from the tag's -vf component alone, so a release that moves only
-        # the upright or italic one left the key — and the cache — unchanged
-        # The hashes, not the tags: a replaced asset under an unchanged tag
-        # moves the hash, and the cache must not serve the old extraction
-        # (or hide the replacement from the verification below).
-        key: upstreams-${{ env.SHS_SHA }}-${{ env.SCP_SHA }}-${{ env.SS_SHA }}-${{ env.MONA_SHA }}-${{ env.NF_SHA }}
+        # Every pin, tags and hashes alike. The hashes, because a replaced
+        # asset under an unchanged tag moves the hash and the cache must
+        # not serve the old extraction. The tags, because they are what
+        # select the URLs: a tag bumped by hand without its hash would
+        # otherwise leave the key untouched, and the fetch step — which is
+        # where the hash is checked at all — is skipped on a cache hit. The
+        # pin file would then say one release while the build used another,
+        # and the mismatch would surface weeks later as a stale-pin error
+        # when the cache expired. SCP_TAG as well as SCP_VF_ZIP: bump_pins
+        # derives the zip name from the tag's -vf component alone, so a
+        # release that moves only the upright or italic one leaves the zip
+        # name, and its bytes, unchanged.
+        key: upstreams-${{ env.SHS_TAG }}-${{ env.SCP_TAG }}-${{ env.SCP_VF_ZIP }}-${{ env.SS_TAG }}-${{ env.MONA_TAG }}-${{ env.NF_TAG }}-${{ env.SHS_SHA }}-${{ env.SCP_SHA }}-${{ env.SS_SHA }}-${{ env.MONA_SHA }}-${{ env.NF_SHA }}
     - if: steps.up.outputs.cache-hit != 'true'
       shell: bash
       run: |

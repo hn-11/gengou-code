@@ -28,7 +28,7 @@ Usage:
                                            # ("base" is accepted and means
                                            # nothing here: one family)
 Env (all required):
-  SCP_VF_U, SCP_VF_I, MONA_VF
+  SCP_VF_U, SCP_VF_I, SS_VF_I, MONA_VF
 Env (optional): GENGOU_VERSION, GENGOU_SKIP_AUTOHINT
 """
 

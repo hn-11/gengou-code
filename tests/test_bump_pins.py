@@ -141,3 +141,56 @@ def test_main_writes_the_moved_tag_and_its_new_hash(monkeypatch, tmp_path,
     assert "changed=true" in out.read_text()
     summary = capsys.readouterr().out
     assert "`MONA_TAG`" in summary and "`MONA_SHA`" in summary
+
+
+# --- digest ------------------------------------------------------------------
+
+class _Resp:
+    """An HTTPResponse enough for digest(): `length` is what is left to
+    read, which http.client leaves non-zero when a body ends short."""
+
+    def __init__(self, body, declared=None):
+        self._body = body
+        self.status = 200
+        self.length = (declared or len(body)) - len(body)
+
+    def read(self, _n):
+        out, self._body = self._body, b""
+        return out
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def test_digest_hashes_a_complete_body(monkeypatch):
+    import hashlib
+    monkeypatch.setattr(bump_pins.urllib.request, "urlopen",
+                        lambda url, timeout=0: _Resp(b"x" * 1000))
+    assert bump_pins.digest("http://x") == hashlib.sha256(b"x" * 1000).hexdigest()
+
+
+def test_digest_refuses_a_body_that_ended_short(monkeypatch):
+    """http.client returns b"" rather than raising when a transfer is cut,
+    so without this the sha256 of a partial download would be written in
+    as the pin -- or reported as an upstream that replaced its asset."""
+    monkeypatch.setattr(bump_pins.urllib.request, "urlopen",
+                        lambda url, timeout=0: _Resp(b"x" * 400, declared=1000))
+    with pytest.raises(SystemExit, match="600 bytes short"):
+        bump_pins.digest("http://x")
+
+
+def test_main_names_a_missing_pin_before_it_reads_one(monkeypatch, tmp_path):
+    """The hotfix branch reads the SCP pins directly; a KeyError there
+    would replace the message written for a pin that went missing."""
+    action = _action(tmp_path)
+    action.write_text(action.read_text().replace(
+        '        echo "SCP_VF_ZIP=VF-source-code-VF-1.026R.zip" >> "$GITHUB_ENV"\n', ""))
+    monkeypatch.setattr(bump_pins, "ACTION", action)
+    monkeypatch.setattr(bump_pins, "latest_tag",
+                        lambda repo: "2.042R-u" if repo == bump_pins.SCP_REPO
+                        else TAGS[repo])
+    with pytest.raises(SystemExit, match=r"missing pins: \['SCP_VF_ZIP'\]"):
+        bump_pins.main()

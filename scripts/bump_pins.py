@@ -105,8 +105,20 @@ def digest(url: str) -> str:
         with urllib.request.urlopen(url, timeout=300) as resp:
             if resp.status >= 400:
                 raise SystemExit(f"HTTP {resp.status} for {url}")
+            read = 0
             for chunk in iter(lambda: resp.read(1 << 20), b""):
                 sha.update(chunk)
+                read += len(chunk)
+            # http.client returns b"" rather than raising when the body
+            # ends short of its Content-Length, so a cut transfer would
+            # otherwise be hashed as if it were the asset — and reported
+            # as an upstream that replaced its release. `length` is what
+            # is left to read: anything but 0 means the body stopped early
+            if resp.length:
+                raise SystemExit(
+                    f"{url}\n  transfer ended {resp.length} bytes short "
+                    f"of its Content-Length after {read}; not hashing a "
+                    f"partial download.")
     except urllib.error.URLError as exc:
         raise SystemExit(f"cannot reach {url}: {exc}") from exc
     return sha.hexdigest()
@@ -144,11 +156,22 @@ def emit(changed: bool) -> None:
             fh.write(f"changed={'true' if changed else 'false'}\n")
 
 
+# every pin main() expects to find, before it reads any of them
+PINS = ("SHS_TAG", "SCP_TAG", "SCP_VF_ZIP", "SS_TAG", "MONA_TAG", "NF_TAG",
+        *SELECTORS)
+
+
 def main() -> int:
     text = ACTION.read_text()
     current = {m["key"]: m["val"] for m in PIN_RE.finditer(text)}
     if not current:
         raise SystemExit(f"no pins found in {ACTION}")
+    # before anything indexes them: the hotfix branch below reads the SCP
+    # pins directly, and a KeyError traceback there would replace the one
+    # message written for a pin that went missing
+    missing = [k for k in PINS if k not in current]
+    if missing:
+        raise SystemExit(f"{ACTION} is missing pins: {sorted(missing)}")
 
     scp_tag = latest_tag(SCP_REPO)
     notes = []
@@ -175,10 +198,6 @@ def main() -> int:
         "MONA_TAG": latest_tag(MONA_REPO),
         "NF_TAG": latest_tag(NF_REPO),
     }
-    missing = (set(new) | set(SELECTORS)) - set(current)
-    if missing:
-        raise SystemExit(f"{ACTION} is missing pins: {sorted(missing)}")
-
     moved = {k: (current[k], v) for k, v in new.items() if current[k] != v}
     # every run hashes the assets, moved or not: a replacement under a tag
     # that did not move is the case the hashes exist for, and a run that
