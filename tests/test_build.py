@@ -2933,6 +2933,56 @@ def test_anchor_loose_letters_gives_a_letter_the_rule_its_neighbours_follow():
     assert sub.BaseArray.BaseCount == len(sub.BaseCoverage.glyphs)
 
 
+def test_anchor_loose_letters_takes_the_x_of_the_letter_it_is_built_on():
+    """A letter the donor anchored off centre, and the same drawing with
+    something added to it: they are one shape, so the mark belongs in
+    one place. Predicted from the ink centre instead, the accent jumped
+    between them -- the diaeresis over L's stem and over the empty space
+    beside L-with-line-below, 149 units apart in the built face.
+
+    The y still comes off this letter's own ink, which is what puts a
+    mark above the accent the letter already carries."""
+    # U+1E3A is L with line below: canonically L + U+0331
+    heights = {"L": 656, "Lbar": 656, "acute": 100}
+    marks = {"acute": (0, _anchor(0, 0))}
+    # 20 bases so the rule fits, but L's anchor is 30 left of centre
+    filler = {f"b{i}": 400 + 20 * i for i in range(20)}
+    covered = _markbase(marks,
+                        {**{g: [_anchor(50, h + 20)] for g, h in filler.items()},
+                         "L": [_anchor(20, 676)]})
+    font = _drawn_gpos_font(
+        {**filler, **heights},
+        {**{0x41 + i: g for i, g in enumerate(filler)},
+         0x004C: "L", 0x1E3A: "Lbar", 0x0301: "acute"},
+        [covered])
+
+    assert build.anchor_loose_letters(font) == 1      # Lbar only; L is covered
+    sub = font["GPOS"].table.LookupList.Lookup[0].SubTable[0]
+    got = sub.BaseArray.BaseRecord[sub.BaseCoverage.glyphs.index("Lbar")]
+    assert got.BaseAnchor[0].XCoordinate == 20        # L's, not the centre 50
+    assert got.BaseAnchor[0].YCoordinate == 676       # its own ink top + 20
+
+
+def test_anchor_loose_letters_does_not_follow_a_compatibility_mapping():
+    """A superscript w is not a w with something added to it -- it is a
+    different letter drawn somewhere else, and its marks belong where
+    they fall, not over the letter it was derived from."""
+    filler = {f"b{i}": 400 + 20 * i for i in range(20)}
+    marks = {"acute": (0, _anchor(0, 0))}
+    covered = _markbase(marks,
+                        {**{g: [_anchor(50, h + 20)] for g, h in filler.items()},
+                         "w": [_anchor(11, 520)]})
+    font = _drawn_gpos_font(
+        {**filler, "w": 500, "wsuper": 700, "acute": 100},
+        {**{0x41 + i: g for i, g in enumerate(filler)},
+         0x0077: "w", 0x02B7: "wsuper", 0x0301: "acute"},
+        [covered])
+    assert build.anchor_loose_letters(font) == 1
+    sub = font["GPOS"].table.LookupList.Lookup[0].SubTable[0]
+    got = sub.BaseArray.BaseRecord[sub.BaseCoverage.glyphs.index("wsuper")]
+    assert got.BaseAnchor[0].XCoordinate == 50        # the rule's, not w's 11
+
+
 def test_anchor_loose_letters_reads_a_below_mark_lookup_off_the_ink_bottom():
     """Which edge the anchors track is the lookup's own statement of
     what it is for. Read off the top instead, a cedilla would be placed

@@ -287,15 +287,28 @@ def graft_master(base, mona_source, slant, sans_source=None, upright=None):
             base, sans_source.matched(target, erode=False), upright)
         # the anchors this writes are the donor's, read at THIS master's
         # weight, so the masters' GPOS can differ where the donor's own
-        # anchors move with weight. varLib wants the non-CFF2 tables
-        # byte-identical, and takes the default master's; a check below
-        # says so if they diverge
+        # anchors move with weight. varLib merges those differences into
+        # variable anchors backed by a GDEF VarStore rather than taking
+        # the default master's -- which is what we want, and what makes
+        # the COVERAGE the thing that has to agree. The check at step 4b
+        # below is what says so if it does not
     build_latin.remap_scp_stylistic_sets(base)
     build.add_gsub(base, added, alts, build.LIGATURES)
     build.classify_unicode_marks(base)
     if "DSIG" in base:
         del base["DSIG"]
     return target, mona
+
+
+def _mark_coverage_shape(font):
+    """What every master's mark-to-base lookups must agree on for varLib
+    to merge them: the glyphs each one covers, in order. The anchor
+    VALUES are free to differ -- that is what a variable anchor is for
+    -- but a base present at one weight and absent at another is a
+    structure varLib has no way to interpolate."""
+    return [(i, j, tuple(sub.BaseCoverage.glyphs), tuple(sub.MarkCoverage.glyphs))
+            for i, subs in build._mark_base_lookups(font)
+            for j, sub in enumerate(subs)]
 
 
 def harmonize_feature_names(font):
@@ -487,6 +500,25 @@ def build_style(style, env, out_dir):
     for w in wghts:
         harmonize_feature_names(bases[w])
         build.update_bbox(bases[w])
+
+    # 4b. the fitted base anchors for the letters no mark lookup covers
+    #     (build.anchor_loose_letters -- without them a combining accent
+    #     lands a whole cell right, on the next character). The rule is
+    #     fitted ONCE, on the default master, and applied to every one:
+    #     fitted per master it could admit a lookup at one weight and
+    #     reject it at another, and a BaseCoverage that differs between
+    #     masters is one varLib cannot merge
+    rules = build.fit_anchor_rules(bases[default_wght])
+    loose = {w: build.anchor_loose_letters(bases[w], rules=rules) for w in wghts}
+    if len(set(loose.values())) != 1:
+        raise RuntimeError(f"{style}: fitted base anchors diverged across "
+                           f"masters: {loose}")
+    shapes = {w: _mark_coverage_shape(bases[w]) for w in wghts}
+    if len({tuple(s) for s in shapes.values()}) != 1:
+        raise RuntimeError(f"{style}: mark-to-base coverage diverged across "
+                           f"masters, which varLib cannot merge")
+    print(f"[{style}] letters given a fitted base anchor: "
+          f"{loose[default_wght]} per master")
     win_ascent = max(b["head"].yMax for b in bases.values())
     win_descent = max(-b["head"].yMin for b in bases.values())
 

@@ -56,11 +56,15 @@ jobs:
       - if: matrix.nerd
         run: python scripts/nerdpatch.py dist/*.otf
       - run: python scripts/verify_many.py 'dist/latin/*.otf' 'dist/*.otf' 'dist/nerd/*.otf'
-  # the variable Gengou (upright only here, Italic is covered in
-  # release.yml; verify_latin_vf.py's static-face comparison skips when
-  # dist/latin has no statics and its check against Source Code Pro
-  # itself still runs), then nerdpatch.py on the Gengou Regular face
-  # (the complete symbol set: the graft takes seconds)
+  # the variable Gengou, BOTH styles. The italic is where every piece of
+  # the second donor lives -- the Source Sans masters, the imported
+  # anchors, the fitted ones, the varLib merge of anchors that differ
+  # per master -- and building only the upright meant that code first
+  # ran on a release tag, so an incompatibility failed the release
+  # rather than the pull request. (verify_latin_vf.py's static-face
+  # comparison skips when dist/latin has no statics; its check against
+  # Source Code Pro itself still runs.) Then nerdpatch.py on the Gengou
+  # Regular face (the complete symbol set: the graft takes seconds)
   variable-nerd-font:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -68,8 +72,9 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/setup-build
-      - run: python scripts/build_latin_vf.py upright
+      - run: python scripts/build_latin_vf.py
       - run: python scripts/verify_latin_vf.py "dist/latin/Gengou[wght].otf"
+      - run: python scripts/verify_latin_vf.py "dist/latin/Gengou-Italic[wght].otf"
       - run: python scripts/build_latin.py "Regular Upright"
       - run: python scripts/nerdpatch.py dist/latin/Gengou-Regular.otf
       - run: python scripts/verify_latin.py dist/nerd/latin/GengouNFM-Regular.otf

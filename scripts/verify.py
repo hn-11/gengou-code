@@ -1640,6 +1640,18 @@ def main():
     check((os2.usWinAscent, os2.usWinDescent) == WIN_METRICS,
           f"win metrics are the pinned {WIN_METRICS}, got "
           f"({os2.usWinAscent}, {os2.usWinDescent})")
+    # a terminal gives a codepoint no font in the fallback chain covers
+    # one column, and Source Han Sans's .notdef is full width -- 1000
+    # here, 1200 in Term -- so one such character moved the rest of the
+    # line. build.notdef_to_cell replaces it with the Latin donor's.
+    # Both Latin verifiers ask this; the JP faces are the only place the
+    # defect ever existed, and the generic grid check cannot see it (a
+    # full width is a whole number of cells)
+    notdef = tf.getGlyphOrder()[0]
+    half, _ = expected_metrics(tf)
+    check(tf["hmtx"].metrics[notdef][0] == half,
+          f".notdef is one cell ({half}), got "
+          f"{tf['hmtx'].metrics[notdef][0]}")
 
     if "Nerd Font" in fam:
         import nerdpatch

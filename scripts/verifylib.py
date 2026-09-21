@@ -496,7 +496,15 @@ def check_private(tf, check):
 # how far an accent's ink centre may sit from its letter's: half
 # a cell, where the regression this catches is a whole one
 _LEAN = build.CELL // 2
-ACCENT_BASES = "bdfhklt"
+# one base per script and per shape the face carries, not seven Latin
+# letters the donor happens to anchor natively. Every one of b d f h k l
+# t is in Source Code Pro's own mark coverage, so this pass could not
+# see a letter with NO anchor at all -- which is the state the two
+# variable fonts shipped in, about 550 letters each putting the accent
+# in the next cell, while both Latin verifiers said all checks passed.
+# Ascender, x-height, capital, Greek lower and upper, Cyrillic lower and
+# upper, and Latin letters that already carry a diacritic or a dot.
+ACCENT_BASES = "bdfhkltoOaAzZαωβΑΩвжшВЖШçñı"
 ACCENTS = "̀́̂̃̄̆̇̈̌̊"
 
 
@@ -512,7 +520,13 @@ def check_accents_clear(shape, gs, order, cmap, check, label=""):
     mark positioning lives natively and the two variable fonts are the
     whole of Gengou.zip, asked nothing: zeroing all 502 base anchors
     dropped every accent into the letter and both said "all checks
-    passed"."""
+    passed".
+
+    The bases are one per script and per shape (see ACCENT_BASES). With
+    only the seven Latin ones this pass was still blind to a letter the
+    donors never anchored AT ALL: deleting every base anchor above
+    U+0250 -- the state the two variable fonts actually shipped in --
+    left both Latin verifiers reporting nothing."""
     through, pairs = {}, 0
     for base in ACCENT_BASES:
         for mark in ACCENTS:
@@ -703,21 +717,32 @@ STRAY_MARKS_ITALIC = STRAY_MARKS | {"U+0310"}
 
 
 def check_stray_marks(shape, gs, order, cmap, check, italic):
-    """The combining marks that land in the next character's cell."""
+    """The combining marks that land in the next character's cell.
+
+    Over ACCENT_BASES, not over "E" alone. These marks are drawn as
+    spacing glyphs and the shaper zeroes their advance, so a mark the
+    face cannot place lands a whole cell right -- and with one base,
+    one the donor happens to anchor, this pass could not see a LETTER
+    the donors never anchored. That is the state the two variable fonts
+    shipped in, about 550 letters each, while every verifier passed."""
     stray = []
     for cp in sorted(cmap):
         if unicodedata.category(chr(cp)) not in ("Mn", "Me", "Mc"):
             continue
-        infos, positions = shape("E" + chr(cp), {})
-        if len(infos) != 2:
-            continue                 # composed: nothing loose to place
-        pen = BoundsPen(gs)
-        gs[order[infos[1].codepoint]].draw(pen)
-        if pen.bounds is None:
-            continue
-        left = pen.bounds[0] + build.CELL + positions[1].x_offset
-        if left > build.CELL * 0.9:
-            stray.append(f"U+{cp:04X}")
+        for base in ACCENT_BASES:
+            if ord(base) not in cmap:
+                continue
+            infos, positions = shape(base + chr(cp), {})
+            if len(infos) != 2:
+                continue             # composed: nothing loose to place
+            pen = BoundsPen(gs)
+            gs[order[infos[1].codepoint]].draw(pen)
+            if pen.bounds is None:
+                continue
+            left = pen.bounds[0] + build.CELL + positions[1].x_offset
+            if left > build.CELL * 0.9:
+                stray.append(f"U+{cp:04X}")
+                break
     want = STRAY_MARKS_ITALIC if italic else STRAY_MARKS
     check(set(stray) <= want,
           f"no combining mark falls into the next cell but the ones "

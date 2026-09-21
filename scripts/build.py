@@ -1610,7 +1610,19 @@ def _anchor_rule(gs, sub, floor=16, spread=24, wander=120):
     centile; x within 11-15 at the median, with a tail to about 200 on
     a letter whose designer moved the anchor off centre deliberately.
     That is the accuracy this buys. What it replaces is not a smaller
-    error but a whole cell: 600 units, into the next character.
+    error but a whole cell: 600 units, into the next character. (The
+    letters that ARE such a letter with something added to it take its
+    x outright rather than the fit -- see anchor_loose_letters.)
+
+    On the donors as pinned, `floor` is the only gate that turns
+    anything away: the chosen edge's spread never exceeds 6 against a
+    limit of 24, and the x never 98 against 120. The three lookups it
+    rejects carry one to four bases each. The one admitted fit worth
+    distrusting is the ogonek's, whose x is bimodal in the donor -- A's
+    anchor is 204 right of centre, I's is on it -- so the median lands
+    at neither; every letter it places goes about 100 off. Still a
+    sixth of the error it replaces, and the letters built on a covered
+    one bypass it.
     """
     tops, bots, xs = [], [], []
     for gn, rec in zip(sub.BaseCoverage.glyphs, sub.BaseArray.BaseRecord):
@@ -1636,7 +1648,51 @@ def _anchor_rule(gs, sub, floor=16, spread=24, wander=120):
     return use_top, otRound(dx), otRound(statistics.median(edge))
 
 
-def anchor_loose_letters(font, tag="mark"):
+def _canonical_bases(cmap):
+    """{glyph: the glyph of the letter it is built on}, following
+    canonical decompositions to the end of the chain -- U+1EB6 A with
+    breve and dot below to U+1EA0 to plain A.
+
+    Compatibility decompositions are not followed: a superscript w is
+    not a w with something added to it, it is a different letter drawn
+    somewhere else, and its marks belong where they fall.
+    """
+    out = {}
+    for cp, gn in cmap.items():
+        cur = cp
+        for _ in range(8):                 # a chain, not a cycle
+            spec = unicodedata.decomposition(chr(cur))
+            if not spec or spec.startswith("<"):
+                break
+            cur = int(spec.split()[0], 16)
+        if cur != cp and cur in cmap:
+            out[gn] = cmap[cur]
+    return out
+
+
+def fit_anchor_rules(font, tag="mark"):
+    """{(lookup index, subtable index): _anchor_rule} over the mark
+    lookups of `font`, for anchor_loose_letters to be handed.
+
+    Separate from applying it because a variable font's masters have to
+    agree: the rule is fitted once, on the default master, and applied
+    to every one. Fitted per master it could admit a lookup at one
+    weight and reject it at another, and a BaseCoverage that differs
+    between masters is one varLib cannot merge.
+    """
+    gs = font.getGlyphSet()
+    out = {}
+    for i, subs in _mark_base_lookups(font, tag):
+        for j, sub in enumerate(subs):
+            if sub.ClassCount != 1:
+                continue
+            rule = _anchor_rule(gs, sub)
+            if rule is not None:
+                out[(i, j)] = rule
+    return out
+
+
+def anchor_loose_letters(font, tag="mark", rules=None):
     """Give a letter no mark lookup covers a base anchor of its own,
     fitted from the letters that lookup does cover. Returns the count.
 
@@ -1655,30 +1711,44 @@ def anchor_loose_letters(font, tag="mark"):
     The fitted rule is the donor's own (see _anchor_rule), so a letter
     that gets an anchor here gets the one its neighbours already have,
     and a lookup whose anchors do not follow a rule is left alone.
+    `rules` supplies those fits from elsewhere (fit_anchor_rules), which
+    is how a variable font's masters are kept in step.
     """
     gs = font.getGlyphSet()
     cmap = font.getBestCmap()
     letters = {gn for cp, gn in cmap.items()
                if unicodedata.category(chr(cp)).startswith("L")}
+    bases = _canonical_bases(cmap)
     gid = font.getGlyphID
     added = 0
-    for _, subs in _mark_base_lookups(font, tag):
-        for sub in subs:
+    for i, subs in _mark_base_lookups(font, tag):
+        for j, sub in enumerate(subs):
             if sub.ClassCount != 1:
                 continue      # one class here; more would need the class too
-            rule = _anchor_rule(gs, sub)
+            rule = (rules.get((i, j)) if rules is not None
+                    else _anchor_rule(gs, sub))
             if rule is None:
                 continue
             use_top, dx, dy = rule
             rows = list(zip(sub.BaseCoverage.glyphs, sub.BaseArray.BaseRecord))
             have = set(sub.BaseCoverage.glyphs)
+            # a letter the donor DID anchor, whose x this one should take
+            # rather than the rule's: the two are the same drawing with
+            # something added, so an anchor the designer moved off centre
+            # on one belongs off centre on the other. Only the x -- the y
+            # comes off this letter's own ink, which is what puts a mark
+            # above the accent the letter already carries
+            donor_x = {g: r.BaseAnchor[0].XCoordinate
+                       for g, r in rows if r.BaseAnchor and r.BaseAnchor[0]}
             for name in sorted(letters - have, key=gid):
                 box = _bounds(gs, name)
                 if not box:
                     continue
                 anchor = otTables.Anchor()
                 anchor.Format = 1
-                anchor.XCoordinate = otRound((box[0] + box[2]) / 2) + dx
+                inherited = donor_x.get(bases.get(name))
+                anchor.XCoordinate = (inherited if inherited is not None
+                                      else otRound((box[0] + box[2]) / 2) + dx)
                 anchor.YCoordinate = otRound(box[3] if use_top else box[1]) + dy
                 rec = otTables.BaseRecord()
                 rec.BaseAnchor = [anchor]
