@@ -141,7 +141,20 @@ STRETCHED = SEPARATORS | PROGRESS
 TEXT_OVER_ICON = frozenset({0x2665})            # BLACK HEART SUIT
 
 
-def nf_name(s):
+# GDI looks a family up by nameID 1 through LOGFONT.lfFaceName, which
+# holds 31 characters and a NUL. Spelled out, the marker puts the
+# non-RIBBI faces of the longest family over it ("Gengou JP Term Nerd
+# Font Mono SemiBold" is 38), and those faces cannot be picked in the
+# old conhost, Notepad or Office's GDI path at all. nameID 1 therefore
+# takes the abbreviation and nameID 16 keeps the name spelled out:
+# that split is what 16 is for, and DirectWrite, CoreText and
+# fontconfig all read 16 in preference, so only GDI sees the short
+# one. Upstream font-patcher shortens the same record under --windows.
+NF_MARKER = " Nerd Font Mono"
+NF_MARKER_GDI = " NFM"
+
+
+def nf_name(s, marker=NF_MARKER):
     """The Nerd Fonts name of one of our names: the marker spliced in
     after the family, variant token included ("Gengou JP Term Nerd
     Font Mono", "GengouJPTermNFM-Bold"). A name that already carries
@@ -157,7 +170,8 @@ def nf_name(s):
     ps, hit = re.subn(r"(Gengou(?:JP(?:Term)?)?)(?=-)", r"\1NFM", s, count=1)
     if hit:
         return ps
-    return re.sub(r"(Gengou(?: JP(?: Term)?)?)", r"\1 Nerd Font Mono", s, count=1)
+    return re.sub(r"Gengou(?: JP(?: Term)?)?", lambda m: m.group(0) + marker,
+                  s, count=1)
 
 
 def icon_context(font, symbols):
@@ -346,12 +360,24 @@ NF_DESIGNER = "Nerd Fonts: Ryan L McIntyre and the Nerd Fonts contributors"
 def rename(font):
     """Every name record naming the family takes the Nerd Fonts name,
     the CFF's own names follow, and the copyright and designer records
-    credit Nerd Fonts for the icons. Returns the new PostScript name."""
+    credit Nerd Fonts for the icons. nameID 1 takes the abbreviated
+    marker so it stays inside GDI's 31 characters (NF_MARKER_GDI).
+    Returns the new PostScript name."""
     name = font["name"]
+    spelled = None
     for rec in name.names:
         s = rec.toUnicode()
         if "Gengou" in s:
-            name.setName(nf_name(s), rec.nameID, rec.platformID, rec.platEncID, rec.langID)
+            gdi = rec.nameID == 1
+            if gdi and "NFM" not in s:
+                # what 1 becomes spelled out, for the CFF names below to
+                # fall back on when this face carries no 16 or 4: reading
+                # 1 back would hand them GDI's abbreviation instead. Not
+                # computed on a second pass, where 1 already holds the
+                # abbreviation and there is nothing to spell out
+                spelled = nf_name(s, NF_MARKER)
+            name.setName(nf_name(s, NF_MARKER_GDI if gdi else NF_MARKER),
+                         rec.nameID, rec.platformID, rec.platEncID, rec.langID)
     for nid, sep, credit in ((0, " ", NF_NOTICE), (9, "; ", NF_DESIGNER)):
         records = [r for r in name.names if r.nameID == nid]
         if not records:      # a face with no such record gets one
@@ -370,8 +396,9 @@ def rename(font):
     # would otherwise file this face under the plain family
     td = cff[ps]
     for attr, nid in (("FamilyName", 16), ("FullName", 4)):
-        if hasattr(td, attr):
-            setattr(td, attr, name.getDebugName(nid) or name.getDebugName(1))
+        val = name.getDebugName(nid) or spelled
+        if hasattr(td, attr) and val:
+            setattr(td, attr, val)
     return ps
 
 

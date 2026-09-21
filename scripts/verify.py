@@ -17,6 +17,7 @@ from verifylib import (  # noqa: E402
     Checker,
     check_coverage_order,
     check_features_work,
+    check_gdi_family_name,
     check_mark_class_closure,
     check_private,
     check_stat,
@@ -424,6 +425,7 @@ def main():
 
     sub = subfamily_name(tf)
     check_style_bits(tf, check, sub, italic)
+    check_gdi_family_name(tf, check)
 
     shape_infos = make_shaper(FONT)
 

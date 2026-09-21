@@ -244,3 +244,24 @@ def test_check_private_reads_order_and_whole_units(capsys):
     verifylib.check_private(font_with(BlueValues=[-12, 0, 486, 733.9999999]),
                             check)
     assert check.failed                    # the blues eight faces shipped
+
+
+# --- check_gdi_family_name ---------------------------------------------------
+
+class _Name:
+    def __init__(self, family):
+        self.family = family
+
+    def getDebugName(self, nid):
+        return self.family if nid == 1 else None
+
+
+def test_check_gdi_family_name_bounds_nameid_1():
+    at_limit = "G" * verifylib.LFFACENAME_MAX
+    for family, want in ((at_limit, True), (at_limit + "G", False),
+                         ("Gengou JP Term NFM SemiBold", True),
+                         ("Gengou JP Term Nerd Font Mono SemiBold", False),
+                         (None, True)):                      # absent reads as empty
+        check = verifylib.Checker()
+        verifylib.check_gdi_family_name({"name": _Name(family)}, check)
+        assert (not check.failed) is want, family

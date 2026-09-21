@@ -182,6 +182,25 @@ def check_style_bits(tf, check, subfamily, italic):
               f"(fsSelection={fsel:#06x})")
 
 
+# GDI resolves a family through LOGFONT.lfFaceName, 32 bytes including
+# the terminator. A family whose nameID 1 is longer cannot be selected
+# there at all -- not a degraded rendering, an absent font -- in the old
+# conhost, Notepad, or Office's GDI text path. nameID 16 carries the
+# name spelled out for everything that reads it (DirectWrite, CoreText,
+# fontconfig all prefer 16), so holding 1 to this bound costs nothing.
+# It is the Nerd Fonts marker that pushes against it: nerdpatch splices
+# the abbreviation into 1 and the full words into 16.
+LFFACENAME_MAX = 31
+
+
+def check_gdi_family_name(tf, check):
+    """nameID 1 fits GDI's LOGFONT.lfFaceName."""
+    fam = tf["name"].getDebugName(1) or ""
+    check(len(fam) <= LFFACENAME_MAX,
+          f"nameID 1 fits GDI's {LFFACENAME_MAX} characters "
+          f"({len(fam)}: {fam!r})")
+
+
 def check_tables(tf, check, bounds, hmtx, cmap, codepages=False):
     """The numbers a rasterizer clips and lays out by, read back from
     the outlines: head's bounding box, hhea's four extents, OS/2's

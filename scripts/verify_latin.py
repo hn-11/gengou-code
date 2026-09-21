@@ -21,6 +21,7 @@ from verifylib import (  # noqa: E402
     check_coverage_order,
     check_features_work,
     check_gdef_marks,
+    check_gdi_family_name,
     check_heights,
     check_mark_class_closure,
     check_mark_features,
@@ -58,6 +59,7 @@ def main():
     subfamily = name.getDebugName(17) or name.getDebugName(2) or ""
     italic = "Italic" in subfamily
     check_style_bits(tf, check, name.getDebugName(2) or "", italic)
+    check_gdi_family_name(tf, check)
     # every nameID a font manager, a PDF and the Windows family model
     # read. verify.py has required these on the JP faces since v3;
     # stripping all seven from a Latin face passed every check here

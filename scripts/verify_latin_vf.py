@@ -28,6 +28,7 @@ from verifylib import (  # noqa: E402
     check_coverage_order,
     check_features_work,
     check_gdef_marks,
+    check_gdi_family_name,
     check_heights,
     check_mark_class_closure,
     check_mark_features,
@@ -314,6 +315,7 @@ def main():
     check_style_bits(tf, check, tf["name"].getDebugName(2) or "",
                      "Italic" in (tf["name"].getDebugName(17)
                                   or tf["name"].getDebugName(2) or ""))
+    check_gdi_family_name(tf, check)
     off_grid = sorted({adv for adv, _ in metrics.values()}
                       - {0} - {build.CELL * n for n in range(1, 5)})
     check(not off_grid, f"every advance is 0 or a whole number of "
