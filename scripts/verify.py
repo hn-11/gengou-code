@@ -20,10 +20,12 @@ from verifylib import (  # noqa: E402
     check_gdi_family_name,
     check_mark_class_closure,
     check_marks,
+    check_name_ids,
     check_private,
     check_stat,
     check_style_bits,
     check_tables,
+    check_version_stamp,
     glyph_has_hint,
     hmtx_mismatches,
     ink_spill,
@@ -269,23 +271,12 @@ def main():
     n0 = name.getDebugName(0) or ""
     for donor in ("Source Han Sans", "Source Code Pro", "Monaspace"):
         check(donor in n0, f"nameID 0 credits {donor}")
-    for nid in (1, 2, 3, 4, 5, 6, 8, 9, 11, 13, 14, 16, 17):
-        check(bool(name.getDebugName(nid)), f"nameID {nid} is set")
+    check_name_ids(tf, check, (1, 2, 3, 4, 5, 6, 8, 9, 11, 13, 14, 16, 17))
     # the version the face is stamped with, against the one the build
     # was asked for: one dist/ with two versions in it passed every
     # gate, and a release step that misses GENGOU_VERSION makes exactly
     # that
-    want_version = os.environ.get("GENGOU_VERSION")
-    if want_version:
-        major, minor = want_version.split(".")[:2]
-        head5 = name.getDebugName(5) or ""
-        check(abs(tf["head"].fontRevision - float(f"{major}.{minor}")) < 5e-4
-              and head5.startswith(f"Version {want_version}")
-              and (name.getDebugName(3) or "").startswith(want_version + ";"),
-              f"stamped {want_version} (fontRevision "
-              f"{tf['head'].fontRevision:.3f}, {head5!r})")
-    else:
-        print("skip  version stamp (GENGOU_VERSION unset)")
+    check_version_stamp(tf, check, unique_id=True)
     # the weight the face calls itself, in the number Windows sorts by
     weight = weight_name(subfamily_name(tf))
     if check(weight in build.WEIGHT_CLASS,

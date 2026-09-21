@@ -4,7 +4,6 @@ every ligature fires, the guards hold, everything sits on the 600 grid,
 nothing CJK or full-width is left, and the metadata is the Latin font's
 own. Usage: python scripts/verify_latin.py dist/latin/Gengou-Regular.otf"""
 
-import os
 import sys
 from pathlib import Path
 
@@ -21,13 +20,19 @@ from verifylib import (  # noqa: E402
     check_features_work,
     check_gdef_marks,
     check_gdi_family_name,
+    check_grid,
     check_heights,
+    check_latin_repertoire,
     check_mark_class_closure,
     check_marks,
+    check_monospace_metadata,
+    check_name_ids,
+    check_one_cell,
     check_private,
     check_stat,
     check_style_bits,
     check_tables,
+    check_version_stamp,
     check_zones,
     glyph_has_hint,
     hmtx_mismatches,
@@ -59,11 +64,7 @@ def main():
     italic = "Italic" in subfamily
     check_style_bits(tf, check, name.getDebugName(2) or "", italic)
     check_gdi_family_name(tf, check)
-    # every nameID a font manager, a PDF and the Windows family model
-    # read. verify.py has required these on the JP faces since v3;
-    # stripping all seven from a Latin face passed every check here
-    for nid in (1, 2, 3, 4, 5, 6, 8, 9, 11, 13, 14):
-        check(bool(name.getDebugName(nid)), f"nameID {nid} is set")
+    check_name_ids(tf, check, (1, 2, 3, 4, 5, 6, 8, 9, 11, 13, 14))
     # the weight the face calls ITSELF, in the number Windows sorts by:
     # the PANOSE check below derives what it wants FROM usWeightClass,
     # so the pair stayed self-consistent at any value — a Regular
@@ -74,14 +75,7 @@ def main():
               f"OS/2 usWeightClass {tf['OS/2'].usWeightClass} "
               f"(want {build.WEIGHT_CLASS[weight]} for {weight})")
         check_stat(tf, check, weight, italic)
-    want_version = os.environ.get("GENGOU_VERSION")
-    if want_version:
-        major, minor = want_version.split(".")[:2]
-        check(abs(tf["head"].fontRevision - float(f"{major}.{minor}")) < 5e-4
-              and (name.getDebugName(5) or "").startswith(
-                  f"Version {want_version}"),
-              f"stamped {want_version} (fontRevision "
-              f"{tf['head'].fontRevision:.3f}, {name.getDebugName(5)!r})")
+    check_version_stamp(tf, check)
     n0 = name.getDebugName(0) or ""
     check("Source Code Pro:" in n0 and "Monaspace:" in n0
           and "Source Han Sans" not in n0,
@@ -89,17 +83,9 @@ def main():
 
     cmap = tf.getBestCmap()
     hmtx = tf["hmtx"]
-    check(len(cmap) >= 800, f"{len(cmap)} codepoints mapped")
-    check(not any(0x3000 <= cp <= 0x9FFF or 0xFF00 <= cp <= 0xFFEF for cp in cmap),
-          "no CJK / full-width codepoints")
-    bad = sorted({hmtx[g][0] for g in tf.getGlyphOrder()}
-                 - {0} - {CELL * n for n in range(1, 5)})
-    check(not bad, f"every advance is 0 or a whole number of {CELL} cells "
-                   f"(offenders: {bad})")
-    for ch in build.MONA_AMBIGUOUS:
-        if ord(ch) in cmap:
-            check(hmtx[cmap[ord(ch)]][0] == CELL, f"{ch!r} is one cell")
-    check(hmtx[tf.getGlyphOrder()[0]][0] == CELL, ".notdef is one cell")
+    check_latin_repertoire(check, cmap)
+    check_grid(check, hmtx.metrics, CELL)
+    check_one_cell(tf, check, cmap, hmtx.metrics, CELL)
     widths, bearings, bounds = hmtx_mismatches(tf)
     check(not widths, f"CFF charstring widths agree with hmtx ({widths[:3]})")
     check_tables(tf, check, bounds, tf["hmtx"].metrics, cmap, codepages=True)
@@ -159,21 +145,7 @@ def main():
           f"GPOS keeps SCP's mark positioning, no kern ({sorted(gpos)})")
     check("STAT" in tf, "STAT present")
 
-    os2 = tf["OS/2"]
-    check(tf["post"].isFixedPitch == 1 and os2.panose.bProportion == 9,
-          "declared monospaced")
-    want_pw = build.panose_weight(os2.usWeightClass)
-    check(os2.panose.bWeight == want_pw,
-          f"PANOSE weight {os2.panose.bWeight} matches usWeightClass "
-          f"{os2.usWeightClass} (want {want_pw})")
-    hhea = tf["hhea"]
-    check((os2.sTypoAscender, os2.sTypoDescender, os2.sTypoLineGap)
-          == (hhea.ascent, hhea.descent, hhea.lineGap) and os2.fsSelection & 0x80,
-          "typo metrics == hhea metrics, USE_TYPO_METRICS set")
-    head = tf["head"]
-    check(os2.usWinAscent >= head.yMax and os2.usWinDescent >= -head.yMin,
-          f"win metrics cover the bbox ({os2.usWinAscent}/{os2.usWinDescent} "
-          f"vs {head.yMax}/{-head.yMin})")
+    check_monospace_metadata(tf, check)
 
     shape = make_shaper(FONT)
     gs, order = tf.getGlyphSet(), tf.getGlyphOrder()

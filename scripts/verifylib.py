@@ -5,6 +5,7 @@ harmonize_latin.py share.
 """
 
 import math
+import os
 import sys
 import unicodedata
 from pathlib import Path
@@ -139,6 +140,93 @@ def static_faces(src_dir, family):
     directory (`Family[wght].otf`, `Family-Italic[wght].otf` — the second
     also matches a naive `Family-*.otf` glob)."""
     return sorted(p for p in Path(src_dir).glob(f"{family}-*.otf") if "[" not in p.name)
+
+
+def is_italic(tf):
+    """Whether the face calls itself italic, by any of the three places
+    a font says so: the typographic or legacy subfamily name, the post
+    table's angle, head's macStyle. check_style_bits asks that the
+    three agree."""
+    name = tf["name"]
+    sub = name.getDebugName(17) or name.getDebugName(2) or ""
+    return ("Italic" in sub or bool(tf["post"].italicAngle)
+            or bool(tf["head"].macStyle & 0x2))
+
+
+def check_name_ids(tf, check, ids):
+    """Every nameID in `ids` is set: what a font manager, a PDF and the
+    Windows family model read. Stripping all of them from a Latin face
+    once passed every check here."""
+    name = tf["name"]
+    for nid in ids:
+        check(bool(name.getDebugName(nid)), f"nameID {nid} is set")
+
+
+def check_version_stamp(tf, check, unique_id=False):
+    """The face carries GENGOU_VERSION in head.fontRevision and nameID 5
+    (and, with `unique_id`, at the head of nameID 3). Skipped, and said
+    so, when the variable is unset."""
+    want = os.environ.get("GENGOU_VERSION")
+    if not want:
+        print("skip  version stamp (GENGOU_VERSION unset)")
+        return
+    major, minor = want.split(".")[:2]
+    name = tf["name"]
+    head5 = name.getDebugName(5) or ""
+    ok = (abs(tf["head"].fontRevision - float(f"{major}.{minor}")) < 5e-4
+          and head5.startswith(f"Version {want}"))
+    if unique_id:
+        ok = ok and (name.getDebugName(3) or "").startswith(want + ";")
+    check(ok, f"stamped {want} (fontRevision {tf['head'].fontRevision:.3f}, "
+              f"{head5!r})")
+
+
+def check_monospace_metadata(tf, check):
+    """What a font picker and GDI read to call the face monospaced, and
+    the line metrics as build.set_monospace_metadata leaves them: post
+    and PANOSE declare fixed pitch, PANOSE's weight follows
+    usWeightClass, typo == hhea with USE_TYPO_METRICS, and the win
+    metrics cover the bbox."""
+    os2 = tf["OS/2"]
+    check(tf["post"].isFixedPitch == 1 and os2.panose.bProportion == 9,
+          "declared monospaced")
+    want_pw = build.panose_weight(os2.usWeightClass)
+    check(os2.panose.bWeight == want_pw,
+          f"PANOSE weight {os2.panose.bWeight} matches usWeightClass "
+          f"{os2.usWeightClass} (want {want_pw})")
+    hhea = tf["hhea"]
+    check((os2.sTypoAscender, os2.sTypoDescender, os2.sTypoLineGap)
+          == (hhea.ascent, hhea.descent, hhea.lineGap) and os2.fsSelection & 0x80,
+          "typo metrics == hhea metrics, USE_TYPO_METRICS set")
+    head = tf["head"]
+    check(os2.usWinAscent >= head.yMax and os2.usWinDescent >= -head.yMin,
+          f"win metrics cover the bbox ({os2.usWinAscent}/{os2.usWinDescent} "
+          f"vs {head.yMax}/{-head.yMin})")
+
+
+def check_latin_repertoire(check, cmap):
+    """A Latin face's cmap: enough of it, and none of the CJK."""
+    check(len(cmap) >= 800, f"{len(cmap)} codepoints mapped")
+    check(not any(0x3000 <= cp <= 0x9FFF or 0xFF00 <= cp <= 0xFFEF for cp in cmap),
+          "no CJK / full-width codepoints")
+
+
+def check_grid(check, metrics, cell):
+    """Every advance is 0 or a whole number of cells (at most four)."""
+    off = sorted({adv for adv, _ in metrics.values()}
+                 - {0} - {cell * n for n in range(1, 5)})
+    check(not off, f"every advance is 0 or a whole number of {cell} cells "
+                   f"(offenders: {off})")
+
+
+def check_one_cell(tf, check, cmap, metrics, cell):
+    """The characters that are a cell by policy: Monaspace's ambiguous-
+    width symbols and .notdef (a terminal gives an unknown character
+    one column, and a wide box pushes the line)."""
+    for ch in build.MONA_AMBIGUOUS:
+        if ord(ch) in cmap:
+            check(metrics[cmap[ord(ch)]][0] == cell, f"{ch!r} is one cell")
+    check(metrics[tf.getGlyphOrder()[0]][0] == cell, ".notdef is one cell")
 
 
 def check_style_bits(tf, check, subfamily, italic):

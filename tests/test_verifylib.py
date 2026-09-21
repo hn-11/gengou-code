@@ -757,3 +757,94 @@ def test_check_marks_clear_catches_an_accent_through_an_ascender():
     through = _gate(lambda f, chk: verifylib.check_marks_clear(f, _shaper_for(f), chk,
                                                                 f.getGlyphSet()), font)
     assert through and "b́" in through[0]
+
+
+# the face checks the three verifiers share -------------------------------
+
+def _metadata_font(style="Regular"):
+    """A TTF with the metadata a Latin face declares: fixed pitch,
+    PANOSE, typo == hhea with USE_TYPO_METRICS, win metrics over the
+    box, a version stamp of 6.0.0."""
+    from conftest import make_font
+    font = make_font([".notdef", "a", "b"], {0x61: "a", 0x62: "b"},
+                     {".notdef": 600, "a": 600, "b": 600}, style=style)
+    font["post"].isFixedPitch = 1
+    os2 = font["OS/2"]
+    os2.panose.bProportion = 9
+    os2.panose.bWeight = verifylib.build.panose_weight(os2.usWeightClass)
+    os2.sTypoAscender, os2.sTypoDescender, os2.sTypoLineGap = 800, -200, 0
+    os2.fsSelection |= 0x80
+    os2.usWinAscent, os2.usWinDescent = 800, 200
+    font["head"].yMax, font["head"].yMin = 700, -100
+    font["head"].fontRevision = 6.0
+    font["name"].setName("Version 6.0.0", 5, 3, 1, 0x409)
+    font["name"].setName("6.0.0;TEST;Test-Regular", 3, 3, 1, 0x409)
+    return font
+
+
+def test_is_italic_reads_the_name_the_angle_and_the_style_bits():
+    assert not verifylib.is_italic(_metadata_font())
+    assert verifylib.is_italic(_metadata_font(style="Italic"))
+    slanted = _metadata_font()
+    slanted["post"].italicAngle = -11
+    assert verifylib.is_italic(slanted)
+
+
+def test_check_name_ids_wants_each_one_set():
+    font = _metadata_font()
+    assert _gate(lambda f, chk: verifylib.check_name_ids(f, chk, (1, 2, 5)), font) == []
+    assert _gate(lambda f, chk: verifylib.check_name_ids(f, chk, (1, 13)), font) \
+        == ["nameID 13 is set"]
+
+
+def test_check_version_stamp_holds_head_and_the_names_to_the_env(monkeypatch, capsys):
+    monkeypatch.setenv("GENGOU_VERSION", "6.0.0")
+    stamp = lambda unique: (lambda f, chk: verifylib.check_version_stamp(f, chk, unique))  # noqa: E731
+    font = _metadata_font()
+    assert _gate(stamp(False), font) == []
+    assert _gate(stamp(True), font) == []
+    font["name"].setName("Version 5.0.0", 5, 3, 1, 0x409)
+    assert _gate(stamp(False), font)
+    font = _metadata_font()
+    font["name"].removeNames(nameID=3)
+    assert _gate(stamp(False), font) == []
+    assert _gate(stamp(True), font)
+    monkeypatch.delenv("GENGOU_VERSION")
+    assert _gate(stamp(True), font) == []
+    assert "skip" in capsys.readouterr().out
+
+
+def test_check_monospace_metadata_asks_all_four():
+    assert _gate(verifylib.check_monospace_metadata, _metadata_font()) == []
+    for spoil in (lambda f: setattr(f["post"], "isFixedPitch", 0),
+                  lambda f: setattr(f["OS/2"].panose, "bWeight", 11),
+                  lambda f: setattr(f["OS/2"], "sTypoAscender", 799),
+                  lambda f: setattr(f["OS/2"], "usWinAscent", 699)):
+        font = _metadata_font()
+        spoil(font)
+        assert len(_gate(verifylib.check_monospace_metadata, font)) == 1
+
+
+def test_check_grid_names_the_advances_off_the_cell():
+    metrics = {"a": (600, 0), "b": (1200, 0), "m": (0, 0)}
+    assert _gate(lambda f, chk: verifylib.check_grid(chk, metrics, 600), None) == []
+    metrics["c"] = (601, 0)
+    assert "601" in _gate(lambda f, chk: verifylib.check_grid(chk, metrics, 600), None)[0]
+
+
+def test_check_one_cell_asks_of_notdef_and_the_ambiguous_symbols():
+    font = _metadata_font()
+    font["cmap"].tables[0].cmap = {0x61: "a", 0x2190: "b"}
+    metrics = {".notdef": (600, 0), "a": (600, 0), "b": (600, 0)}
+    assert _gate(lambda f, chk: verifylib.check_one_cell(f, chk, f.getBestCmap(), metrics, 600), font) == []
+    metrics["b"] = (1200, 0)
+    assert "'←' is one cell" in _gate(
+        lambda f, chk: verifylib.check_one_cell(f, chk, f.getBestCmap(), metrics, 600), font)
+
+
+def test_check_latin_repertoire_wants_the_size_and_no_cjk():
+    latin = {cp: "a" for cp in range(0x20, 0x20 + 800)}
+    assert _gate(lambda f, chk: verifylib.check_latin_repertoire(chk, latin), None) == []
+    assert _gate(lambda f, chk: verifylib.check_latin_repertoire(chk, {**latin, 0x4E00: "a"}), None) \
+        == ["no CJK / full-width codepoints"]
+    assert _gate(lambda f, chk: verifylib.check_latin_repertoire(chk, dict(list(latin.items())[:10])), None)

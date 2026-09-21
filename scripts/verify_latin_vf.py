@@ -30,12 +30,18 @@ from verifylib import (  # noqa: E402
     check_features_work,
     check_gdef_marks,
     check_gdi_family_name,
+    check_grid,
     check_heights,
+    check_latin_repertoire,
     check_mark_class_closure,
     check_marks,
+    check_monospace_metadata,
+    check_name_ids,
+    check_one_cell,
     check_private,
     check_style_bits,
     check_tables,
+    check_version_stamp,
     check_zones,
     ink_spill,
     make_shaper,
@@ -210,24 +216,12 @@ def main():
     check("Source Code Pro:" in n0 and "Monaspace:" in n0,
           "nameID 0 credits Source Code Pro and Monaspace")
 
-    os2 = tf["OS/2"]
-    check(tf["post"].isFixedPitch == 1 and os2.panose.bProportion == 9,
-          "declared monospaced")
-    want_pw = build.panose_weight(os2.usWeightClass)
-    check(os2.panose.bWeight == want_pw,
-          f"PANOSE weight {os2.panose.bWeight} matches usWeightClass "
-          f"{os2.usWeightClass} (want {want_pw})")
+    # (the win metrics: GDI clips to these. Deleting
+    # build_latin.fit_win_metrics from the VF build left 984/273 against
+    # a 1060/-454 box — 76u of ascender and 181u of descender cut off —
+    # and every check here still passed)
+    check_monospace_metadata(tf, check)
     hhea = tf["hhea"]
-    check((os2.sTypoAscender, os2.sTypoDescender, os2.sTypoLineGap)
-          == (hhea.ascent, hhea.descent, hhea.lineGap) and os2.fsSelection & 0x80,
-          "typo metrics == hhea metrics, USE_TYPO_METRICS set")
-    # GDI clips to these. Deleting build_latin.fit_win_metrics from the
-    # VF build left 984/273 against a 1060/-454 box — 76u of ascender
-    # and 181u of descender cut off — and every check here still passed
-    check(os2.usWinAscent >= tf["head"].yMax
-          and os2.usWinDescent >= -tf["head"].yMin,
-          f"win metrics cover the bbox ({os2.usWinAscent}/{os2.usWinDescent} "
-          f"vs {tf['head'].yMax}/{-tf['head'].yMin})")
     # head / hhea extents must hold every instance, not just the default
     # one a CFF2 glyph set draws (build_latin_vf.py unions the masters):
     # the union of the whole glyph set at both axis ends and the default.
@@ -246,10 +240,7 @@ def main():
     # stylistic set, passed here while the same loss on a static face
     # failed three checks
     vf_cmap = tf.getBestCmap()
-    check(len(vf_cmap) >= 800, f"{len(vf_cmap)} codepoints mapped")
-    check(not any(0x3000 <= cp <= 0x9FFF or 0xFF00 <= cp <= 0xFFEF
-                  for cp in vf_cmap),
-          "no CJK / full-width codepoints")
+    check_latin_repertoire(check, vf_cmap)
     # the tables verify_latin.py has gated since round 43 and this file
     # never read: a VF with embedding restricted, the vendor id blanked,
     # the range bits or the char-index range zeroed, or both format-4
@@ -317,33 +308,19 @@ def main():
     check_features_work(shape_default, check, vf_cmap)
     # the nameIDs verify_latin.py requires of the statics; 13 and 14 are
     # the licence and its URL, and dropping all seven passed this file
-    for nid in (3, 4, 8, 9, 11, 13, 14):
-        check(bool(name.getDebugName(nid)), f"nameID {nid} is set")
+    check_name_ids(tf, check, (3, 4, 8, 9, 11, 13, 14))
     for seq in build.LIGATURES:
         infos, _p = shape_default(f"a {seq} b", {"calt": True, "liga": True})
         ligs += [tf.getGlyphOrder()[i.codepoint] for i in infos[2:len(infos) - 2]
                  if tf.getGlyphOrder()[i.codepoint] not in drawn]
     check(not ligs, f"every ligature draws ({len(build.LIGATURES)} probes; "
                     f"blank: {ligs[:5]})")
-    want_version = os.environ.get("GENGOU_VERSION")
-    if want_version:
-        major, minor = want_version.split(".")[:2]
-        check(abs(tf["head"].fontRevision - float(f"{major}.{minor}")) < 5e-4
-              and (tf["name"].getDebugName(5) or "").startswith(
-                  f"Version {want_version}"),
-              f"stamped {want_version} (fontRevision "
-              f"{tf['head'].fontRevision:.3f}, "
-              f"{tf['name'].getDebugName(5)!r})")
-    else:
-        print("skip  version stamp (GENGOU_VERSION unset)")
+    check_version_stamp(tf, check)
     check_style_bits(tf, check, tf["name"].getDebugName(2) or "",
                      "Italic" in (tf["name"].getDebugName(17)
                                   or tf["name"].getDebugName(2) or ""))
     check_gdi_family_name(tf, check)
-    off_grid = sorted({adv for adv, _ in metrics.values()}
-                      - {0} - {build.CELL * n for n in range(1, 5)})
-    check(not off_grid, f"every advance is 0 or a whole number of "
-                        f"{build.CELL} cells (offenders: {off_grid})")
+    check_grid(check, metrics, build.CELL)
     # on the grid is not the same as the RIGHT number of cells: only the
     # glyph count of three ligature cases was read here, so widening
     # '==' from two cells to three shaped 'a == b' at 4,200 units and
@@ -357,11 +334,7 @@ def main():
             wrong[seq] = adv
     check(not wrong, f"every ligature is the cells it declares "
                      f"({len(build.LIGATURES)} probes; off: {wrong})")
-    for ch in build.MONA_AMBIGUOUS:
-        if ord(ch) in vf_cmap:
-            check(metrics[vf_cmap[ord(ch)]][0] == build.CELL,
-                  f"{ch!r} is one cell")
-    check(metrics[tf.getGlyphOrder()[0]][0] == build.CELL, ".notdef is one cell")
+    check_one_cell(tf, check, vf_cmap, metrics, build.CELL)
     check(hhea.advanceWidthMax == max(adv for adv, _ in metrics.values()),
           f"hhea advanceWidthMax is the widest advance "
           f"({hhea.advanceWidthMax} vs {max(adv for adv, _ in metrics.values())})")
