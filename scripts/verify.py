@@ -59,6 +59,15 @@ CASES = [
 # Latin layer's box drawing. Read from build so the two cannot drift
 WIN_METRICS = build.WIN_METRICS
 
+# what the italic faces genuinely cannot do, so the two checks that
+# used to skip themselves on "the italic donor has no Greek/Cyrillic"
+# -- true before this build gave them 234 letters from Source Sans --
+# can stay live and fail on anything NEW. Both are the same root: the
+# second donor's own features are not imported, only its outlines and
+# its base anchors. docs/gengou-plan.md carries the measurements.
+GREEK_ITALIC_GAP = {"\u03c1\u0313\u0301", "\u03b1\u0313\u0300"}
+LOCL_ITALIC_GAP = {("cyrl", "sr")}
+
 # drawn to tile, so a run of them must show no seam: the full-width low
 # line and overline, the wave dash, a quadrant, and the box-drawing and
 # block elements a terminal draws frames and bars with
@@ -1024,8 +1033,7 @@ def main():
     # without the feature ρ + U+0313 + U+0301 never composed and drew
     # the psili inside the acute (build.import_scp_locl)
     greek = {}
-    for latin_base, greek_base in (() if italic else
-                                   (("B", "\u0392"), ("A", "\u0391"))):
+    for latin_base, greek_base in (("B", "\u0392"), ("A", "\u0391")):
         if any(ord(c) not in cmap for c in (latin_base, greek_base, "\u0301")):
             continue
         pair = [shape_infos(b + "\u0301", {})[0] for b in (latin_base, greek_base)]
@@ -1033,16 +1041,28 @@ def main():
             continue
         if pair[0][1].codepoint == pair[1][1].codepoint:
             greek[greek_base] = glyph_order[pair[1][1].codepoint]
-    for text in (() if italic else ("\u03c1\u0313\u0301", "\u03b1\u0313\u0300")):
+    for text in ("\u03c1\u0313\u0301", "\u03b1\u0313\u0300"):
         if any(ord(c) not in cmap for c in text):
             continue
         got = len(shape_infos(text, {})[0])
         if got != 2:
             greek[text] = got
-    where = ("not checked, the italic donor has no Greek" if italic
-             else f"off: {greek}")
-    check(not greek, f"Greek takes the Greek accents and composes its "
-                     f"breathing marks ({where})")
+    # This used to skip itself on every italic face, saying the italic
+    # donor had no Greek. True once; this build gives the italic 234
+    # Greek and Cyrillic letters from Source Sans, and the line above
+    # counts them. What the italic genuinely cannot do is enumerated
+    # instead, so the check stays live and a NEW gap fails: Source Sans
+    # composes the breathing marks onto unencoded contextual mark forms
+    # ('.g'), and import_donor_decompositions copies one-to-many rules
+    # only and grafts nothing. Measured, the psili and the accent that
+    # follows share about 6,000 square units of ink. The accent mapping
+    # itself (the two entries above) the italic does get.
+    known = GREEK_ITALIC_GAP if italic else set()
+    off = {k: v for k, v in greek.items() if k not in known}
+    check(not off, f"Greek takes the Greek accents and composes its "
+                   f"breathing marks (off: {off}"
+                   + (f"; known italic gaps: {sorted(known)}" if known else "")
+                   + ")")
 
     # a voicing mark over a HALF-width kana must not be drawn into it.
     # The mark is registered to the cell before it, and Term widens the
@@ -1089,18 +1109,26 @@ def main():
     # Source Han Sans JP has no LangSys for either, so they were
     # unreachable until the import made one (build._new_langsys)
     langs = {}
-    for script, lang, text in ((() if italic else (("cyrl", "sr", "\u0431"),))
-                               + (("latn", "se", "\u014a"),)):
+    for script, lang, text in (("cyrl", "sr", "\u0431"),
+                               ("latn", "se", "\u014a")):
         if ord(text) not in cmap:
             continue
         tagged = shape_infos(text, {}, script=script, language=lang)[0]
         default = shape_infos(text, {}, script=script)[0]
         if len(tagged) != 1 or tagged[0].codepoint == default[0].codepoint:
             langs[script, lang] = glyph_order[tagged[0].codepoint]
-    which = ("the Sami Ŋ, the italic donor having no Cyrillic" if italic
-             else "the Serbian б and the Sami Ŋ")
-    check(not langs, f"the donor's language forms are reachable "
-                     f"({which}; unchanged: {langs})")
+    # as with the Greek above: this skipped the Cyrillic probe on every
+    # italic face, saying the italic donor had no Cyrillic. It has 234
+    # letters now. Source Sans's own Serbian locl is not imported --
+    # import_scp_locl reads the Latin donor's, and the Greek and
+    # Cyrillic come from a second one -- so Serbian italic renders the
+    # Russian letterforms. Enumerated rather than skipped.
+    known = LOCL_ITALIC_GAP if italic else set()
+    off = {k: v for k, v in langs.items() if k not in known}
+    check(not off, f"the donor's language forms are reachable "
+                   f"(the Serbian б and the Sami Ŋ; unchanged: {off}"
+                   + (f"; known italic gaps: {sorted(known)}" if known else "")
+                   + ")")
 
     # the two double-span marks straddle the pair they join: Source
     # Code Pro pulls them half a cell left in GPOS, and dropping that
