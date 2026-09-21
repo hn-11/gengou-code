@@ -12,15 +12,15 @@ import verifylib  # noqa: E402
 
 
 def test_static_faces_skips_variable_fonts_and_sorts(tmp_path):
-    for name in ("SumiMoji-Regular.otf", "SumiMoji-Italic[wght].otf", "SumiMoji[wght].otf",
-                 "SumiMoji-Bold.otf", "SumiMojiTerm-Regular.otf", "Other-Regular.otf"):
+    for name in ("Gengou-Regular.otf", "Gengou-Italic[wght].otf", "Gengou[wght].otf",
+                 "Gengou-Bold.otf", "GengouTerm-Regular.otf", "Other-Regular.otf"):
         (tmp_path / name).write_bytes(b"")
-    got = [p.name for p in verifylib.static_faces(tmp_path, "SumiMoji")]
-    assert got == ["SumiMoji-Bold.otf", "SumiMoji-Regular.otf"]
+    got = [p.name for p in verifylib.static_faces(tmp_path, "Gengou")]
+    assert got == ["Gengou-Bold.otf", "Gengou-Regular.otf"]
 
 
 def test_static_faces_empty_dir(tmp_path):
-    assert verifylib.static_faces(tmp_path, "SumiMoji") == []
+    assert verifylib.static_faces(tmp_path, "Gengou") == []
 
 
 def test_checker_tallies_and_prints(capsys):

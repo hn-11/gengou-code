@@ -110,7 +110,7 @@ def hmtx_mismatches(font):
     (name, xMin, hmtx lsb) where the bearing is two units or more off
     the outline's xMin. Less is rounding: Source Han Sans sets a few
     bearings from the on-curve points, up to a unit right of a curve's
-    true extreme (the stale Sumi Moji bearings this catches were tens of
+    true extreme (the stale Gengou bearings this catches were tens of
     units off). A blank glyph has no xMin and is left alone. Every glyph
     is drawn once, and its box comes back third, so a caller that needs
     the bounds does not draw them all over again."""
@@ -245,7 +245,7 @@ def _check_os2_cmap(tf, check, cmap, codepages):
     and every Unicode cmap subtable."""
     os2 = tf["OS/2"]
     check(os2.fsType == 0, f"OS/2 fsType is installable ({os2.fsType})")
-    check(os2.achVendID == "SUMI", f"OS/2 vendor id ({os2.achVendID!r})")
+    check(os2.achVendID == "GNGO", f"OS/2 vendor id ({os2.achVendID!r})")
     check(tf["post"].underlinePosition and tf["post"].underlineThickness,
           f"post underline ({tf['post'].underlinePosition}, "
           f"{tf['post'].underlineThickness})")
@@ -491,7 +491,7 @@ def check_accents_clear(shape, gs, order, cmap, check, label=""):
     IMPORT that GPOS, since the graft first drew 58 of 84 pairs through
     the stem. The Latin faces and the variable fonts, where the donor's
     mark positioning lives natively and the two variable fonts are the
-    whole of SumiMoji.zip, asked nothing: zeroing all 502 base anchors
+    whole of Gengou.zip, asked nothing: zeroing all 502 base anchors
     dropped every accent into the letter and both said "all checks
     passed"."""
     through, pairs = {}, 0
@@ -711,7 +711,7 @@ def check_stray_marks(shape, gs, order, cmap, check, italic):
 # advertised, and until now only the JP faces were asked whether any of
 # it still WORKS: the Latin faces and the variable fonts checked that
 # the tag was in the FeatureList, which a feature whose lookup list is
-# empty passes. The two variable fonts are the whole of SumiMoji.zip,
+# empty passes. The two variable fonts are the whole of Gengou.zip,
 # and their GSUB is a varLib merge of the masters' — a failure mode no
 # other face shares
 SS_PROBES = (("ss01", "=="), ("ss02", "->"), ("ss03", "<>"), ("ss04", "|>"),

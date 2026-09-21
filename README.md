@@ -1,11 +1,11 @@
-# Sumi Moji JP
+# Gengou JP
 
 英語圏のターミナルフォントの流儀で組んだ、日本語入りのプログラミング
 フォント。欧文は [Source Code Pro](https://github.com/adobe-fonts/source-code-pro)
 （原寸・原太、名前付きインスタンスそのまま）に
 [Monaspace](https://github.com/githubnext/monaspace) の記号と合字 61 種を
-載せた **Sumi Moji**、和文は [Source Han Sans](https://github.com/adobe-fonts/source-han-sans)
-JP を、Sumi Moji の太さに合う面から取る。基準は欧文側で、セル幅（600）、
+載せた **Gengou**、和文は [Source Han Sans](https://github.com/adobe-fonts/source-han-sans)
+JP を、Gengou の太さに合う面から取る。基準は欧文側で、セル幅（600）、
 ウェイト（Light / Regular / Medium / SemiBold / Bold）、行間
 （984 / −273 = 1.257 em）はすべて Source Code Pro のもの。和文がそれに
 従う。CI で合成し、上流の新リリースにも追従する。
@@ -14,9 +14,9 @@ JP を、Sumi Moji の太さに合う面から取る。基準は欧文側で、�
 
 | ファミリー | 半角:全角 | 用途 |
 |-----------|-----------|------|
-| Sumi Moji JP | 600:1000 (3:5) | エディタ。和文は Source Han Sans の送りのまま |
-| Sumi Moji JP Term | 600:1200 (1:2) | ターミナルのグリッドに乗せたい非グリッドのアプリ向け。全角の送りを 2 セルに広げてグリフを中央配置 |
-| Sumi Moji | 600 | 欧文のみ（可変フォント） |
+| Gengou JP | 600:1000 (3:5) | エディタ。和文は Source Han Sans の送りのまま |
+| Gengou JP Term | 600:1200 (1:2) | ターミナルのグリッドに乗せたい非グリッドのアプリ向け。全角の送りを 2 セルに広げてグリフを中央配置 |
+| Gengou | 600 | 欧文のみ（可変フォント） |
 
 ターミナルの中では JP と Term は同じに描かれる（全角は 2 セルに置かれる）。
 違うのは全角の送り幅だけで、Latin・記号・幅の方針は共通。
@@ -45,11 +45,11 @@ GDI 系（旧 conhost、メモ帳、Office の GDI 経路）だけは行が 1448
 この面のインクは 1808 / −1048 まであり、bbox を全部覆うと GDI の行が
 2856u（typo の 2.3 倍）になるので覆っていない。欧文レイヤーの罫線素片
 （−400）とブロック要素（−454）も 288 の外にあり、GDI 系だけは下端が
-切れうる（`docs/sumi-moji-plan.md` に測定値と代案）。
+切れうる（`docs/gengou-plan.md` に測定値と代案）。
 
 ## 幅の方針
 
-**Sumi Moji が持つ文字はすべて 1 セル**。Latin、ギリシャ、キリル、
+**Gengou が持つ文字はすべて 1 セル**。Latin、ギリシャ、キリル、
 アクセント付き文字、罫線素片、`←` `→` `↑` `↓` `⇐` `⇒` `⇔` `≠` `≤` `≥` `…`
 も 1 セルで、英語のターミナルフォントと同じ。Source Han Sans にしかない
 文字（漢字・かな・`①` `※` など）は Source Han Sans の全角のまま。
@@ -121,11 +121,11 @@ Source Code Pro のまま。
 差。`-` は `=` より 110u 短いが、これは Monaspace 自身がそういう字形の
 ため。SCP の `cv14`/`cv15`/`cv16`（タイポグラフィックなハイフン・
 アスタリスク・スラッシュ付きドル記号）を有効にすると、`-` `*` `$` は
-SCP の字形に戻る。なお欧文単独ファミリー（Sumi Moji）でハイフンを
+SCP の字形に戻る。なお欧文単独ファミリー（Gengou）でハイフンを
 差し替える `cv14`（および `salt` `ss11`）を有効にすると、`->` `<-`
 `-->` `<--` `<->` `<-->` `<!--` `-~` `~-` の 9 つの合字は出なくなる
 ——ドナー自身の異体字ルックアップが合字の連鎖より前に並ぶため。
-和文ファミリー（Sumi Moji JP / JP Term）では
+和文ファミリー（Gengou JP / JP Term）では
 `import_scp_variants` が後ろに足すので合字が残り、両者の挙動は
 ここだけ食い違う。
 
@@ -186,8 +186,8 @@ stylistic set も同じ挙動なので許容している。グループを跨い
 
 全面に Nerd Fonts のアイコングリフを追加した変種も生成する。アイコンは
 1 セルに収めるので、Nerd Fonts 本家の命名では **Mono** に当たり、
-ファミリー名は `Sumi Moji JP Nerd Font Mono` / `Sumi Moji JP Term Nerd
-Font Mono` / `Sumi Moji Nerd Font Mono`（PostScript 名 `SumiMojiJPNFM-*`
+ファミリー名は `Gengou JP Nerd Font Mono` / `Gengou JP Term Nerd
+Font Mono` / `Gengou Nerd Font Mono`（PostScript 名 `GengouJPNFM-*`
 など。`JetBrainsMono Nerd Font Mono` と同じ流儀）。
 
 アイコンは font-patcher で掛けるのではなく、Nerd Fonts が配っている記号
@@ -196,7 +196,7 @@ NerdFontsSymbolsOnly.zip。font-patcher の全記号集合と群ごとの寸法�
 フォントに適用したもの）から fontTools で接ぎ木する。`--complete --mono`
 でパッチしたのと同じ記号集合・同じ 1 セル送りになり、FontForge の往復
 （CID 構造の平坦化、STAT の消失、メタデータの復元）が要らず、1 面 10 秒
-程度。寸法だけは本家と差があり、`docs/sumi-moji-plan.md` に測定値がある
+程度。寸法だけは本家と差があり、`docs/gengou-plan.md` に測定値がある
 （本家は縦長の箱 600 × 856 に収めるが、こちらは記号フォント自身の正方
 セルのまま 600 × 600）。
 寸法は font-patcher 自身の群ごとの規則に合わせる（`icon_transform`）。
@@ -216,9 +216,9 @@ font-patcher の `xy-ratio`（0.7 など）で頭打ちになった幅（2048 �
 として同梱する。各アイコンセットのライセンスは Nerd Fonts のリポジトリに
 あり、zip には入らない。
 
-## Sumi Moji（欧文のみ）
+## Gengou（欧文のみ）
 
-Sumi Moji JP が使う欧文レイヤーを、VF から直接組み上げた和文なしの
+Gengou JP が使う欧文レイヤーを、VF から直接組み上げた和文なしの
 単独フォント。JP 側（`build.py`）はこのフォントを Source Han Sans に
 そのまま接ぎ木するだけになっており、欧文の設計判断は 1 か所に集まっている。
 
@@ -238,9 +238,9 @@ Regular は1,632グリフ・約140KB（Italic は1,335グリフ — SCP Italic V
 基準に、OS/2 の typo を hhea と同値にして `USE_TYPO_METRICS` を立て、win
 はファミリー全面のバウンディングボックスを覆う値（1060 / 454）。
 
-**可変フォント**: 配布する Sumi Moji は `scripts/build_latin_vf.py` が
-同じレシピを CFF2 可変フォントとして組んだ `SumiMoji[wght].otf`
-（Upright）と `SumiMoji-Italic[wght].otf`（Italic）。wght 軸は
+**可変フォント**: 配布する Gengou は `scripts/build_latin_vf.py` が
+同じレシピを CFF2 可変フォントとして組んだ `Gengou[wght].otf`
+（Upright）と `Gengou-Italic[wght].otf`（Italic）。wght 軸は
 usWeightClass の値で、名前付きインスタンスは静的面と同じ 300 / 400 /
 500 / 600 / 700、既定値 400 = Regular。ユーザー wght は SCP の wght
 そのもの（SCP のユーザー wght が usWeightClass）で、その間は SCP 自身の
@@ -258,24 +258,28 @@ instancer の整数丸めを切ってインスタンス化する。重なり除�
 止まるので、erosion 済みの静的 Light より心持ち太くなる。静的面は JP 面の
 ドナーと Nerd Fonts 版の入力で、単体では配布しない。
 
-名前の由来・衝突調査・欧文層を切り出した経緯は [docs/sumi-moji-plan.md](docs/sumi-moji-plan.md) を参照。
+**源合**（げんごう）は、源ノ角ゴシックと Source Code Pro が共有する
+`Source` の訳字「源」と、合字の「合」——3 つの上流を合わせる「合成」の
+合でもある——を合わせた名前。OFL の Reserved Font Name が英語の `Source`
+を塞いでいるので、漢字で言い換えている。詳しい由来・衝突調査・欧文層を
+切り出した経緯は [docs/gengou-plan.md](docs/gengou-plan.md) を参照。
 
 ## インストール
 
 [Releases](../../releases) から用途に応じてアセットを選ぶ。いずれの zip にも
 OFL のライセンス全文（LICENSE）を同梱している。
 
-- **`SumiMojiJP.zip` / `SumiMojiJPTerm.zip`**: ファミリーごとの zip
+- **`GengouJP.zip` / `GengouJPTerm.zip`**: ファミリーごとの zip
   （5 ウェイト × 2 スタイルの 10 面、面ごとの OTF）。使うファミリーだけ
   落として、必要な面だけ入れる（TTC は配らない: リリースの単位は
   インストールするファイルの単位）。
-- **`SumiMojiJP-NerdFont.zip` / `SumiMojiJPTerm-NerdFont.zip`**: 同じ
-  ファミリー分けの Nerd Fonts 版（ファミリー名 `Sumi Moji JP Nerd Font
+- **`GengouJP-NerdFont.zip` / `GengouJPTerm-NerdFont.zip`**: 同じ
+  ファミリー分けの Nerd Fonts 版（ファミリー名 `Gengou JP Nerd Font
   Mono` など）。ターミナルのプロンプト装飾（アイコン表示）に使う場合は
   こちら。
-- **`SumiMoji.zip`**: 和文を含まない欧文のみの Sumi Moji。可変フォント
-  2面（`SumiMoji[wght].otf` / `SumiMoji-Italic[wght].otf`）。
-- **`SumiMoji-NerdFont.zip`**: Sumi Moji の Nerd Fonts 版（`Sumi Moji Nerd
+- **`Gengou.zip`**: 和文を含まない欧文のみの Gengou。可変フォント
+  2面（`Gengou[wght].otf` / `Gengou-Italic[wght].otf`）。
+- **`Gengou-NerdFont.zip`**: Gengou の Nerd Fonts 版（`Gengou Nerd
   Font Mono`）。可変フォントには接ぎ木しないので、こちらは 5 ウェイト ×
   2 スタイルの静的 10 面。
 
@@ -283,14 +287,14 @@ OFL のライセンス全文（LICENSE）を同梱している。
 
 ```jsonc
 {
-  "editor.fontFamily": "Sumi Moji JP",
+  "editor.fontFamily": "Gengou JP",
   "editor.fontLigatures": true
 }
 ```
 
-v4.0.0 までの Sumi Moji JP（2:3 の基本ファミリーと 35 / Term）や
-v3.2.0 までの `Shoyu Code Pro JP` とはファミリー名が違うので共存する。
-置き換えるなら旧版をアンインストールする。
+v5.0.0 までの `Sumi Moji JP`（v4.0.0 までは 2:3 の基本ファミリーと
+35 / Term）や v3.2.0 までの `Shoyu Code Pro JP` とはファミリー名が
+違うので共存する。置き換えるなら旧版をアンインストールする。
 
 - **macOS**: OTF をダブルクリックして「フォントブック」でインストール、または
   `~/Library/Fonts/` にコピー。
@@ -306,21 +310,21 @@ v3.2.0 までの `Shoyu Code Pro JP` とはファミリー名が違うので共�
 3つの上流（Source Han Sans JP / Source Code Pro VF / Monaspace VF）と、
 Nerd Fonts 版のための `Symbols Nerd Font Mono` を取得して環境変数で場所を
 渡す。ビルドは2段階: まず `scripts/build_latin.py`
-が VF から Sumi Moji（`dist/latin`）を組み、その完成品を `scripts/build.py`
+が VF から Gengou（`dist/latin`）を組み、その完成品を `scripts/build.py`
 が Source Han Sans に接ぎ木する。具体的なコマンドは
 `.github/workflows/ci.yml` の手順がそのまま実行可能なリファレンス。
 
 ```sh
 pip install -r requirements.txt
 SCP_VF_U=... SCP_VF_I=... MONA_VF=... \
-  python scripts/build_latin.py           # dist/latin/SumiMoji-*.otf（10 面）
-  python scripts/build_latin_vf.py        # dist/latin/SumiMoji[wght].otf, -Italic[wght].otf
+  python scripts/build_latin.py           # dist/latin/Gengou-*.otf（10 面）
+  python scripts/build_latin_vf.py        # dist/latin/Gengou[wght].otf, -Italic[wght].otf
 SHS_DIR=... \
   python scripts/build.py                 # 両ファミリー（JP / Term × 10 面）
   python scripts/build.py "Regular"       # Regular系のみ（動作確認用）
-python scripts/verify_latin.py dist/latin/SumiMoji-Regular.otf        # Sumi Moji の回帰テスト
-python scripts/verify_latin_vf.py "dist/latin/SumiMoji[wght].otf"     # 可変版（SCP と突き合わせ）
-python scripts/verify.py dist/SumiMojiJP-Regular.otf   # JP の回帰テスト
+python scripts/verify_latin.py dist/latin/Gengou-Regular.otf        # Gengou の回帰テスト
+python scripts/verify_latin_vf.py "dist/latin/Gengou[wght].otf"     # 可変版（SCP と突き合わせ）
+python scripts/verify.py dist/GengouJP-Regular.otf   # JP の回帰テスト
 python scripts/golden.py <前の dist> dist                  # 2つのビルド出力の比較
 NF_SYMBOLS=... python scripts/nerdpatch.py                 # Nerd Fonts 版
 ```
@@ -333,13 +337,13 @@ Source Code Pro VF / Monaspace VF の Releases から取得する。
 `build_latin.py` の出力先）を見る。`verify.py` と `verify_latin_vf.py` は
 `SCP_VF_U` / `SCP_VF_I` があれば `=` のバーを Source Code Pro の
 インスタンスと突き合わせる。
-`SUMI_VERSION`（例 `5.0.0`）を立てると name テーブルにその版番号を刻む
+`GENGOU_VERSION`（例 `5.0.0`）を立てると name テーブルにその版番号を刻む
 （リリースワークフローがタグから渡す。未設定なら上流のリビジョンをそのまま
 残す）。
 
 `requirements.txt` には AFDKO（`otfautohint` で描き直したグリフにヒントを
 付ける）も含まれる。ローカルでの試しビルドで時間を節約したい場合は
-`SUMI_SKIP_AUTOHINT=1` を立てるとスキップできる。Term の全角グリフ約1.7万個
+`GENGOU_SKIP_AUTOHINT=1` を立てるとスキップできる。Term の全角グリフ約1.7万個
 は描き直さず charstring の中で 100 ユニット右へ動かす（`shift_charstring`）
 ので、Source Han Sans 自身のヒントがそのまま残り、ヒント付けは各面で
 描き直したおよそ 2,250〜2,650 グリフ（欧文レイヤー、`fwid` の全角形、グリッドに
@@ -348,16 +352,16 @@ Source Code Pro VF / Monaspace VF の Releases から取得する。
 
 ## 仕組み
 
-- 欧文レイヤーは Sumi Moji（`scripts/build_latin.py`、VF から先に組んで
+- 欧文レイヤーは Gengou（`scripts/build_latin.py`、VF から先に組んで
   `dist/latin` に出力）から来る。Source Han Sans JP（CID-keyed CFF）を
-  土台に、Sumi Moji が持つ全コードポイント（Regular で 1,335）へその
+  土台に、Gengou が持つ全コードポイント（Regular で 1,335）へその
   グリフを 1 セルで接ぎ木し cmap を差し替える。Source Han Sans が持って
   いた全角グリフは `fwid` の代替として残す。追加 CID は疎な空間の空きを
   昇順割当（サブセット OTF の CID は不連続なため）
-- 太さの一致は Sumi Moji 側（`build_latin.py`）で完結している——各面は
+- 太さの一致は Gengou 側（`build_latin.py`）で完結している——各面は
   SCP の名前付きインスタンスそのもので、その `=` バー厚に Monaspace VF の
   wght を二分探索で合わせ、Italic は SCP Italic VF + slnt 追随。`build.py`
-  は Sumi Moji を無変換で載せ、和文はバーの合う Source Han Sans の面を
+  は Gengou を無変換で載せ、和文はバーの合う Source Han Sans の面を
   使う（`build.FACES`）
 - 合字は LigatureSubst。`calt`/`liga` は結合ルックアップ1つ＋文脈ガード
   （各合字の入力列全体をカバーするトリガールールを最長一致順に並べる。
@@ -389,4 +393,4 @@ Source Code Pro VF / Monaspace VF の Releases から取得する。
 ## ライセンス
 
 フォント本体は上流と同じ [SIL OFL 1.1](https://github.com/adobe-fonts/source-han-sans/blob/master/LICENSE.txt)。
-OFL の Reserved Font Name 規定に基づき、ファミリー名は `Source` も `Monaspace` も含まない `Sumi Moji JP` / `Sumi Moji`（v3.2.0 までは `Shoyu Code Pro JP`）。
+OFL の Reserved Font Name 規定に基づき、ファミリー名は `Source` も `Monaspace` も含まない `Gengou JP` / `Gengou`（v5.0.0 までは `Sumi Moji JP` / `Sumi Moji`、v3.2.0 までは `Shoyu Code Pro JP`）。

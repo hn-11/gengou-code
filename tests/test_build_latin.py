@@ -1,7 +1,7 @@
 """Unit tests for scripts/build_latin.py that need no font files.
 
 build_latin.py no longer cuts the Latin layer out of the 35 faces; it
-assembles Sumi Moji from the Source Code Pro and Monaspace variable
+assembles Gengou from the Source Code Pro and Monaspace variable
 fonts directly (see the module docstring). These tests cover the pure
 logic left behind: zone-order repair on a CFF FDArray, the typo/win
 metrics helpers, per-family win-metric harmonization, donor credits,
@@ -280,7 +280,7 @@ def test_remap_scp_stylistic_sets_shifts_ss_and_sorts_the_feature_list():
 
 def test_family_is_the_latin_family_build_reads_back():
     assert (build_latin.FAMILY, build_latin.PS_FAMILY) == build.LATIN_FAMILY
-    assert build_latin.PS_FAMILY == "SumiMoji"
+    assert build_latin.PS_FAMILY == "Gengou"
 
 
 # --- CELL / MONA_K constants ----------------------------------------------

@@ -1,18 +1,16 @@
-# Sumi Moji — 欧文中間フォント計画
+# Gengou — 欧文中間フォント計画
 
 状態: 段階 1（1a・1b とも）・段階 2（VF 化）とも実装済み。v5.0.0 で
 基準を英語圏のターミナルフォントに置き換えた（下の「v5」節）。
 `scripts/build_latin.py` が Source Code Pro VF + Monaspace VF から直接
-Sumi Moji（`dist/latin`）を組み、`scripts/build.py` はそれを Source Han
+Gengou（`dist/latin`）を組み、`scripts/build.py` はそれを Source Han
 Sans に接ぎ木する側になった（VF には直接触れない）。
 `scripts/build_latin_vf.py` が同じレシピを CFF2 可変フォントとして組む
-（`dist/latin/SumiMoji[wght].otf` / `SumiMoji-Italic[wght].otf`）。
-`SumiMoji.zip` は VF 2 面（静的 10 面は JP 面のドナー・NF パッチの入力・
-VF の検証に使い、配布しない）。名前は **Sumi Moji**（墨文字）で確定し、
-和文入りは **Sumi Moji JP**（v3.2.0 までの Shoyu Code Pro JP を改名。
-2 節の一覧はリポジトリ名を除き実施済み）。衝突調査済み（フォント・技術
-領域で同名なし、商標は未確認、`sumimoji.com` / `.net` は取得済みで
-`.dev` / `.jp` は空き）。
+（`dist/latin/Gengou[wght].otf` / `Gengou-Italic[wght].otf`）。
+`Gengou.zip` は VF 2 面（静的 10 面は JP 面のドナー・NF パッチの入力・
+VF の検証に使い、配布しない）。名前は **Gengou**（源合）で確定し、
+和文入りは **Gengou JP**（v3.2.0 までの Shoyu Code Pro JP、v5.0.0 までの
+Sumi Moji JP からの二度目の改名。由来と衝突調査は 2 節）。
 
 ## v5: 基準を英語圏のターミナルフォントに
 
@@ -21,7 +19,7 @@ v4.0.0 までは Source Han Code JP（SHCJ）が基準だった: 2:3 の比率�
 半角/全角の割り当て。v5.0.0 で基準を欧文側（Source Code Pro）に置き換え、
 SHCJ は上流から外れた。
 
-- **セルは 600、既定は 3:5**。Sumi Moji（SCP 原寸）に Source Han Sans を
+- **セルは 600、既定は 3:5**。Gengou（SCP 原寸）に Source Han Sans を
   そのまま載せる。2:3（旧基本ファミリー）と 35 は廃止、Term（1:2）は
   全角の送りを 2 セルに広げるだけの変種として残す。
 - **行間は SCP の 984 / −273（1.257 em）**。hhea = typo、
@@ -31,7 +29,7 @@ SHCJ は上流から外れた。
   `＝` のバーが合う Source Han Sans の面を実測で選ぶ（ExtraLight / Normal /
   Regular / Medium / Bold）。Normal と Heavy は消え、ウェイト名は英語
   フォントの体系になった。VF の wght 軸は SCP の wght と一致（恒等写像）。
-- **幅の方針**: Sumi Moji が持つ文字はすべて 1 セル（ギリシャ・キリル・
+- **幅の方針**: Gengou が持つ文字はすべて 1 セル（ギリシャ・キリル・
   罫線・矢印 7 種と `≠ ≤ ≥ …` も）。JIS 流の全角字形は `fwid` で戻す
   （矢印は合字から切り出した全角版、その他は Source Han Sans の全角
   グリフか同フォントの `fwid` 形）。`hwid` / `ss09` の幅切り替えは不要に
@@ -53,10 +51,14 @@ SHCJ は上流から外れた。
   `␣` を持っていたが、Source Code Pro には無い。1 セルに詰めるには縮小が
   要り（v5 で廃止した）、方針（「Source Han Sans にしかない文字は全角の
   まま」）とも衝突するので、要判断。
-- **NF 版のファミリー名が GDI の 31 文字に収まらない**。
-  `Sumi Moji JP Term Nerd Font Mono` は 32 文字、非 RIBBI の
-  `... Nerd Font Mono SemiBold` は 41 文字で、JP の NF 20 面のうち 16 面、
-  欧文の 10 面のうち 2 面が `LOGFONT.lfFaceName`（31 文字）に入らない。
+- **NF 版のファミリー名が GDI の 31 文字に収まらない**（`Gengou` への
+  改名で半減、一部残る）。`Gengou JP Term Nerd Font Mono` は 29 文字で
+  収まるが、非 RIBBI は nameID 1 にウェイト名が付くので
+  `... Nerd Font Mono SemiBold` が 38 文字になる。JP の NF 20 面のうち
+  8 面（Term の Light / Medium / SemiBold 各 2 面と、基本ファミリーの
+  SemiBold 2 面）が `LOGFONT.lfFaceName`（31 文字）に入らない。欧文の
+  10 面は全部収まる。v5.0.0 の `Sumi Moji` では Term の RIBBI が
+  32 文字で、JP 16 面・欧文 2 面が入らなかった。
   DirectWrite の Windows Terminal や macOS / Linux では問題ないが、
   旧 conhost・メモ帳・Office の GDI 経路ではファミリー名で引けない。
   nameID 1 だけ短い別名にする手はあるが（本家 font-patcher の
@@ -128,7 +130,7 @@ SHCJ は上流から外れた。
   キャッシュキーにも混ぜるのが筋。未着手。
 - **SHCJ 依存の解消**: バーの目標値（Latin が固定なので不要）、半角カナ
   のドナー（Source Han Sans 自身の 500 幅を中央配置）、行間（SCP）、
-  半角の集合（Sumi Moji の cmap）。`SHCJ_TTC` と `SHCJ_TAG` は消えた。
+  半角の集合（Gengou の cmap）。`SHCJ_TTC` と `SHCJ_TAG` は消えた。
 
 英語フォント基準で判断した残りの課題（優先順）: README の見本画像、
 fontbakery を CI に、VS Code 統合ターミナル（xterm.js）の合字、Homebrew
@@ -139,7 +141,7 @@ cask / Scoop、リポジトリ名と `PROJECT_URL` の改名。合字なし変�
 
 ## 1. 目的
 
-Sumi Moji JP の欧文層（Source Code Pro の文字 + Monaspace の記号・合字）を
+Gengou JP の欧文層（Source Code Pro の文字 + Monaspace の記号・合字）を
 **独立した欧文フォントとして先に完成させ**、JP はそれを Source Han Sans に
 載せるだけの工程にする。
 
@@ -157,18 +159,21 @@ Sumi Moji JP の欧文層（Source Code Pro の文字 + Monaspace の記号・�
 
 | 用途 | ファミリー名 | PostScript 名 |
 |---|---|---|
-| 欧文のみ | Sumi Moji | SumiMoji-Regular など |
-| 欧文のみ NF | Sumi Moji Nerd Font Mono | SumiMojiNFM-Regular |
-| 和文入り | Sumi Moji JP / Sumi Moji JP Term | SumiMojiJP-Regular, SumiMojiJPTerm-Regular |
-| 和文入り NF | Sumi Moji JP Nerd Font Mono など | SumiMojiJPNFM-Regular など |
+| 欧文のみ | Gengou | Gengou-Regular など |
+| 欧文のみ NF | Gengou Nerd Font Mono | GengouNFM-Regular |
+| 和文入り | Gengou JP / Gengou JP Term | GengouJP-Regular, GengouJPTerm-Regular |
+| 和文入り NF | Gengou JP Nerd Font Mono など | GengouJPNFM-Regular など |
 
-リブランディングで Shoyu Code Pro JP から名前を変えた箇所（リポジトリ名と
-`PROJECT_URL` を除き実施済み。リポジトリを改名すれば GitHub は旧 URL を転送する）:
+リブランディングで名前を変えた箇所（Shoyu Code Pro JP → Sumi Moji JP →
+Gengou JP の二度の改名とも同じ箇所を触っている。リポジトリ名と
+`PROJECT_URL` だけ未実施: リポジトリを改名すると GitHub は旧 URL を転送
+するので、フォントの name テーブルに焼く URL は改名を見てから差し替える。
+先に新 URL を書くと、改名までのあいだ 404 を焼いたフォントが出る）:
 
 1. `scripts/build.py` の `set_names`（family / PostScript 名のプレフィックス）と `PROJECT_URL` / `PROJECT_COPYRIGHT`
 2. `scripts/nerdpatch.py` の NF 命名正規表現
 3. TTC のファイル名（のちに TTC 自体を廃止）
-4. `.github/workflows/release.yml` のリリース資産名と `SUMI_VERSION` 環境変数名
+4. `.github/workflows/release.yml` のリリース資産名と `GENGOU_VERSION` 環境変数名
 5. `scripts/verify.py` の `FAMILY_METRICS` 判定（ファミリー名のトークン）
 6. README / LICENSE の名前と、リポジトリ名・`git remote`
 
@@ -177,12 +182,22 @@ Sumi Moji JP の欧文層（Source Code Pro の文字 + Monaspace の記号・�
 
 - OFL の Reserved Font Name により `Source` と `Monaspace` はフォント名に
   使えない。OFL FAQ 5.4 は「RFN の単語全体は不可、単語の一部は可だが非推奨」
-  で、`Monasource` は `Source` を丸ごと含むため不可側。`Sumi Moji` は
+  で、`Monasource` は `Source` を丸ごと含むため不可側。`Gengou` は
   どちらの RFN も含まない
-- 名前の由来: 墨文字（筆で書いた文字）。`Sumi` 単体は筆文字系フォント名で
-  多用されるが、`Sumi Moji` 複合名のフォントは無い。日本に同名の工芸系
-  小規模ブランド（T シャツ、ネイル筆、書道用品店「墨文字製作所」）がある
-- name ID 0 / 9 のドナー表記、achVendID `SUMI`、STAT、WWS は JP と同じ規約
+- 名前の由来: **源合**（げんごう）。**源**は Source Code Pro と源ノ角
+  ゴシック（Source Han Sans JP）が共有する `Source` の訳字で、RFN が英語の
+  `Source` を塞いでいることへの言い換えそのもの。**合**は合字の合であり、
+  3 つの上流を合わせる合成の合でもある。どちらもこの書体の固有の特徴を
+  指している
+- v5.0.0 までの `Sumi Moji`（墨文字）からの改名: 筆致も滲みも抑揚もない
+  角ゴシックに墨の名前は合っていなかった。命名時の判定が衝突調査だけで、
+  字面と名前が合っているかを見ていなかったのが原因
+- 衝突調査: フォント名 `Gengou` は既存なし。長音なしの `Gengo` は翻訳
+  プラットフォーム Gengo（Lionbridge）と Go のコード生成ライブラリ
+  kubernetes/gengo に当たり、`Gen Go Code` は英語で「generate Go code」と
+  読めるので、どちらも採らなかった。源◯の二字（源真・源柔・源界・源暎・
+  源泉・源流・源雲）は既存の派生フォント群で埋まっている
+- name ID 0 / 9 のドナー表記、achVendID `GNGO`、STAT、WWS は JP と同じ規約
 
 ## 3. 仕様
 
@@ -247,13 +262,13 @@ Sumi Moji JP の欧文層（Source Code Pro の文字 + Monaspace の記号・�
 
 ```
 scripts/build_latin.py     # SCP VF + Monaspace VF
-                            #   -> dist/latin/SumiMoji-*.otf（配布物であり、
+                            #   -> dist/latin/Gengou-*.otf（配布物であり、
                             #      JP 面のドナーでもある 10 面）
 scripts/build_latin_vf.py  # 同じマスターを varLib で合成
-                            #   -> dist/latin/SumiMoji[wght].otf
-                            #      dist/latin/SumiMoji-Italic[wght].otf
+                            #   -> dist/latin/Gengou[wght].otf
+                            #      dist/latin/Gengou-Italic[wght].otf
 scripts/build.py           # SHS + dist/latin
-                            #   -> dist/SumiMojiJP*.otf（JP / JP Term の 20 面）
+                            #   -> dist/GengouJP*.otf（JP / JP Term の 20 面）
 scripts/nerdpatch.py       # Nerd Fonts の記号フォントを接ぎ木
                             #   -> dist/nerd{,/latin}/*NFM-*.otf
 scripts/harmonize_latin.py # 欧文ファミリーの win メトリクスを面をまたいで揃える
@@ -280,7 +295,7 @@ scripts/golden.py          # 2つの dist ディレクトリを比較（cmap・�
 に対して呼び出すだけになった。
 
 build.py に残る処理: SHS の読み込み、SHCJ からの半角カナ等の複写、行間の
-複写、Sumi Moji からのグリフ・GSUB の取り込み（グリフ名を CID に付け替え、
+複写、Gengou からのグリフ・GSUB の取り込み（グリフ名を CID に付け替え、
 lookup と feature を SHS の GSUB にマージ）、10/9 拡大（JP）、`narrow_ambiguous`
 と `widen_fullwidth`（Term）、`stretch_arrows` と `add_width_alternates`、
 名前・STAT・メタデータ、NF パッチ。
@@ -294,10 +309,10 @@ cmap・GSUB の shaping 結果が roundoff（±1〜2ユニット）を除いて�
 
 ### 段階 1a: 35 から切り出し（実装済み、のち段階 1b で置き換え）
 
-最初の実装。`build_latin.py` を切り出し、`dist/SumiMojiJP35-*.otf`
+最初の実装。`build_latin.py` を切り出し、`dist/GengouJP35-*.otf`
 （`build.py` が既にビルドした 35 面）から `dist/latin/` に
-`SumiMoji-*.otf` 12 面を出す中間形態だった。`verify_latin.py` と
-`SumiMoji.zip` のリリース資産化はこの段階で入り、以降も引き継がれている。
+`Gengou-*.otf` 12 面を出す中間形態だった。`verify_latin.py` と
+`Gengou.zip` のリリース資産化はこの段階で入り、以降も引き継がれている。
 段階 1b の実装により、35 の完成品 OTF を経由する経路そのものは
 置き換わっている。
 
@@ -360,11 +375,11 @@ cmap・GSUB の shaping 結果が roundoff（±1〜2ユニット）を除いて�
    写像に含めるので、名前付きインスタンスの間でも SCP と厳密に一致
    する——`verify_latin_vf.py` が SCP_VF_U/I を指す環境で検証）。
    name テーブルは SCP VF 自身の慣習（`SourceCodeVF-Upright.otf` /
-   `-Italic.otf`）に倣い nameID 6 に `SumiMoji-Roman` /
-   `SumiMoji-Italic`、nameID 25 に `SumiMoji`、nameID 16/17 は省略
+   `-Italic.otf`）に倣い nameID 6 に `Gengou-Roman` /
+   `Gengou-Italic`、nameID 25 に `Gengou`、nameID 16/17 は省略
 4. 未着手: JP 側 (`scripts/build.py`) を「欧文 VF をそのまま
    `VFSource.matched` でインスタンス化して使う」側へ切り替える作業。
-   今回追加したのは Sumi Moji 単体の VF（配布物）のみで、JP 側は
+   今回追加したのは Gengou 単体の VF（配布物）のみで、JP 側は
    引き続き `dist/latin` の静的 OTF（`build_latin.py` の出力）を
    接ぎ木している
 5. 未着手: JP 側 12 面を、今回の VF からインスタンス化して作る経路
@@ -397,7 +412,7 @@ cmap・GSUB の shaping 結果が roundoff（±1〜2ユニット）を除いて�
 - **Italic**: SCP Italic は −11°（`post.italicAngle`、実測ステム角
   11.38°）で Monaspace の slnt の下限と一致するため、シアーは掛からない
   ——コード中の −12° は角度を申告しないドナーへのフォールバック
-- **名前**: Sumi Moji / Sumi Moji JP で確定。商標（USPTO / J-PlatPat）は
+- **名前**: Gengou / Gengou JP で確定。商標（USPTO / J-PlatPat）は
   この環境から未確認。変更箇所の一覧は 2 節
 - **バージョン**: JP と同じタグで同時にリリースする（別バージョン番号を
   持たない）

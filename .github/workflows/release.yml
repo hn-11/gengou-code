@@ -1,8 +1,8 @@
 # Tag push (v*) -> full assembly from live upstreams (5 weights x 2 styles
-# x 2 families = 20 faces plus the 10 Sumi Moji statics and the two
+# x 2 families = 20 faces plus the 10 Gengou statics and the two
 # variable fonts), verify, graft the Nerd Fonts symbols into everything,
 # zip, GitHub release.
-# Sumi Moji itself ships as the two variable fonts (its statics are the
+# Gengou itself ships as the two variable fonts (its statics are the
 # JP faces' donors, the Nerd Fonts patch's input and the variable fonts'
 # check, not an asset); the JP families ship as statics, one zip per
 # family (and per family for their Nerd Fonts patches: a download is the
@@ -10,7 +10,7 @@
 # a user installs.
 #
 # A family's weights per job — its Latin donors, its JP faces, their
-# Nerd Fonts patches and a share of the Sumi Moji ones (patched while
+# Nerd Fonts patches and a share of the Gengou ones (patched while
 # the JP faces build), verified side by side and uploaded as an
 # artifact; the package job assembles dist/ from the artifacts,
 # harmonizes the Latin families' win metrics (a per-job build never sees
@@ -37,13 +37,13 @@ on:
 permissions:
   contents: write
 env:
-  SUMI_VERSION_TAG: ${{ inputs.tag || (github.ref_type == 'tag' && github.ref_name) || 'v0.0.0-dry' }}
+  GENGOU_VERSION_TAG: ${{ inputs.tag || (github.ref_type == 'tag' && github.ref_name) || 'v0.0.0-dry' }}
   # the runs that publish: a v* tag, or a dispatch without dry-run
   PUBLISH: ${{ github.event_name == 'push' && github.ref_type == 'tag' || github.event_name == 'workflow_dispatch' && !inputs.dry-run }}
 jobs:
   # a family's weights, both styles, per job (six jobs): its Latin donors,
   # its JP faces, and the Nerd Fonts grafts — the JP faces' own, plus a
-  # share of the ten Sumi Moji ones, grafted while the JP faces build:
+  # share of the ten Gengou ones, grafted while the JP faces build:
   # the base job the job's uprights, the Term job its italics. The two
   # Bold jobs (two faces each, the lightest) also build one variable
   # font each, for the package job to pick up
@@ -71,24 +71,24 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/setup-build
-      - run: echo "SUMI_VERSION=${SUMI_VERSION_TAG#v}" >> "$GITHUB_ENV"
+      - run: echo "GENGOU_VERSION=${GENGOU_VERSION_TAG#v}" >> "$GITHUB_ENV"
       - run: python scripts/build_latin.py "${{ matrix.weights }}"
       - name: Build the JP faces and graft the symbols into everything
         env:
           LATIN_NF: ${{ matrix.latin_nf }}
         run: |
-          # this job's share of the Sumi Moji grafts: its weights' uprights
+          # this job's share of the Gengou grafts: its weights' uprights
           # (base) or italics (Term)
           faces=""
           for w in ${{ matrix.weights }}; do
             case "$LATIN_NF" in
-              Upright) faces="$faces dist/latin/SumiMoji-$w.otf" ;;
-              Italic) faces="$faces dist/latin/SumiMoji-${w}Italic.otf" ;;
+              Upright) faces="$faces dist/latin/Gengou-$w.otf" ;;
+              Italic) faces="$faces dist/latin/Gengou-${w}Italic.otf" ;;
             esac
           done
           # an empty list would mean "patch everything" — the same faces
           # the foreground run below writes, at the same time
-          [ -n "$faces" ] || { echo "no Sumi Moji faces for LATIN_NF='$LATIN_NF'"; exit 1; }
+          [ -n "$faces" ] || { echo "no Gengou faces for LATIN_NF='$LATIN_NF'"; exit 1; }
           python scripts/nerdpatch.py $faces > nerd-latin.log 2>&1 &
           latin=$!
           # neither the JP build nor the foreground graft may take the
@@ -103,11 +103,11 @@ jobs:
       - if: matrix.variable
         run: python scripts/build_latin_vf.py ${{ matrix.variable }}
       # the statics and NF faces; a variable font, when this job built one,
-      # is dist/latin/SumiMoji*[wght].otf and rides along (verify_latin_vf
+      # is dist/latin/Gengou*[wght].otf and rides along (verify_latin_vf
       # runs in the package job, against every static)
       - run: >-
           python scripts/verify_many.py
-          'dist/*.otf' 'dist/nerd/*.otf' 'dist/latin/SumiMoji-*.otf' 'dist/nerd/latin/*.otf'
+          'dist/*.otf' 'dist/nerd/*.otf' 'dist/latin/Gengou-*.otf' 'dist/nerd/latin/*.otf'
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: faces-${{ matrix.family }}-${{ strategy.job-index }}
@@ -130,7 +130,7 @@ jobs:
       # assembled dist/ before zipping it, and without this its
       # verifiers skipped the version check and a dist/ carrying two
       # versions would have shipped
-      - run: echo "SUMI_VERSION=${SUMI_VERSION_TAG#v}" >> "$GITHUB_ENV"
+      - run: echo "GENGOU_VERSION=${GENGOU_VERSION_TAG#v}" >> "$GITHUB_ENV"
       - uses: ./.github/actions/setup-build
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -140,14 +140,14 @@ jobs:
       - run: python scripts/harmonize_latin.py
       - name: Verify the variable fonts against the static faces
         run: |
-          python scripts/verify_latin_vf.py "dist/latin/SumiMoji[wght].otf"
-          python scripts/verify_latin_vf.py "dist/latin/SumiMoji-Italic[wght].otf"
+          python scripts/verify_latin_vf.py "dist/latin/Gengou[wght].otf"
+          python scripts/verify_latin_vf.py "dist/latin/Gengou-Italic[wght].otf"
       # every face harmonize_latin.py rewrote, not two of the twenty:
       # this pass is the only one that sees a Latin family whole, and it
       # writes new win metrics into all ten statics of each
       - run: >-
           python scripts/verify_many.py
-          'dist/latin/SumiMoji-*.otf' 'dist/nerd/latin/*.otf'
+          'dist/latin/Gengou-*.otf' 'dist/nerd/latin/*.otf'
       - run: |
           cp LICENSE dist/LICENSE
           cp LICENSE dist/nerd/LICENSE
@@ -156,15 +156,15 @@ jobs:
           # the Nerd Fonts symbols' own license rides with the faces that carry them
           cp "$NF_LICENSE" dist/nerd/LICENSE-NerdFonts
           cp "$NF_LICENSE" dist/nerd/latin/LICENSE-NerdFonts
-          # one zip per family: "SumiMojiJP-*" is the base family alone
+          # one zip per family: "GengouJP-*" is the base family alone
           # (Term carries its own prefix)
           cd dist
-          for fam in SumiMojiJP SumiMojiJPTerm; do
+          for fam in GengouJP GengouJPTerm; do
             zip -q "$fam.zip" "$fam"-*.otf LICENSE
             (cd nerd && zip -q "../$fam-NerdFont.zip" "$fam"NFM-*.otf LICENSE LICENSE-NerdFonts)
           done
-          (cd latin && zip -q ../SumiMoji.zip 'SumiMoji[wght].otf' 'SumiMoji-Italic[wght].otf' LICENSE)
-          (cd nerd/latin && zip -q ../../SumiMoji-NerdFont.zip *.otf LICENSE LICENSE-NerdFonts)
+          (cd latin && zip -q ../Gengou.zip 'Gengou[wght].otf' 'Gengou-Italic[wght].otf' LICENSE)
+          (cd nerd/latin && zip -q ../../Gengou-NerdFont.zip *.otf LICENSE LICENSE-NerdFonts)
       # every asset, on a dry run too (a missing one is a failure here, not
       # a warning from the release step). By name and by content: `zip`
       # exits 0 when its *.otf argument matches nothing, because LICENSE
@@ -172,9 +172,9 @@ jobs:
       # two licence files and no font
       - name: Every release asset exists and carries its fonts
         run: |
-          want="SumiMojiJP:10 SumiMojiJPTerm:10 SumiMoji:2
-                SumiMojiJP-NerdFont:10 SumiMojiJPTerm-NerdFont:10
-                SumiMoji-NerdFont:10"
+          want="GengouJP:10 GengouJPTerm:10 Gengou:2
+                GengouJP-NerdFont:10 GengouJPTerm-NerdFont:10
+                Gengou-NerdFont:10"
           for spec in $want; do
             zip="dist/${spec%%:*}.zip"
             n="${spec##*:}"
@@ -188,7 +188,7 @@ jobs:
         with:
           # on dispatch the tag doesn't exist yet; gh-release creates it
           # at the built commit. Tag pushes keep working unchanged.
-          tag_name: ${{ env.SUMI_VERSION_TAG }}
+          tag_name: ${{ env.GENGOU_VERSION_TAG }}
           target_commitish: ${{ github.sha }}
           # the notes are the merged pull requests since the last tag:
           # this project keeps no hand-written changelog (the ones up to
@@ -196,9 +196,9 @@ jobs:
           # from is in the history at `git show v5.0.0:CHANGELOG.md`)
           generate_release_notes: true
           files: |
-            dist/SumiMojiJP.zip
-            dist/SumiMojiJPTerm.zip
-            dist/SumiMojiJP-NerdFont.zip
-            dist/SumiMojiJPTerm-NerdFont.zip
-            dist/SumiMoji.zip
-            dist/SumiMoji-NerdFont.zip
+            dist/GengouJP.zip
+            dist/GengouJPTerm.zip
+            dist/GengouJP-NerdFont.zip
+            dist/GengouJPTerm-NerdFont.zip
+            dist/Gengou.zip
+            dist/Gengou-NerdFont.zip

@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
-"""Assemble Sumi Moji JP from live upstreams.
+"""Assemble Gengou JP from live upstreams.
 
-Sumi Moji JP is an English terminal font with Japanese: the Latin layer
-is Sumi Moji (dist/latin, scripts/build_latin.py — Source Code Pro's
+Gengou JP is an English terminal font with Japanese: the Latin layer
+is Gengou (dist/latin, scripts/build_latin.py — Source Code Pro's
 named instances with Monaspace's punctuation and ligatures), taken as
-it is, and Source Han Sans JP supplies everything Sumi Moji does not
+it is, and Source Han Sans JP supplies everything Gengou does not
 have. Source Code Pro sets the terms: the 600 cell, the stroke weight of
 each named weight (the Japanese face is the Source Han Sans weight whose
 strokes match), and the line metrics (984 / -273: the line pitch of an
 English terminal font, not a Japanese one).
 
-  - Half-width layer:  every codepoint Sumi Moji covers gets its one-cell
+  - Half-width layer:  every codepoint Gengou covers gets its one-cell
                        glyph — Latin, Greek, Cyrillic, box drawing, the
                        ligature-paired arrows and operators included. The
                        two-cell forms Source Han Sans had for some of
                        them (JIS-style → α ─) stay reachable under fwid.
   - Full-width layer:  Source Han Sans JP, untouched: kanji, kana, the
-                       full-width symbols Sumi Moji has no glyph for (① ※
+                       full-width symbols Gengou has no glyph for (① ※
                        ...). Its proportional leftovers (half-width kana
                        at 500, Hangul jamo at 920, ﬀ ...) are centred on
                        the grid (fit_to_grid).
@@ -26,10 +26,10 @@ English terminal font, not a Japanese one).
                        static whose '=' bar matches that instance's
                        (FACES).
 
-Italic faces take the Sumi Moji Italic + upright Japanese.
+Italic faces take the Gengou Italic + upright Japanese.
 
 Families (suffix -> full-width advance):
-  ""     1000  3:5 — Sumi Moji plus Japanese at Source Han Sans's own
+  ""     1000  3:5 — Gengou plus Japanese at Source Han Sans's own
                advance; the natural setting for editors
   "Term" 1200  1:2 — full-width widened to two cells (widen_fullwidth) so
                a non-grid application lays Japanese out on the terminal
@@ -45,7 +45,7 @@ Usage:
   family, "Light Italic" one face per family, "Light Upright Term" one
   face, "Light Regular base" four (the release builds a family's two
   weights per job). Whole words, never a substring match (face_matches).
-  With no FILTER, dist/SumiMojiJP*.otf is cleared before building, so a
+  With no FILTER, dist/GengouJP*.otf is cleared before building, so a
   full build never leaves faces from an older roster behind. A filtered run
   never deletes anything.
 
@@ -55,11 +55,11 @@ Env (SHS_DIR required, the rest default):
               needs SCP_VF_U / SCP_VF_I / MONA_VF and must run first
 
 Env (optional):
-  SUMI_VERSION = our own release version, e.g. "3.1.0" — stamps
+  GENGOU_VERSION = our own release version, e.g. "3.1.0" — stamps
                   head.fontRevision (MAJOR.MINOR), nameID 5 and the CFF
                   version. Unset keeps today's behaviour: the revision
                   stays whatever Source Han Sans shipped.
-  SUMI_SKIP_AUTOHINT = 1 skips otfautohint (quick local iterations)
+  GENGOU_SKIP_AUTOHINT = 1 skips otfautohint (quick local iterations)
 """
 
 import concurrent.futures
@@ -92,7 +92,7 @@ from fontTools.varLib.instancer import instantiateVariableFont
 
 ROOT = Path(__file__).resolve().parent.parent
 # the half-width cell: Source Code Pro's own advance (upm 1000), which
-# Sumi Moji keeps as it is — one number, since v5 rescales nothing
+# Gengou keeps as it is — one number, since v5 rescales nothing
 CELL = 600
 FULLWIDTH = 1000    # full-width advance of the CJK layer (upm 1000)
 MONA_CELL = 1240    # Monaspace advance (upm 2000)
@@ -115,7 +115,7 @@ COMBINING_MARKS = range(0x0300, 0x0370)
 # and this one is not registered; it just has to stop being Adobe's 'ADBO'.
 PROJECT_URL = "https://github.com/hn-11/shoyu-code-pro-jp"
 PROJECT_COPYRIGHT = f"Copyright 2026 hn-11 ({PROJECT_URL})"
-VENDOR_ID = "SUMI"
+VENDOR_ID = "GNGO"
 
 # OS/2 usWeightClass per output weight, the STAT table's wght axis values
 # and the Source Code Pro VF wght the Latin is instanced at (Source Code
@@ -125,8 +125,8 @@ WEIGHT_CLASS = {"Light": 300, "Regular": 400, "Medium": 500,
 
 
 # The Latin donor faces scripts/build_latin.py writes under LATIN_DIR:
-# (family name, PostScript family). The released Sumi Moji, exactly.
-LATIN_FAMILY = ("Sumi Moji", "SumiMoji")
+# (family name, PostScript family). The released Gengou, exactly.
+LATIN_FAMILY = ("Gengou", "Gengou")
 
 
 def latin_face_path(latin_dir, weight, italic):
@@ -136,7 +136,7 @@ def latin_face_path(latin_dir, weight, italic):
 
 # {family suffix: widen the full-width advances to two cells}
 VARIANTS = {
-    "": False,      # 3:5 — Sumi Moji plus Japanese at 1000
+    "": False,      # 3:5 — Gengou plus Japanese at 1000
     "Term": True,   # 1:2 terminal grid (600:1200), widen_fullwidth
 }
 
@@ -328,7 +328,7 @@ def unrounded_cff2_instancing():
     renders the VF there, 'm' up to 10u off, and two instances drift
     differently. With rounding off the outlines keep the VF's exact blend
     (fixed 16.16 operands, a CFF2 charstring's native precision): the
-    variable Sumi Moji's masters are built that way and interpolate SCP
+    variable Gengou's masters are built that way and interpolate SCP
     exactly (build_latin_vf.py), and the static faces round the blend
     afterwards, point by point (build_latin.round_outlines)."""
     orig = instancer.instantiateCFF2
@@ -462,7 +462,7 @@ class VFSource:
         # erodes the outlines by it — see erode_path(). A VF master can't
         # take that path (erosion is a pathops boolean op on a fixed
         # outline, not an interpolatable deformation — see docs/
-        # sumi-moji-plan.md 段階2): erode=False clamps at the floor
+        # gengou-plan.md 段階2): erode=False clamps at the floor
         # (the binary search already can't go past the axis bounds) and
         # only reports the shortfall, leaving `erode` unset so
         # mona_glyphset() hands back the outline as instanced.
@@ -701,7 +701,7 @@ def append_context(font, fullwidth=False):
 
     A plain CFF has no FDSelect at all: the index is None and the Private
     dict the top dict's own. Every face this repo builds is CID-keyed,
-    Sumi Moji included; the branch is for a caller handed something else
+    Gengou included; the branch is for a caller handed something else
     (the unit tests' fixtures). A face with no vmtx has no donor
     either."""
     cff = font["CFF "].cff
@@ -743,7 +743,7 @@ def set_cmap(font, mapping, add_new=False):
 
 def graft_halfwidth(base, latin):
     """Give `base` (Source Han Sans JP) its half-width layer: every
-    codepoint the Latin donor (Sumi Moji, dist/latin) has gets the
+    codepoint the Latin donor (Gengou, dist/latin) has gets the
     donor's one-cell glyph, at the donor's own size — Latin, Greek,
     Cyrillic, box drawing, the ligature-paired arrows and operators,
     everything an English terminal font sets in one cell. The glyph
@@ -779,7 +779,7 @@ def graft_halfwidth(base, latin):
         key = (src, is_mark)
         if key not in made:
             # the donor's own advance, not an assumed cell: every glyph
-            # Sumi Moji cmaps is one cell today, and a two-cell one it
+            # Gengou cmaps is one cell today, and a two-cell one it
             # ever adds must be grafted two cells wide, not overprinted
             width = 0 if is_mark else latin["hmtx"][src][0]
             pen = T2CharStringPen(pen_width(private, width), scp_gs)
@@ -811,7 +811,7 @@ def graft_halfwidth(base, latin):
 def _remap_scp_tag(tag):
     """SCP feature tags, shifted around our own: ss01-ss10 -> ss11-ss20
     because ss01-ss08 are the ligature groups; ss11 and up are already
-    shifted (Sumi Moji carries them that way); cv/zero/salt keep their
+    shifted (Gengou carries them that way); cv/zero/salt keep their
     names. Everything else (case, frac, sups...) is not a glyph variant
     we mount."""
     if tag in ("zero", "salt") or tag.startswith("cv"):
@@ -957,7 +957,7 @@ def import_scp_variants(base, scp, default_map, marks):
     tag_maps = {}
     tag_names = {}
     for fr in gsub.FeatureList.FeatureRecord:
-        if fr.FeatureTag in GROUP_NAMES:   # Sumi Moji's own ss01-ss08 / cv99
+        if fr.FeatureTag in GROUP_NAMES:   # Gengou's own ss01-ss08 / cv99
             continue
         tag = _remap_scp_tag(fr.FeatureTag)
         if tag is None:
@@ -1726,7 +1726,7 @@ def copy_line_metrics(base, latin):
     """The line pitch of an English terminal font: hhea and typo ascender
     / descender / line gap from the Latin donor (Source Code Pro's 984 /
     -273 / 0, hhea and typo alike, USE_TYPO_METRICS set), so a line of
-    Sumi Moji JP is as tall as a line of Source Code Pro, not of Source
+    Gengou JP is as tall as a line of Source Code Pro, not of Source
     Han Sans (1160 / -288, 15% more). Source Han Sans's own kanji body
     (880 / -120) sits inside.
 
@@ -1778,7 +1778,7 @@ def recalc_codepage_range(font):
 
 
 # The symbols that pair with a ligature take Monaspace's one-cell glyph
-# rather than SCP's (in Sumi Moji, build_latin.py), so '←' beside '<-'
+# rather than SCP's (in Gengou, build_latin.py), so '←' beside '<-'
 # (and ≠ / !=, ≤ / <=, … / ...) shares its stroke weight and arrowhead.
 # Their two-cell forms live under fwid (stretch_arrows for the arrows).
 MONA_AMBIGUOUS = "←→↑↓⇐⇒⇔≠≤≥…"
@@ -2583,7 +2583,7 @@ def extend_realign_bases(font, names):
     realign_halfwidth_marks freezes its backtrack at widening time — the
     glyphs the widening did not move — and nerdpatch.py then appends
     10,402 one-cell icons to the finished face. None of them were in it,
-    so in SumiMojiJPTermNFM-* a full-width mark after an icon kept the
+    so in GengouJPTermNFM-* a full-width mark after an icon kept the
     widening's -100: U+F120 + U+20DD drew the ring at -465..465 where
     the same one-cell base two rows up puts it at -365..565."""
     gpos = getattr(font.get("GPOS"), "table", None)
@@ -2932,11 +2932,11 @@ OWNED_NAME_IDS = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 16, 17, 25)
 
 
 def set_names(font, suffix, weight, italic, italic_angle=-12.0, version=None,
-              credits=(), family_base="Sumi Moji JP", ps_base="SumiMojiJP",
+              credits=(), family_base="Gengou JP", ps_base="GengouJP",
               base_credit="Source Han Sans"):
     """Rewrite the family-identifying names, preserve the legal ones.
 
-    `version` (SUMI_VERSION, e.g. "3.1.0") stamps our own release version
+    `version` (GENGOU_VERSION, e.g. "3.1.0") stamps our own release version
     when set: head.fontRevision becomes MAJOR.MINOR, nameID 5 notes both
     our version and the inherited Source Han Sans revision, and the CFF
     version matches head. Left None (the default), the inherited SHS
@@ -2965,7 +2965,7 @@ def set_names(font, suffix, weight, italic, italic_angle=-12.0, version=None,
     # drop stale records for the IDs we own (every platform/encoding), so
     # the base font's Source Han Sans strings can't survive alongside ours
     name.names = [n for n in name.names if n.nameID not in OWNED_NAME_IDS]
-    # version: SUMI_VERSION (set) stamps our own release version and notes
+    # version: GENGOU_VERSION (set) stamps our own release version and notes
     # the inherited SHS revision alongside it; unset (CI builds) keeps that
     # inherited revision as-is, as before.
     shs_rev = font["head"].fontRevision
@@ -3520,7 +3520,7 @@ def add_gsub(font, added, alts, ligatures, variant_maps=None,
 
 
 # Greek and Coptic, and Cyrillic: the width policy says every character
-# Sumi Moji covers is one cell (README, 幅の方針), and these two scripts
+# Gengou covers is one cell (README, 幅の方針), and these two scripts
 # are in it. Source Code Pro Italic draws neither, so the italic faces
 # fall through to Source Han Sans's own proportional letters.
 LETTER_BLOCKS = ((0x0370, 0x04FF),)
@@ -3697,13 +3697,13 @@ def fullwidth_forms(font, replaced):
 
 def repoint_features(font, replaced, tags=("vert", "vrt2")):
     """Source Han Sans's own features substitute FROM the glyphs the
-    graft replaced, so once the cmap points at Sumi Moji's they never
+    graft replaced, so once the cmap points at Gengou's they never
     fire. Re-point each of `tags` at the grafted glyph, the way
     add_width_alternates does for fwid, so a vertical run still gets the
-    rotated forms of what Sumi Moji took over.
+    rotated forms of what Gengou took over.
 
     Only the vertical features: 'locl' is on by default, and re-pointing
-    it would swap Sumi Moji's own design for Source Han Sans's in
+    it would swap Gengou's own design for Source Han Sans's in
     ordinary horizontal text (its JP locale form of '…' is full width).
     Returns the number re-pointed."""
     if "GSUB" not in font:
@@ -3734,7 +3734,7 @@ def repoint_features(font, replaced, tags=("vert", "vrt2")):
 def add_width_alternates(font, fwid):
     """Wire the full-width forms into GSUB's fwid: {default one-cell
     glyph: full-width glyph} — Source Han Sans's own two-cell form of a
-    character Sumi Moji sets in one cell (Greek, box drawing, ≠ ≤ ≥ …),
+    character Gengou sets in one cell (Greek, box drawing, ≠ ≤ ≥ …),
     or the arrow redrawn from the ligatures (stretch_arrows). fwid
     already exists in the Source Han Sans base; the new lookup is merged
     into that record. Runs after add_gsub, so it re-sorts."""
@@ -4150,9 +4150,9 @@ def autohint_face(path, glyph_names):
     widen_fullwidth moved — a few hundred more in the italic faces,
     where Source Han Sans's Greek and Cyrillic survive.
     The Latin faces pass every glyph — the instancer drops SCP's hints.
-    SUMI_SKIP_AUTOHINT=1 skips it for quick local iterations."""
-    if os.environ.get("SUMI_SKIP_AUTOHINT"):
-        print("  autohint skipped (SUMI_SKIP_AUTOHINT)")
+    GENGOU_SKIP_AUTOHINT=1 skips it for quick local iterations."""
+    if os.environ.get("GENGOU_SKIP_AUTOHINT"):
+        print("  autohint skipped (GENGOU_SKIP_AUTOHINT)")
         return
     if not glyph_names:
         return
@@ -4257,13 +4257,13 @@ def face_matches(only, weight, face_label, suffix):
 def env_paths(spec):
     """{name: value} for the path environment variables in `spec`
     ({name: default or None when required}); exits naming every variable
-    that is unset or points nowhere. SUMI_VERSION (not a path) rides
+    that is unset or points nowhere. GENGOU_VERSION (not a path) rides
     along as-is."""
     env = {k: os.environ.get(k, d) for k, d in spec.items()}
     missing = [k for k, v in env.items() if not v or not Path(v).exists()]
     if missing:
         sys.exit(f"missing env: {missing}")
-    env["SUMI_VERSION"] = os.environ.get("SUMI_VERSION")
+    env["GENGOU_VERSION"] = os.environ.get("GENGOU_VERSION")
     return env
 
 
@@ -4406,7 +4406,7 @@ def build_face(job):
     credits = donor_credits(latin)
     ps = set_names(base, suffix, weight, italic,
                    ref_angle if ref_angle is not None else -12.0,
-                   version=env.get("SUMI_VERSION"), credits=credits)
+                   version=env.get("GENGOU_VERSION"), credits=credits)
     add_stat(base, weight, italic)
     prune_orphan_names(base)
     update_bbox(base)
@@ -4442,7 +4442,7 @@ def main():
     if only is None:
         # a full build must not leave faces from an older roster (e.g. the
         # dropped ExtraLight/Light) for the release zip to pick up
-        stale = sorted(out_dir.glob("SumiMojiJP*.otf"))
+        stale = sorted(out_dir.glob("GengouJP*.otf"))
         for f in stale:
             f.unlink()
         if stale:

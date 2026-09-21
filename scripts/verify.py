@@ -29,7 +29,7 @@ from verifylib import (  # noqa: E402
 )
 
 FONT = Path(sys.argv[1]) if len(sys.argv) > 1 else (
-    ROOT / "dist" / "SumiMojiJP-Regular.otf"
+    ROOT / "dist" / "GengouJP-Regular.otf"
 )
 with open(ROOT / "data" / "mona_ligs.json") as _f:
     LIGATURES = json.load(_f)
@@ -127,7 +127,7 @@ def is_italic(tf):
 def expected_metrics(tf):
     fam = family_name(tf)
     # whole-token match: "Term" is a separate word in the family name
-    # ("Sumi Moji JP Term"), never a substring of another word
+    # ("Gengou JP Term"), never a substring of another word
     for suffix, pair in FAMILY_METRICS.items():
         if suffix in fam.split(" "):
             return pair
@@ -152,7 +152,7 @@ def main():
           f"got ({a_adv}, {cjk_adv})")
 
 
-    # every codepoint Sumi Moji has is one cell in both families — the
+    # every codepoint Gengou has is one cell in both families — the
     # ligature-paired arrows and operators, Greek, box drawing, SCP-only
     # Latin (ł ğ ₽), '−' — and Source Han Sans's own full-width symbols
     # (① ※) stay two cells. Italic: Source Code Pro Italic has no Greek,
@@ -235,15 +235,15 @@ def main():
           f"off: {[(n, hmtx[n][0]) for n in off_grid[:5]]})")
 
     # the names the face ships under. verify_latin.py checks its side;
-    # nothing checked this one, and the JP faces are what SumiMojiJP.zip
+    # nothing checked this one, and the JP faces are what GengouJP.zip
     # carries
     name = tf["name"]
     fam = family_name(tf)
     is_nf = fam.endswith(" Nerd Font Mono")
     base_fam = fam[:-len(" Nerd Font Mono")] if is_nf else fam
-    want_fam = "Sumi Moji JP" + (" Term" if exp_full > 1000 else "")
+    want_fam = "Gengou JP" + (" Term" if exp_full > 1000 else "")
     check(base_fam == want_fam, f"family name {fam!r} (want {want_fam!r})")
-    ps_family = "SumiMojiJP" + ("Term" if exp_full > 1000 else "") \
+    ps_family = "GengouJP" + ("Term" if exp_full > 1000 else "") \
         + ("NFM" if is_nf else "")
     check((name.getDebugName(6) or "").startswith(ps_family + "-"),
           f"PostScript name {name.getDebugName(6)!r} (want {ps_family}-...)")
@@ -254,9 +254,9 @@ def main():
         check(bool(name.getDebugName(nid)), f"nameID {nid} is set")
     # the version the face is stamped with, against the one the build
     # was asked for: one dist/ with two versions in it passed every
-    # gate, and a release step that misses SUMI_VERSION makes exactly
+    # gate, and a release step that misses GENGOU_VERSION makes exactly
     # that
-    want_version = os.environ.get("SUMI_VERSION")
+    want_version = os.environ.get("GENGOU_VERSION")
     if want_version:
         major, minor = want_version.split(".")[:2]
         head5 = name.getDebugName(5) or ""
@@ -266,7 +266,7 @@ def main():
               f"stamped {want_version} (fontRevision "
               f"{tf['head'].fontRevision:.3f}, {head5!r})")
     else:
-        print("skip  version stamp (SUMI_VERSION unset)")
+        print("skip  version stamp (GENGOU_VERSION unset)")
     # the weight the face calls itself, in the number Windows sorts by
     weight = weight_name(subfamily_name(tf))
     if check(weight in build.WEIGHT_CLASS,
@@ -390,7 +390,7 @@ def main():
     # all Japanese as whitespace and passed every gate. `bounds` holds
     # the glyphs that draw (hmtx_mismatches skips a blank one), so this
     # counts ink. The face maps 17,355 codepoints — Source Han Sans
-    # JP's 16,742 and Sumi Moji's 1,335 — 12,746 of them kanji in the
+    # JP's 16,742 and Gengou's 1,335 — 12,746 of them kanji in the
     # unified block; the floors sit well under that, because a subset that
     # shrank on purpose is a decision and one that shrank by accident is
     # this
@@ -1633,7 +1633,7 @@ def main():
     # reaches 1808/-1048 — covering it would give a 2856u line, more than
     # twice the 1257u every renderer that honours USE_TYPO_METRICS uses.
     # The cost is that the Latin layer's box drawing (-400) and block
-    # elements (-454) sit below the bound; docs/sumi-moji-plan.md carries
+    # elements (-454) sit below the bound; docs/gengou-plan.md carries
     # the measurement and what raising it would trade
     check((os2.usWinAscent, os2.usWinDescent) == WIN_METRICS,
           f"win metrics are Source Han Sans's {WIN_METRICS}, got "

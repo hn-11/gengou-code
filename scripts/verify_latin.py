@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Regression test for the Latin-only faces (dist/latin/SumiMoji-*.otf):
+"""Regression test for the Latin-only faces (dist/latin/Gengou-*.otf):
 every ligature fires, the guards hold, everything sits on the 600 grid,
 nothing CJK or full-width is left, and the metadata is the Latin font's
-own. Usage: python scripts/verify_latin.py dist/latin/SumiMoji-Regular.otf"""
+own. Usage: python scripts/verify_latin.py dist/latin/Gengou-Regular.otf"""
 
 import os
 import sys
@@ -37,7 +37,7 @@ from verifylib import (  # noqa: E402
 )
 
 FONT = Path(sys.argv[1]) if len(sys.argv) > 1 else (
-    ROOT / "dist" / "latin" / "SumiMoji-Regular.otf")
+    ROOT / "dist" / "latin" / "Gengou-Regular.otf")
 CELL = build.CELL
 
 def main():
@@ -46,7 +46,7 @@ def main():
 
     name = tf["name"]
     fam = name.getDebugName(16) or name.getDebugName(1)
-    # a Nerd Fonts variant ("Sumi Moji Nerd Font Mono", nerdpatch.nf_name)
+    # a Nerd Fonts variant ("Gengou Nerd Font Mono", nerdpatch.nf_name)
     # appends Nerd Fonts' own marker after the family — strip it before
     # matching against the family name.
     is_nf = bool(fam) and fam.endswith(" Nerd Font Mono")
@@ -73,7 +73,7 @@ def main():
               f"OS/2 usWeightClass {tf['OS/2'].usWeightClass} "
               f"(want {build.WEIGHT_CLASS[weight]} for {weight})")
         check_stat(tf, check, weight, italic)
-    want_version = os.environ.get("SUMI_VERSION")
+    want_version = os.environ.get("GENGOU_VERSION")
     if want_version:
         major, minor = want_version.split(".")[:2]
         check(abs(tf["head"].fontRevision - float(f"{major}.{minor}")) < 5e-4

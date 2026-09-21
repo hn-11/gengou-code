@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Regression test for the variable Sumi Moji (dist/latin/SumiMoji[wght].otf
-/ SumiMoji-Italic[wght].otf): fvar/STAT/name shape, and that every named
+"""Regression test for the variable Gengou (dist/latin/Gengou[wght].otf
+/ Gengou-Italic[wght].otf): fvar/STAT/name shape, and that every named
 instance shapes ligatures the same way the static faces do and lands on
 the same '=' bar / 'A' bounds as the matching static face (when that face
 is built), and — with SCP_VF_U / SCP_VF_I set — that the font reproduces
 Source Code Pro exactly at and between the named weights.
 
 Usage: python scripts/verify_latin_vf.py [FONT]
-  FONT defaults to dist/latin/SumiMoji[wght].otf.
+  FONT defaults to dist/latin/Gengou[wght].otf.
 """
 
 import os
@@ -41,7 +41,7 @@ from verifylib import (  # noqa: E402
 )
 
 FONT = Path(sys.argv[1]) if len(sys.argv) > 1 else (
-    ROOT / "dist" / "latin" / "SumiMoji[wght].otf")
+    ROOT / "dist" / "latin" / "Gengou[wght].otf")
 
 # (text, expected glyph count) shaped with calt+liga on: a plain ligature
 # ("a -> b"), a context guard holding ("->>" alone: no trailing/leading
@@ -196,11 +196,11 @@ def main():
     fam, sub = name.getDebugName(1), name.getDebugName(2)
     ps6, ps25 = name.getDebugName(6), name.getDebugName(25)
     is_italic = sub == "Italic"
-    check(fam == "Sumi Moji", f"nameID1 family {fam!r}")
+    check(fam == "Gengou", f"nameID1 family {fam!r}")
     check(sub in ("Regular", "Italic"), f"nameID2 subfamily {sub!r}")
-    check(ps6 == f"SumiMoji-{'Italic' if is_italic else 'Roman'}",
+    check(ps6 == f"Gengou-{'Italic' if is_italic else 'Roman'}",
           f"nameID6 PostScript name {ps6!r}")
-    check(ps25 == "SumiMoji", f"nameID25 variations PS prefix {ps25!r}")
+    check(ps25 == "Gengou", f"nameID25 variations PS prefix {ps25!r}")
     check(name.getDebugName(16) is None and name.getDebugName(17) is None,
           "no nameID 16/17 (fvar+STAT already describe the family)")
     n0 = name.getDebugName(0) or ""
@@ -238,7 +238,7 @@ def main():
 
     # the three things verify_latin.py checks on a static face and this
     # never did: the repertoire, the grid, and the feature surface. The
-    # two variable fonts are the whole of SumiMoji.zip, and this is their
+    # two variable fonts are the whole of Gengou.zip, and this is their
     # only gate — a VF that lost every codepoint above U+024F, or every
     # stylistic set, passed here while the same loss on a static face
     # failed three checks
@@ -251,7 +251,7 @@ def main():
     # never read: a VF with embedding restricted, the vendor id blanked,
     # the range bits or the char-index range zeroed, or both format-4
     # cmap subtables deleted, passed here — and these two files ARE
-    # SumiMoji.zip. head's box is checked below instead, against every
+    # Gengou.zip. head's box is checked below instead, against every
     # instance: a VF's box is the union over its masters, not one
     # location's ink
     check_tables(tf, check, None, None, vf_cmap, codepages=True)
@@ -300,7 +300,7 @@ def main():
                  if tf.getGlyphOrder()[i.codepoint] not in drawn]
     check(not ligs, f"every ligature draws ({len(build.LIGATURES)} probes; "
                     f"blank: {ligs[:5]})")
-    want_version = os.environ.get("SUMI_VERSION")
+    want_version = os.environ.get("GENGOU_VERSION")
     if want_version:
         major, minor = want_version.split(".")[:2]
         check(abs(tf["head"].fontRevision - float(f"{major}.{minor}")) < 5e-4
@@ -310,7 +310,7 @@ def main():
               f"{tf['head'].fontRevision:.3f}, "
               f"{tf['name'].getDebugName(5)!r})")
     else:
-        print("skip  version stamp (SUMI_VERSION unset)")
+        print("skip  version stamp (GENGOU_VERSION unset)")
     check_style_bits(tf, check, tf["name"].getDebugName(2) or "",
                      "Italic" in (tf["name"].getDebugName(17)
                                   or tf["name"].getDebugName(2) or ""))
@@ -436,7 +436,7 @@ def main():
     # master can't erode, see build_latin_vf.py), so its bar is not
     # comparable; its SCP-side glyphs still are.
     floor_bar = build.bar_thickness(tf.getGlyphSet(location={"wght": axis.minValue}), equals)
-    any_static = bool(static_faces(ROOT / "dist" / "latin", "SumiMoji"))
+    any_static = bool(static_faces(ROOT / "dist" / "latin", "Gengou"))
     for inst_desc in instances:
         style = name.getDebugName(inst_desc.subfamilyNameID) or "?"
         loc = dict(inst_desc.coordinates)
@@ -449,7 +449,7 @@ def main():
         # (an SCP-only glyph — no Monaspace/erosion involved); the
         # position check — the exact-outline check against SCP is below
         weight = style.replace(" Italic", "").replace("Italic", "Regular")
-        static_name = f"SumiMoji-{weight}{'Italic' if is_italic else ''}.otf"
+        static_name = f"Gengou-{weight}{'Italic' if is_italic else ''}.otf"
         static_path = ROOT / "dist" / "latin" / static_name
         if static_path.exists():
             ref = TTFont(str(static_path))

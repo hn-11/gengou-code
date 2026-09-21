@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Sumi Moji: the Latin-only font, assembled straight from the variable
+"""Gengou: the Latin-only font, assembled straight from the variable
 fonts — Source Code Pro VF as the base, Monaspace VF for the punctuation,
 the ligatures and the one-cell arrows.
 
-This is the Latin layer every Sumi Moji JP family carries, built once
-and on its own (docs/sumi-moji-plan.md): build.py grafts these faces
+This is the Latin layer every Gengou JP family carries, built once
+and on its own (docs/gengou-plan.md): build.py grafts these faces
 into Source Han Sans as they are. Each face is one of Source Code Pro's
 own named instances — Light 300 / Regular 400 / Medium 500 / SemiBold
 600 / Bold 700 (build.WEIGHT_CLASS), instanced at exactly that wght, no
@@ -29,7 +29,7 @@ Usage:
                                            # nothing here: one family)
 Env (all required):
   SCP_VF_U, SCP_VF_I, MONA_VF
-Env (optional): SUMI_VERSION, SUMI_SKIP_AUTOHINT
+Env (optional): GENGOU_VERSION, GENGOU_SKIP_AUTOHINT
 """
 
 import io
@@ -47,7 +47,7 @@ from verifylib import static_faces  # noqa: E402
 CELL = build.CELL   # 600
 MONA_K = CELL / build.MONA_CELL
 
-FAMILY, PS_FAMILY = build.LATIN_FAMILY   # "Sumi Moji", "SumiMoji"
+FAMILY, PS_FAMILY = build.LATIN_FAMILY   # "Gengou", "Gengou"
 
 
 def static_base(scp):
@@ -108,7 +108,7 @@ def fix_zone_order(font):
 
     The blend also leaves them fractional, and the spec stores them as
     integer deltas: eight of the ten static faces shipped values like
-    733.9999999 and 671.9999999 (SumiMoji-BoldItalic had nine, and
+    733.9999999 and 671.9999999 (Gengou-BoldItalic had nine, and
     StdHW 115.33964), which a reader that truncates rather than rounds
     reads a unit low — the zone then sits under the overshoot it is
     there to suppress. Only Regular and Regular Italic were integral,
@@ -248,7 +248,7 @@ def build_face(job):
     build.set_latin_heights(base)
     ps = build.set_names(base, "", weight, italic,
                          ref_angle if ref_angle is not None else -12.0,
-                         version=env.get("SUMI_VERSION"), credits=credits,
+                         version=env.get("GENGOU_VERSION"), credits=credits,
                          family_base=FAMILY, ps_base=PS_FAMILY, base_credit=None)
     build.classify_unicode_marks(base)
     build.add_stat(base, weight, italic)

@@ -20,15 +20,15 @@ import nerdpatch  # noqa: E402
 
 
 @pytest.mark.parametrize("name, want", [
-    ("Sumi Moji JP", "Sumi Moji JP Nerd Font Mono"),
-    ("Sumi Moji JP Term", "Sumi Moji JP Term Nerd Font Mono"),
-    ("Sumi Moji JP Term SemiBold Italic", "Sumi Moji JP Term Nerd Font Mono SemiBold Italic"),
-    ("SumiMojiJPTerm-BoldItalic", "SumiMojiJPTermNFM-BoldItalic"),
-    ("SumiMojiJP-Light", "SumiMojiJPNFM-Light"),
-    ("Sumi Moji", "Sumi Moji Nerd Font Mono"),
-    ("SumiMoji-RegularItalic", "SumiMojiNFM-RegularItalic"),
-    ("5.0.0;SUMI;SumiMojiJP-Regular", "5.0.0;SUMI;SumiMojiJPNFM-Regular"),
-    ("Version 5.0.0;Sumi Moji JP;SHS 2.005", "Version 5.0.0;Sumi Moji JP Nerd Font Mono;SHS 2.005"),
+    ("Gengou JP", "Gengou JP Nerd Font Mono"),
+    ("Gengou JP Term", "Gengou JP Term Nerd Font Mono"),
+    ("Gengou JP Term SemiBold Italic", "Gengou JP Term Nerd Font Mono SemiBold Italic"),
+    ("GengouJPTerm-BoldItalic", "GengouJPTermNFM-BoldItalic"),
+    ("GengouJP-Light", "GengouJPNFM-Light"),
+    ("Gengou", "Gengou Nerd Font Mono"),
+    ("Gengou-RegularItalic", "GengouNFM-RegularItalic"),
+    ("5.0.0;GNGO;GengouJP-Regular", "5.0.0;GNGO;GengouJPNFM-Regular"),
+    ("Version 5.0.0;Gengou JP;SHS 2.005", "Version 5.0.0;Gengou JP Nerd Font Mono;SHS 2.005"),
     ("Source Han Sans", "Source Han Sans"),
 ])
 def test_nf_name(name, want):
@@ -43,7 +43,7 @@ def _rect(pen, x0, y0, x1, y1):
     pen.closePath()
 
 
-def _face(family="Sumi Moji JP", ps="SumiMojiJP-Regular", win=(1160, 288)):
+def _face(family="Gengou JP", ps="GengouJP-Regular", win=(1160, 288)):
     """A plain CFF face like ours in the parts that matter: 'A' in a 600
     cell, Source Code Pro's own Powerline separator at U+E0B0 (taller
     than the line box, as Source Code Pro draws it), Source Code Pro's
@@ -64,7 +64,7 @@ def _face(family="Sumi Moji JP", ps="SumiMojiJP-Regular", win=(1160, 288)):
     fb.setupHorizontalMetrics({".notdef": (600, 0), "A": (600, 50), "uniE0B0": (600, 0)})
     fb.setupHorizontalHeader(ascent=984, descent=-273)
     fb.setupNameTable({"familyName": family, "styleName": "Regular", "psName": ps,
-                       "uniqueFontIdentifier": f"5.0.0;SUMI;{ps}"})
+                       "uniqueFontIdentifier": f"5.0.0;GNGO;{ps}"})
     fb.setupOS2(usWinAscent=win[0], usWinDescent=win[1])
     fb.setupPost()
     buf = io.BytesIO()
@@ -259,27 +259,27 @@ def test_graft_symbols_keeps_every_glyph_on_one_vertical_origin(monkeypatch):
 
 def test_rename_splices_the_marker_and_credits_nerd_fonts():
     face = _face()
-    assert nerdpatch.rename(face) == "SumiMojiJPNFM-Regular"
+    assert nerdpatch.rename(face) == "GengouJPNFM-Regular"
     name = face["name"]
     assert "Nerd Fonts" in name.getDebugName(0)                 # the icons' donor
     assert "LICENSE-NerdFonts" in name.getDebugName(0)
     nerdpatch.rename(face)                                      # idempotent
     assert name.getDebugName(0).count("Nerd Fonts:") == 1
-    assert name.getDebugName(1) == "Sumi Moji JP Nerd Font Mono"
-    assert name.getDebugName(3) == "5.0.0;SUMI;SumiMojiJPNFM-Regular"
-    assert name.getDebugName(6) == "SumiMojiJPNFM-Regular"
+    assert name.getDebugName(1) == "Gengou JP Nerd Font Mono"
+    assert name.getDebugName(3) == "5.0.0;GNGO;GengouJPNFM-Regular"
+    assert name.getDebugName(6) == "GengouJPNFM-Regular"
     cff = face["CFF "].cff
-    assert cff.fontNames[0] == "SumiMojiJPNFM-Regular"
-    assert cff["SumiMojiJPNFM-Regular"].FullName == "Sumi Moji JP Nerd Font Mono"
+    assert cff.fontNames[0] == "GengouJPNFM-Regular"
+    assert cff["GengouJPNFM-Regular"].FullName == "Gengou JP Nerd Font Mono"
 
 
 def test_sources_for_paths_names_and_everything(tmp_path, monkeypatch):
     dist = tmp_path / "dist"
     latin = dist / "latin"
     latin.mkdir(parents=True)
-    for name in ("SumiMojiJP-Light.otf", "SumiMojiJPTerm-Light.otf"):
+    for name in ("GengouJP-Light.otf", "GengouJPTerm-Light.otf"):
         (dist / name).write_bytes(b"")
-    for name in ("SumiMoji-Light.otf", "SumiMoji-LightItalic.otf", "SumiMoji[wght].otf"):
+    for name in ("Gengou-Light.otf", "Gengou-LightItalic.otf", "Gengou[wght].otf"):
         (latin / name).write_bytes(b"")
     monkeypatch.setattr(nerdpatch, "DIST", dist)
     monkeypatch.setattr(nerdpatch, "LATIN_DIR", latin)
@@ -288,16 +288,16 @@ def test_sources_for_paths_names_and_everything(tmp_path, monkeypatch):
 
     everything = nerdpatch.sources_for([])
     assert [p.name for p, _ in everything] == [
-        "SumiMojiJP-Light.otf", "SumiMojiJPTerm-Light.otf",
-        "SumiMoji-Light.otf", "SumiMoji-LightItalic.otf"]      # no VF
+        "GengouJP-Light.otf", "GengouJPTerm-Light.otf",
+        "Gengou-Light.otf", "Gengou-LightItalic.otf"]      # no VF
     assert [out.name for _, out in everything] == ["nerd", "nerd", "latin", "latin"]
-    assert [p.name for p, _ in nerdpatch.sources_for(["Term"])] == ["SumiMojiJPTerm-Light.otf"]
+    assert [p.name for p, _ in nerdpatch.sources_for(["Term"])] == ["GengouJPTerm-Light.otf"]
     assert [p.name for p, _ in nerdpatch.sources_for(["Term", "Italic"])] == [
-        "SumiMojiJPTerm-Light.otf", "SumiMoji-LightItalic.otf"]
-    explicit = nerdpatch.sources_for([str(latin / "SumiMoji-Light.otf"),
-                                      str(dist / "SumiMojiJP-Light.otf")])
+        "GengouJPTerm-Light.otf", "Gengou-LightItalic.otf"]
+    explicit = nerdpatch.sources_for([str(latin / "Gengou-Light.otf"),
+                                      str(dist / "GengouJP-Light.otf")])
     assert [(p.name, out.name) for p, out in explicit] == [
-        ("SumiMoji-Light.otf", "latin"), ("SumiMojiJP-Light.otf", "nerd")]
+        ("Gengou-Light.otf", "latin"), ("GengouJP-Light.otf", "nerd")]
     assert nerdpatch.sources_for(["nothing-like-this"]) == []
 
 

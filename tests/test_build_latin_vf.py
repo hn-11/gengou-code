@@ -150,13 +150,13 @@ def test_masters_take_extra_positions_inside_the_range_only():
 def _vf_with_instances(default=400):
     font = _vf_meta(avar=None, default=default)
     name = font["name"]
-    name.setName("SumiMoji-Roman", 6, 3, 1, 0x409)
+    name.setName("Gengou-Roman", 6, 3, 1, 0x409)
     name.setName("Regular", 2, 3, 1, 0x409)
     ids = {}
     for i, (style, wght) in enumerate((("Light", 300), ("Regular", 400), ("Bold", 700))):
         sid, pid = 256 + 2 * i, 257 + 2 * i
         name.setName(style, sid, 3, 1, 0x409)
-        name.setName(f"SumiMoji-{style}", pid, 3, 1, 0x409)
+        name.setName(f"Gengou-{style}", pid, 3, 1, 0x409)
         ids[style] = (sid, pid, wght)
     from fontTools.ttLib.tables._f_v_a_r import NamedInstance
     for style, (sid, pid, wght) in ids.items():
@@ -175,7 +175,7 @@ def test_default_instance_takes_name_id_6_and_drops_its_private_record():
     assert font["name"].getDebugName(ids["Regular"][1]) is None
     # the others keep their own names
     assert insts[300].postscriptNameID == ids["Light"][1]
-    assert font["name"].getDebugName(ids["Bold"][1]) == "SumiMoji-Bold"
+    assert font["name"].getDebugName(ids["Bold"][1]) == "Gengou-Bold"
 
 
 def test_default_instance_missing_raises():

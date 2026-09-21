@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Sumi Moji (variable): the same recipe scripts/build_latin.py uses for
+"""Gengou (variable): the same recipe scripts/build_latin.py uses for
 the static faces — Source Code Pro VF as the base, Monaspace VF for the
 punctuation/ligatures/one-cell arrows — but assembled as a CFF2 variable
 font instead of ten static instances. Two files come out, mirroring
 Source Code Pro's own Upright/Italic split:
 
-  dist/latin/SumiMoji[wght].otf         wght 200-700 (usWeightClass terms)
-  dist/latin/SumiMoji-Italic[wght].otf  from SCP_VF_I, Monaspace slnt +
+  dist/latin/Gengou[wght].otf         wght 200-700 (usWeightClass terms)
+  dist/latin/Gengou-Italic[wght].otf  from SCP_VF_I, Monaspace slnt +
                                         the residual shear mona_transform
                                         already applies for the static
                                         Italic faces
@@ -17,7 +17,7 @@ Regular and Bold positions (see the axis paragraph below). Monaspace
 is bar-matched per master with erosion DISABLED (VFSource.matched
 erode=False): erosion is a pathops boolean op on a fixed outline, not an
 interpolatable deformation, so a VF master can't take that path (see
-docs/sumi-moji-plan.md 段階2) — below SCP wght ≈366 Monaspace's punctuation
+docs/gengou-plan.md 段階2) — below SCP wght ≈366 Monaspace's punctuation
 just stays at its own wght-200 floor instead, slightly heavier than the
 bar-matched ideal. draw_clean's pathops.simplify pass is also disabled for
 the same reason (overlap removal is not guaranteed point-compatible across
@@ -65,7 +65,7 @@ Usage:
   python scripts/build_latin_vf.py [upright|italic]   # default: both
 Env (all required):
   SCP_VF_U, SCP_VF_I, MONA_VF   as for build_latin.py
-Env (optional): SUMI_VERSION
+Env (optional): GENGOU_VERSION
 """
 
 import copy
@@ -91,7 +91,7 @@ import build_latin  # noqa: E402
 
 CELL = build_latin.CELL     # 600, SCP's own advance
 MONA_K = build_latin.MONA_K  # 600/1240
-FAMILY, PS_FAMILY = build.LATIN_FAMILY   # "Sumi Moji", "SumiMoji"
+FAMILY, PS_FAMILY = build.LATIN_FAMILY   # "Gengou", "Gengou"
 
 STYLES = {
     # style -> (env var for the SCP VF, italic bool, output filename)
@@ -119,7 +119,7 @@ def weight_positions():
 def confirm_scp_master_wghts(vf):
     """The SCP VF's own wght master locations, read back from the CFF2
     VarStore's region peaks (on the wght axis) through avar/fvar rather
-    than assumed — the variable Sumi Moji's masters go exactly where
+    than assumed — the variable Gengou's masters go exactly where
     SCP's own are, so no interpolation error is introduced on the SCP
     side; only Monaspace needs matching per master.
 
@@ -320,12 +320,12 @@ def finalize_vf_names(vf, italic, version, credits, italic_angle):
     """Name table for the merged VF: build.set_names does the heavy
     lifting (credits, version, vendor, fsSelection/macStyle, post
     italicAngle/caret) exactly as for a static face with weight="Regular"
-    (RIBBI: family "Sumi Moji", subfamily "Regular"/"Italic") — a VF file
+    (RIBBI: family "Gengou", subfamily "Regular"/"Italic") — a VF file
     is not any one weight, so the weight-specific PostScript name
-    set_names computes (SumiMoji-Regular / SumiMoji-RegularItalic) is
-    wrong for it; overridden here to SumiMoji-Roman / SumiMoji-Italic
+    set_names computes (Gengou-Regular / Gengou-RegularItalic) is
+    wrong for it; overridden here to Gengou-Roman / Gengou-Italic
     (nameID 6) with a matching nameID 3 and nameID 25 (variations
-    PostScript name prefix) "SumiMoji". nameID 16/17 are dropped:
+    PostScript name prefix) "Gengou". nameID 16/17 are dropped:
     Source Code Pro's own VF omits them too — with fvar+STAT already
     describing the family, and nameID 1/2 here already being the plain
     RIBBI pair (no weight suffix at the file level), they are redundant
@@ -375,8 +375,8 @@ def master_extents(font):
 
 def name_default_instance_by_font(vf):
     """fvar: the named instance sitting at the axis default (Regular /
-    Italic) takes the FONT's own PostScript name (nameID 6, SumiMoji-Roman
-    / SumiMoji-Italic) instead of a private 'SumiMoji-Regular' string —
+    Italic) takes the FONT's own PostScript name (nameID 6, Gengou-Roman
+    / Gengou-Italic) instead of a private 'Gengou-Regular' string —
     the fvar spec says the default instance's postScriptNameID must be 6
     or a record with the same value (fontbakery
     opentype/varfont/valid_default_instance_nameids); its subfamily name
@@ -519,7 +519,7 @@ def build_style(style, env, out_dir):
     build_latin.fit_win_metrics(vf, ascent=win_ascent, descent=win_descent)
     vf["OS/2"].recalcUnicodeRanges(vf)
     build.recalc_codepage_range(vf)
-    ps = finalize_vf_names(vf, italic, env.get("SUMI_VERSION"), credits,
+    ps = finalize_vf_names(vf, italic, env.get("GENGOU_VERSION"), credits,
                            ref_angle if ref_angle is not None else -12.0)
     # STAT: every weight (Regular elidable, linked to Bold) plus this
     # file's ital value — Source Code Pro's own two-file STAT convention

@@ -1,6 +1,6 @@
 # Contributing
 
-Sumi Moji JP は上流フォント（Source Han Sans JP / Source Code Pro /
+Gengou JP は上流フォント（Source Han Sans JP / Source Code Pro /
 Monaspace）を CI 上で合成して作られています。ソースグリフを直接同梱して
 いないため、ビルドには毎回それらの上流ファイルが必要です。
 
@@ -11,7 +11,7 @@ pip install -r requirements.txt
 ```
 
 ビルドは2段階です。まず `scripts/build_latin.py` が Source Code Pro VF と
-Monaspace VF から欧文レイヤー Sumi Mojiを `dist/latin` に組み、
+Monaspace VF から欧文レイヤー Gengouを `dist/latin` に組み、
 次に `scripts/build.py` がそれを Source Han Sans JP に接ぎ木します。
 それぞれが読む環境変数:
 
@@ -23,8 +23,8 @@ Monaspace VF から欧文レイヤー Sumi Mojiを `dist/latin` に組み、
 | `SHS_DIR` | `build.py` | `SourceHanSansJP-<Weight>.otf` が入ったディレクトリ | [Source Han Sans Releases](https://github.com/adobe-fonts/source-han-sans/releases) |
 | `NF_SYMBOLS` | `nerdpatch.py` | `SymbolsNerdFontMono-Regular.ttf` へのパス | [Nerd Fonts Releases](https://github.com/ryanoasis/nerd-fonts/releases) の `NerdFontsSymbolsOnly.zip` |
 | `LATIN_DIR` | `build.py`（任意、既定 `dist/latin`） | `build_latin.py` の出力先 | — |
-| `SUMI_VERSION` | 3つとも（任意） | リリース版番号（例 `5.0.0`）。未設定なら上流のリビジョンを name に残す | — |
-| `SUMI_SKIP_AUTOHINT` | `build.py` / `build_latin.py`（任意） | `1` でヒント付けをスキップ（試しビルドの時短用） | — |
+| `GENGOU_VERSION` | 3つとも（任意） | リリース版番号（例 `5.0.0`）。未設定なら上流のリビジョンを name に残す | — |
+| `GENGOU_SKIP_AUTOHINT` | `build.py` / `build_latin.py`（任意） | `1` でヒント付けをスキップ（試しビルドの時短用） | — |
 
 取得元の URL パターンや正確なタグは `.github/actions/fetch-upstreams/action.yml`
 と `.github/workflows/ci.yml` を参照してください（そのまま実行可能な
@@ -32,7 +32,7 @@ Monaspace VF から欧文レイヤー Sumi Mojiを `dist/latin` に組み、
 
 ```sh
 SCP_VF_U=... SCP_VF_I=... MONA_VF=... \
-  python scripts/build_latin.py           # dist/latin/SumiMoji-*.otf（10 面）
+  python scripts/build_latin.py           # dist/latin/Gengou-*.otf（10 面）
   python scripts/build_latin.py "Regular" # Regular 系のみ
 SHS_DIR=... \
   python scripts/build.py                 # 両ファミリー
@@ -49,17 +49,17 @@ SHS_DIR=... \
 `"Regular"` は Regular と Regular Italic の全ファミリー、`"Light Italic"`
 はファミリーごとに 1 面、`""`（空文字列）だけなら基本ファミリーです。
 
-可変フォント版の Sumi Moji は `python scripts/build_latin_vf.py`
-（`build_latin.py` と同じ環境変数）で `dist/latin/SumiMoji[wght].otf` /
-`SumiMoji-Italic[wght].otf` を作ります。
+可変フォント版の Gengou は `python scripts/build_latin_vf.py`
+（`build_latin.py` と同じ環境変数）で `dist/latin/Gengou[wght].otf` /
+`Gengou-Italic[wght].otf` を作ります。
 
 ## テスト・検証
 
 ```sh
 python -m pytest tests/ -q                                  # 単体テスト
-python scripts/verify_latin.py dist/latin/SumiMoji-Regular.otf
-python scripts/verify_latin_vf.py "dist/latin/SumiMoji[wght].otf"
-python scripts/verify.py dist/SumiMojiJP-Regular.otf
+python scripts/verify_latin.py dist/latin/Gengou-Regular.otf
+python scripts/verify_latin_vf.py "dist/latin/Gengou[wght].otf"
+python scripts/verify.py dist/GengouJP-Regular.otf
 ```
 
 グリフの合成漏れやメトリクスの崩れなど、シェイピングまわりの回帰を
@@ -67,7 +67,7 @@ python scripts/verify.py dist/SumiMojiJP-Regular.otf
 確認してください。CI（`.github/workflows/ci.yml`）でも push / PR 時に
 同じ検証が走ります（Regular Upright / Regular Italic / Light Italic を
 ファミリー別に 1 ジョブずつ（Regular Upright の 2 ジョブは JP 面への Nerd
-Fonts の接ぎ木も検証）、可変フォントと Sumi Moji への接ぎ木を 1 ジョブ、
+Fonts の接ぎ木も検証）、可変フォントと Gengou への接ぎ木を 1 ジョブ、
 並列に組んで 1 分程度。リリース
 `release.yml` はファミリー × ウェイト群の 6 ジョブのあと `package`
 ジョブが `harmonize_latin.py` → zip →
@@ -91,7 +91,7 @@ NF_SYMBOLS=... python scripts/nerdpatch.py [面のパス | 名前の一部]
 
 合字の定義は `data/mona_ligs.json` にあり、`scripts/build.py` の
 `load_ligatures()` が読み込みます。グリフは `build_latin.py` が
-`build.add_glyphs()` で Monaspace から Sumi Moji に描き、`build.py` は
+`build.add_glyphs()` で Monaspace から Gengou に描き、`build.py` は
 その完成グリフを `latin_ligatures()` で JP 側へ写し、両方が共通の
 `add_gsub()` で calt/liga と stylistic set を組みます。1エントリの形式:
 

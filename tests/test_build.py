@@ -52,7 +52,7 @@ def test_group_names_all_remap_nontrivially():
     an SCP font happened to carry a feature under one of our own tags
     (ss01-ss08, cv99), _remap_scp_tag alone would NOT filter it out: it
     would be remapped/kept just like any other SCP feature and collide
-    with the glyph variants Sumi Moji itself authors under that tag. That
+    with the glyph variants Gengou itself authors under that tag. That
     is exactly why import_scp_variants must skip fr.FeatureTag in
     GROUP_NAMES explicitly, before ever calling _remap_scp_tag."""
     for tag in build.GROUP_NAMES:
@@ -63,12 +63,12 @@ def test_group_names_all_remap_nontrivially():
 
 def test_latin_face_path_regular_upright():
     got = build.latin_face_path("dist/latin", "Regular", False)
-    assert got == Path("dist/latin") / "SumiMoji-Regular.otf"
+    assert got == Path("dist/latin") / "Gengou-Regular.otf"
 
 
 def test_latin_face_path_bold_italic():
     got = build.latin_face_path("dist/latin", "Bold", True)
-    assert got == Path("dist/latin") / "SumiMoji-BoldItalic.otf"
+    assert got == Path("dist/latin") / "Gengou-BoldItalic.otf"
 
 
 # --- the weight roster ----------------------------------------------------
@@ -1358,7 +1358,7 @@ def test_set_names():
                          credits=[("Monaspace", "Copyright GitHub",
                                   "Lettermatic")])
 
-    assert ps == "SumiMojiJPTerm-Bold"
+    assert ps == "GengouJPTerm-Bold"
     copyright_ = name.getDebugName(0)
     assert build.PROJECT_COPYRIGHT in copyright_
     assert "© Adobe" in copyright_
@@ -1368,11 +1368,11 @@ def test_set_names():
     assert "Lettermatic" in designer
     assert name.getDebugName(8) == "hn-11"
     assert name.getDebugName(11) == build.PROJECT_URL
-    assert name.getDebugName(3).endswith(";SUMI;SumiMojiJPTerm-Bold")
-    assert name.getDebugName(6) == "SumiMojiJPTerm-Bold"
+    assert name.getDebugName(3).endswith(";GNGO;GengouJPTerm-Bold")
+    assert name.getDebugName(6) == "GengouJPTerm-Bold"
 
     os2 = font["OS/2"]
-    assert os2.achVendID == "SUMI"
+    assert os2.achVendID == "GNGO"
     assert os2.usWeightClass == 700
     assert os2.fsSelection & 0x20    # bold
     assert os2.fsSelection & 0x100   # WWS
@@ -1385,7 +1385,7 @@ def test_set_names():
 def test_donor_credits_parses_scp_and_monaspace_in_order():
     font = _tt_font([".notdef", "A"], {ord("A"): "A"}, {"A": 600})
     font["name"].setName(
-        "Sumi Moji: Copyright 2026 hn-11 (https://x). "
+        "Gengou: Copyright 2026 hn-11 (https://x). "
         "Source Code Pro: © 2023 Adobe (http://www.adobe.com/), with "
         "Reserved Font Name ‘Source’. "
         "Monaspace: Copyright 2023 GitHub, Inc. "
@@ -1413,7 +1413,7 @@ def test_donor_credits_parses_scp_and_monaspace_in_order():
 def test_donor_credits_designers_none_when_name_id_9_absent():
     font = _tt_font([".notdef", "A"], {ord("A"): "A"}, {"A": 600})
     font["name"].setName(
-        "Sumi Moji: Copyright 2026 hn-11 (https://x). "
+        "Gengou: Copyright 2026 hn-11 (https://x). "
         "Source Code Pro: © 2023 Adobe (http://www.adobe.com/), with "
         "Reserved Font Name ‘Source’. "
         "Monaspace: Copyright 2023 GitHub, Inc. "
@@ -1498,9 +1498,9 @@ def test_env_paths_reads_defaults_and_exits_on_missing(tmp_path, monkeypatch, ca
     b.mkdir()
     monkeypatch.setenv("SHS_DIR", str(a))
     monkeypatch.delenv("NF_SYMBOLS", raising=False)
-    monkeypatch.setenv("SUMI_VERSION", "9.9.9")
+    monkeypatch.setenv("GENGOU_VERSION", "9.9.9")
     env = build.env_paths({"SHS_DIR": None, "NF_SYMBOLS": str(b)})
-    assert env == {"SHS_DIR": str(a), "NF_SYMBOLS": str(b), "SUMI_VERSION": "9.9.9"}
+    assert env == {"SHS_DIR": str(a), "NF_SYMBOLS": str(b), "GENGOU_VERSION": "9.9.9"}
     monkeypatch.setenv("NF_SYMBOLS", str(tmp_path / "nowhere"))
     monkeypatch.delenv("SHS_DIR")
     with pytest.raises(SystemExit, match=r"missing env: \['SHS_DIR', 'NF_SYMBOLS'\]"):

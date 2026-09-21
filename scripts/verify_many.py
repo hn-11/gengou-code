@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run the face verifiers over several files at once, one process each:
-verify_latin.py for a face under dist/latin/ or dist/nerd/latin/ (a Sumi
-Moji face), verify.py for everything else (a JP face), each output
+verify_latin.py for a face under dist/latin/ or dist/nerd/latin/ (a
+Gengou face), verify.py for everything else (a JP face), each output
 printed whole once its run ends. Exits non-zero if any run did.
 
 Usage:
@@ -45,7 +45,7 @@ def main():
         sys.exit(f"no such font: {' '.join(missing)}")
     paths = [p for arg in sys.argv[1:] for p in (sorted(glob.glob(arg)) or
                                                  ([arg] if Path(arg).exists() else []))]
-    # a variable font (SumiMoji[wght].otf) is verify_latin_vf.py's, not a
+    # a variable font (Gengou[wght].otf) is verify_latin_vf.py's, not a
     # static face's verifier's: a pattern that sweeps one up skips it
     paths = [p for p in paths if "[" not in Path(p).name]
     if not paths:

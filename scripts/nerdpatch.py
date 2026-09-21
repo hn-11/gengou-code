@@ -54,7 +54,7 @@ glyph and only `--careful` keeps it. Here the face's is kept, because
 outside Powerline that overlap is not icons — it is text. The two fonts
 share exactly eight codepoints: those seven Powerline glyphs, replaced,
 and U+2665 BLACK HEART SUIT, which both donors (Source Code Pro in a
-Sumi Moji face, Source Han Sans in a JP one) draw as the character it
+Gengou face, Source Han Sans in a JP one) draw as the character it
 is and Nerd Fonts draws as an Octicon. A prompt wants the
 Octicon separators; prose wants its own heart. graft_symbols pins that
 one codepoint (TEXT_OVER_ICON) and fails the build when the overlap
@@ -76,7 +76,7 @@ keep the square cell — the same relative size a reader gets today by
 adding Symbols Nerd Font Mono to a terminal as a fallback font, and the
 side no icon ever spills its cell on. Making it exact needs
 font-patcher's per-group tables, which is the whole complexity this
-module exists without; docs/sumi-moji-plan.md carries the measurement.
+module exists without; docs/gengou-plan.md carries the measurement.
 
 Names: "<Family> Nerd Font Mono", PostScript "<PSFamily>NFM-", Nerd
 Fonts' own convention for a font whose icons are one cell wide (nf_name).
@@ -86,9 +86,9 @@ either).
 
 Usage:
   python scripts/nerdpatch.py [FACE.otf ... | NAME-SUBSTRING ...]
-    no argument: every JP face in dist/ and every static Sumi Moji face
+    no argument: every JP face in dist/ and every static Gengou face
     in dist/latin/ (never the variable fonts). Output: dist/nerd/ for the
-    JP faces, dist/nerd/latin/ for Sumi Moji.
+    JP faces, dist/nerd/latin/ for Gengou.
 Env (required): NF_SYMBOLS = path to SymbolsNerdFontMono-Regular.ttf
 """
 
@@ -133,7 +133,7 @@ PROGRESS = frozenset(range(0xEE00, 0xEE06))
 LINE_BOX = frozenset(POWERLINE) | PROGRESS
 STRETCHED = SEPARATORS | PROGRESS
 
-# Powerline aside, the codepoints Symbols Nerd Font Mono and a Sumi Moji
+# Powerline aside, the codepoints Symbols Nerd Font Mono and a Gengou
 # face both draw. The face's glyph wins there (see the divergence in the
 # module docstring), so this is the set of characters an icon does NOT
 # take over. Pinned, so an upstream that widens the overlap fails the
@@ -143,13 +143,21 @@ TEXT_OVER_ICON = frozenset({0x2665})            # BLACK HEART SUIT
 
 def nf_name(s):
     """The Nerd Fonts name of one of our names: the marker spliced in
-    after the family, variant token included ("Sumi Moji JP Term Nerd
-    Font Mono", "SumiMojiJPTermNFM-Bold"). A name that already carries
-    it comes back unchanged."""
+    after the family, variant token included ("Gengou JP Term Nerd
+    Font Mono", "GengouJPTermNFM-Bold"). A name that already carries
+    it comes back unchanged.
+
+    The two forms are told apart by what follows the family: a
+    PostScript name is always Family-Style, so its variant runs into
+    the family and a "-" comes next; a display name never has one
+    there. Reading the space inside the family instead would work only
+    while the family is two words."""
     if "Nerd Font Mono" in s or "NFM" in s:   # already carries the marker
         return s
-    s = re.sub(r"(Sumi Moji(?: JP(?: Term)?)?)", r"\1 Nerd Font Mono", s, count=1)
-    return re.sub(r"(SumiMoji(?:JP(?:Term)?)?)", r"\1NFM", s, count=1)
+    ps, hit = re.subn(r"(Gengou(?:JP(?:Term)?)?)(?=-)", r"\1NFM", s, count=1)
+    if hit:
+        return ps
+    return re.sub(r"(Gengou(?: JP(?: Term)?)?)", r"\1 Nerd Font Mono", s, count=1)
 
 
 def icon_context(font, symbols):
@@ -342,7 +350,7 @@ def rename(font):
     name = font["name"]
     for rec in name.names:
         s = rec.toUnicode()
-        if "Sumi" in s:
+        if "Gengou" in s:
             name.setName(nf_name(s), rec.nameID, rec.platformID, rec.platEncID, rec.langID)
     for nid, sep, credit in ((0, " ", NF_NOTICE), (9, "; ", NF_DESIGNER)):
         records = [r for r in name.names if r.nameID == nid]
@@ -537,7 +545,7 @@ def patch_face(src, out_dir, symbols_path):
     covered = (os2.usWinAscent >= head.yMax and os2.usWinDescent >= -head.yMin)
     build.update_bbox(font)
     if covered:
-        # the source's win metrics covered its box (Sumi Moji's policy):
+        # the source's win metrics covered its box (Gengou's policy):
         # keep covering it with the icons in. The JP faces keep Source
         # Han Sans's values, which never covered its outliers
         fit_win_metrics(font)
@@ -561,9 +569,9 @@ def _symbols(path):
 
 def sources_for(args):
     """[(face, output dir)] for the command line: explicit paths (a JP
-    face in dist/ goes to dist/nerd/, a Sumi Moji face in dist/latin/ to
+    face in dist/ goes to dist/nerd/, a Gengou face in dist/latin/ to
     dist/nerd/latin/), a name substring, or — with no argument — every
-    face in dist/ (non-recursive) plus the static Sumi Moji faces
+    face in dist/ (non-recursive) plus the static Gengou faces
     specifically: never the variable fonts (a VF is not patched).
 
     An argument that names a file (a path, or anything ending .otf) and
@@ -599,7 +607,7 @@ def main():
         out_dir.mkdir(parents=True, exist_ok=True)
     if not sys.argv[1:]:
         # like build.py's: patching everything must not leave a face from
-        # an older roster (a v4 SumiMojiNF-*.otf, say) for the release
+        # an older roster (a v4 GengouNF-*.otf, say) for the release
         # zip to sweep up. A filtered run deletes nothing
         stale = sorted(OUT.glob("*.otf")) + sorted(LATIN_OUT.glob("*.otf"))
         for f in stale:
