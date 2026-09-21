@@ -1595,16 +1595,73 @@ def check_tie_bars(tf, shape, check, gs, label=""):
         adv = hmtx[cmap[ord(base)]][0]
         span = None if box is None else (box[0] + pen_x + positions[1].x_offset,
                                           box[2] + pen_x + positions[1].x_offset)
+        # to the unit: Source Code Pro Italic sets the below tie's left
+        # end on the cell edge at Bold, and the variable font interpolates
+        # it 0.14 units past (the donor's own instance draws the same)
+        if span is not None:
+            span = tuple(round(v) for v in span)
         if span is None or not 0 <= span[0] < adv < span[1]:
-            ties[base + mark + after] = None if span is None else tuple(round(v) for v in span)
+            ties[base + mark + after] = span
     check(not ties, f"the tie bar straddles the pair it joins{label} (off: {ties})")
+
+
+# What the italic faces cannot do for Greek, keyed by what is MEASURED
+# (see check_greek_accents), so a NEW gap fails and these stay listed:
+# the italic's Greek letters come from Source Sans 3 Italic, whose
+# accents and breathing marks are not imported (only its outlines and
+# base anchors are, build_latin.graft), and Source Code Pro Italic has
+# no Greek 'locl' of its own. So the italic sets the Latin accent on a
+# Greek capital -- raised, as after every capital -- and composes no
+# breathing mark. docs/gengou-plan.md carries the measurements.
+GREEK_ITALIC_GAP = {"\u0392": "the Latin accent",
+                    "\u03c1\u0313\u0301": 3, "\u03b1\u0313\u0300": 3}
+
+
+def check_greek_accents(tf, shape, check, label=""):
+    """Greek gets the Greek accents. Source Code Pro maps them under
+    'locl' for script grek -- the tonos is 132 units wide where the
+    Latin cap acute is 188 and sits 138 units lower -- and its own ccmp
+    composes the breathing marks from those locl forms, so without the
+    feature rho + U+0313 + U+0301 never composed and drew the psili
+    inside the acute (build.import_scp_locl).
+
+    Measured as the shaper sees it: the accent after a Greek capital is
+    not the one after the Latin capital (B and Beta are what NFC leaves
+    decomposed), and a breathing mark plus accent composes into one
+    mark glyph. An italic face is held to GREEK_ITALIC_GAP instead of
+    exempted: this used to skip every italic face, and passed the
+    capital probe by accident once the italic stopped raising the
+    accent after a Greek capital only."""
+    cmap = tf.getBestCmap()
+    greek = {}
+    for latin_base, greek_base in (("B", "\u0392"), ("A", "\u0391")):
+        if any(ord(c) not in cmap for c in (latin_base, greek_base, "\u0301")):
+            continue
+        pair = [shape(b + "\u0301", {})[0] for b in (latin_base, greek_base)]
+        if any(len(infos) != 2 for infos in pair):
+            continue
+        if pair[0][1].codepoint == pair[1][1].codepoint:
+            greek[greek_base] = "the Latin accent"
+    for text in ("\u03c1\u0313\u0301", "\u03b1\u0313\u0300"):
+        if any(ord(c) not in cmap for c in text):
+            continue
+        got = len(shape(text, {})[0])
+        if got != 2:
+            greek[text] = got
+    known = GREEK_ITALIC_GAP if is_italic(tf) else {}
+    off = {k: v for k, v in greek.items() if known.get(k) != v}
+    check(not off, f"Greek takes the Greek accents and composes its "
+                   f"breathing marks{label} (off: {off}"
+                   + (f"; known italic gaps: {sorted(known)}" if known else "")
+                   + ")")
 
 
 def check_marks(tf, check, shape, gs, label=""):
     """Every mark gate, in the order they build on each other: the
     features and classes, the lookups' reachability, the language
     systems, the anchors themselves, the coverage, then what the
-    shaper makes of them -- exactly, and clear of the letter."""
+    shaper makes of them -- exactly, clear of the letter, and in the
+    forms each script asks for."""
     check_mark_features(tf, check, label)
     check_mark_reachability(tf, check, label)
     check_langsys_parity(tf, check, label)
@@ -1615,6 +1672,7 @@ def check_marks(tf, check, shape, gs, label=""):
     check_marks_seat(tf, shape, check, gs, label)
     check_marks_clear(tf, shape, check, gs, label)
     check_cap_forms(tf, shape, check, label)
+    check_greek_accents(tf, shape, check, label)
     check_tie_bars(tf, shape, check, gs, label)
 
 

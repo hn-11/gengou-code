@@ -74,8 +74,8 @@ WIN_METRICS = build.WIN_METRICS
 # the other language's letterform" and "shaped into more than one
 # glyph" -- so excusing the key excused either. Injecting a ccmp that
 # split the Serbian b into two glyphs, a defect with nothing to do with
-# the known one, passed on the italic and failed on the upright.
-GREEK_ITALIC_GAP = {"\u03c1\u0313\u0301": 3, "\u03b1\u0313\u0300": 3}
+# the known one, passed on the italic and failed on the upright. (The
+# Greek gaps live with their gate, verifylib.GREEK_ITALIC_GAP.)
 LOCL_ITALIC_GAP = {("cyrl", "sr"): "unchanged"}
 
 # drawn to tile, so a run of them must show no seam: the full-width low
@@ -1001,44 +1001,6 @@ def main():
     check(filtered and classes is not None and set(filtered) <= set(named),
           f"GDEF names the mark classes GPOS filters on "
           f"({sorted(set(filtered))}; GDEF has {named})")
-
-    # Greek gets the Greek accents. Source Code Pro maps them under
-    # 'locl' for script grek — the tonos is 132 units wide where the
-    # Latin cap acute is 188 and sits 138 units lower — and its own
-    # ccmp composes the breathing marks from those locl forms, so
-    # without the feature ρ + U+0313 + U+0301 never composed and drew
-    # the psili inside the acute (build.import_scp_locl)
-    greek = {}
-    for latin_base, greek_base in (("B", "\u0392"), ("A", "\u0391")):
-        if any(ord(c) not in cmap for c in (latin_base, greek_base, "\u0301")):
-            continue
-        pair = [shape_infos(b + "\u0301", {})[0] for b in (latin_base, greek_base)]
-        if any(len(infos) != 2 for infos in pair):
-            continue
-        if pair[0][1].codepoint == pair[1][1].codepoint:
-            greek[greek_base] = glyph_order[pair[1][1].codepoint]
-    for text in ("\u03c1\u0313\u0301", "\u03b1\u0313\u0300"):
-        if any(ord(c) not in cmap for c in text):
-            continue
-        got = len(shape_infos(text, {})[0])
-        if got != 2:
-            greek[text] = got
-    # This used to skip itself on every italic face, saying the italic
-    # donor had no Greek. True once; this build gives the italic 234
-    # Greek and Cyrillic letters from Source Sans, and the line above
-    # counts them. What the italic genuinely cannot do is enumerated
-    # instead, so the check stays live and a NEW gap fails: Source Sans
-    # composes the breathing marks onto unencoded contextual mark forms
-    # ('.g'), and import_donor_decompositions copies one-to-many rules
-    # only and grafts nothing. Measured, the psili and the accent that
-    # follows share about 6,000 square units of ink. The accent mapping
-    # itself (the two entries above) the italic does get.
-    known = GREEK_ITALIC_GAP if italic else {}
-    off = {k: v for k, v in greek.items() if known.get(k) != v}
-    check(not off, f"Greek takes the Greek accents and composes its "
-                   f"breathing marks (off: {off}"
-                   + (f"; known italic gaps: {sorted(known)}" if known else "")
-                   + ")")
 
     # a voicing mark over a HALF-width kana must not be drawn into it.
     # The mark is registered to the cell before it, and Term widens the

@@ -1115,3 +1115,60 @@ def test_mark_model_reads_the_marks_own_class_anchor():
                                        for g, h in heights.items() if g.startswith("b")) + "} mark;\n")
     font = _mark_font(anchors, heights, marks={"acutecap": None}, fea_extra=fea)
     assert verifylib._MarkModel(font).on_base("b0", "acutecap") == (-600, heights["b0"] + 120, 0)
+
+
+def test_check_tie_bars_rounds_the_span_to_the_unit():
+    """The below tie's left end sits ON the cell edge at Bold in the
+    donor's own design, and a variable instance interpolates it 0.14
+    units past: the gate reads the span to the unit, as the reported
+    numbers are, so the instance and the static agree."""
+    from fontTools.pens.t2CharStringPen import T2CharStringPen
+    anchors, heights = _ruled()
+    heights["tie"] = 100
+    font = _mark_font(anchors, heights, cmap_extra={0x61: "b0", 0x62: "b1", 0x361: "tie"},
+                      width=100)
+    td = font["CFF "].cff.topDictIndex[0]
+    for left, ok in ((-600.4, True), (-601, False)):
+        pen = T2CharStringPen(0, None, roundTolerance=0)
+        pen.moveTo((left, 700))
+        pen.lineTo((50, 700))
+        pen.lineTo((50, 800))
+        pen.closePath()
+        td.CharStrings["tie"] = pen.getCharString(private=td.Private)
+        off = _gate(lambda f, chk: verifylib.check_tie_bars(f, _shaper_for(f), chk,
+                                                           f.getGlyphSet()), font)
+        assert (off == []) is ok, (left, off)
+
+
+def _greek_font(locl, italic=False):
+    """B and Beta as bases, the acute, and an unencoded tonos the Greek
+    'locl' maps the acute to (or not)."""
+    anchors, heights = _ruled(2)
+    fea = "feature locl { script grek; sub acute by tonos; } locl;\n" if locl else ""
+    font = _mark_font(anchors, heights, marks={"tonos": None},
+                      cmap_extra={0x42: "b0", 0x392: "b1"},
+                      langsys="languagesystem DFLT dflt;\nlanguagesystem latn dflt;\n"
+                              "languagesystem grek dflt;\n",
+                      fea_extra=fea)
+    if italic:
+        font["post"].italicAngle = -12.0
+    return font
+
+
+def test_check_greek_accents_wants_the_tonos_after_a_greek_capital():
+    """Beta + U+0301 must not take the accent B + U+0301 takes, unless
+    the face is italic, where that is the listed gap."""
+    def run(font):
+        return _gate(lambda f, chk: verifylib.check_greek_accents(f, _shaper_for(f), chk), font)
+    assert run(_greek_font(locl=True)) == []
+    off = run(_greek_font(locl=False))
+    assert off and "'Β': 'the Latin accent'" in off[0]
+    assert run(_greek_font(locl=False, italic=True)) == []
+    # the gap is an allowance, not a requirement: an italic that gives
+    # Greek the tonos has closed it, and passes
+    assert run(_greek_font(locl=True, italic=True)) == []
+
+
+def test_greek_italic_gap_is_the_listed_three():
+    assert verifylib.GREEK_ITALIC_GAP == {"Β": "the Latin accent",
+                                          "ῤ́": 3, "ἂ": 3}
