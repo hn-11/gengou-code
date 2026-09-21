@@ -69,24 +69,28 @@ def static_base(scp):
 
 
 def round_outlines(font):
-    """Every charstring redrawn through a T2CharStringPen: the points
-    rounded where they are (absolute coordinates), the advance kept,
-    hints dropped (the instancer had dropped them already; otfautohint
-    puts them back). A CFF font's operands are relative, so rounding
-    them one by one — what fontTools' instancer does — drifts an outline
-    several units along a path; rounding the absolute points keeps each
-    within half a unit of the VF's blend, which is what HarfBuzz renders
-    the VF as."""
+    """Every charstring redrawn through build.draw_clean and a
+    T2CharStringPen: the overlaps merged, the points rounded where
+    they are (absolute coordinates), the advance kept, hints dropped
+    (the instancer had dropped them already; otfautohint puts them
+    back). A CFF font's operands are relative, so rounding them one by
+    one — what fontTools' instancer does — drifts an outline several
+    units along a path; rounding the absolute points keeps each within
+    half a unit of the VF's blend, which is what HarfBuzz renders the
+    VF as. The overlaps go for the reason draw_clean gives: a variable
+    font's masters keep them (Adobe's static releases do not), and 300
+    letters a face -- A K Q R e f k, the Cyrillic њ љ -- rendered with
+    a seam or a darker join in FreeType where the JP faces, redrawn
+    through the same pen on the graft, did not."""
     cff = font["CFF "].cff
     td = cff.topDictIndex[0]
     gs = font.getGlyphSet()
     hmtx = font["hmtx"].metrics
     for name in font.getGlyphOrder():
-        private = td.FDArray[td.FDSelect[font.getGlyphID(name)]].Private
+        private = build.glyph_private(font, td, name)
         pen = T2CharStringPen(build.pen_width(private, hmtx[name][0]), gs)
-        gs[name].draw(pen)
-        td.CharStrings.charStringsIndex[td.CharStrings.charStrings[name]] = \
-            pen.getCharString(private=private)
+        build.draw_clean([(gs, name, (1, 0, 0, 1, 0, 0))], pen)
+        build.set_charstring(td, name, pen.getCharString(private=private))
     build.sync_lsb(font)
 
 
@@ -359,6 +363,15 @@ def build_face(job):
                            f"anchor, against a floor of {LOOSE_FLOOR}; "
                            f"see build.anchor_loose_letters")
     print(f"  letters given a fitted base anchor: {loose}")
+    # the marks' side of the same gap, and the italic's stacked-accent
+    # lift copied from the upright at this weight (both no-ops on the
+    # upright; see the two functions)
+    print(f"  marks given a lookup's anchor: {build.anchor_loose_marks(base)}")
+    if italic:
+        with build.unrounded_cff2_instancing():
+            model = build._vf_source(env["SCP_VF_U"], 1.0, {"wght": 0}).at(wght)
+        print(f"  stacked-accent anchors lifted as the upright's: "
+              f"{build.mirror_stack_lift(base, model)}")
     build.add_stat(base, weight, italic)
     build.prune_orphan_names(base)
     build.update_bbox(base)

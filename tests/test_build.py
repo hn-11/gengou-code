@@ -3303,3 +3303,186 @@ def test_import_donor_decompositions_ignores_a_letter_we_did_not_import():
     theirs = _GsubFont([_multiple({"yi": ["dotlessi", "diaeresis"]})],
                        {0x0131: "dotlessi", 0x0308: "diaeresis", 0x0457: "yi"})
     assert build.import_donor_decompositions(ours, theirs, {}) == 0
+
+
+# --- the marks' side of the anchor gap, and the stacked-accent lift ------
+
+def _gdef_marks(font, marks):
+    """A GDEF filing `marks` as marks (class 3) on a font that has none."""
+    from fontTools.ttLib import newTable
+    gdef = newTable("GDEF")
+    gdef.table = otTables.GDEF()
+    gdef.table.Version = 0x00010000
+    gdef.table.GlyphClassDef = otTables.GlyphClassDef()
+    gdef.table.GlyphClassDef.classDefs = {g: 3 for g in marks}
+    gdef.table.AttachList = gdef.table.LigCaretList = None
+    gdef.table.MarkAttachClassDef = gdef.table.MarkGlyphSetsDef = None
+    font["GDEF"] = gdef
+
+
+def _sixteen_marks(anchor=(50, 0)):
+    return {f"m{i}": (0, _anchor(*anchor)) for i in range(16)}
+
+
+def test_anchor_loose_marks_gives_an_uncovered_mark_the_lookups_anchor():
+    """Source Code Pro Italic leaves the candrabindu out of the lookup
+    the upright has it in, so on every italic face it landed a cell to
+    the right of its letter. Within a lookup the donor gives every
+    mark one anchor; the median is what the missing one gets, in the
+    lookup whose marks' ink sits where its own does. A mark drawn far
+    from any lookup's marks (an overlay, a mark below) gets nothing
+    from a lookup of above-marks, and a double diacritic is not a mark
+    to place on one base."""
+    marks = _sixteen_marks()
+    heights = {**_HEIGHTS, **dict.fromkeys(marks, 100),
+               "candra": 100, "tall": 800, "dbl": 100}
+    cmap = _letters_cmap(_HEIGHTS, {0x0300 + i: g for i, g in enumerate(marks)})
+    cmap |= {0x0310: "candra", 0x0334: "tall", 0x035F: "dbl"}
+    font = _drawn_gpos_font(heights, cmap,
+                            [_markbase(marks, {g: [_anchor(50, h + 20)]
+                                               for g, h in _HEIGHTS.items()})])
+    _gdef_marks(font, [*marks, "candra", "tall", "dbl"])
+
+    assert build.anchor_loose_marks(font) == 1
+    sub = font["GPOS"].table.LookupList.Lookup[0].SubTable[0]
+    assert "candra" in sub.MarkCoverage.glyphs
+    assert "tall" not in sub.MarkCoverage.glyphs and "dbl" not in sub.MarkCoverage.glyphs
+    assert sub.MarkCoverage.glyphs == sorted(sub.MarkCoverage.glyphs, key=font.getGlyphID)
+    rec = sub.MarkArray.MarkRecord[sub.MarkCoverage.glyphs.index("candra")]
+    assert (rec.Class, rec.MarkAnchor.XCoordinate, rec.MarkAnchor.YCoordinate) == (0, 50, 0)
+    assert sub.MarkArray.MarkCount == len(sub.MarkCoverage.glyphs)
+
+
+def test_anchor_loose_marks_needs_a_lookup_big_enough_to_speak_for_a_mark():
+    """Five marks are a donor's special case, not a rule to extend."""
+    marks = {f"m{i}": (0, _anchor(50, 0)) for i in range(5)}
+    heights = {**_HEIGHTS, **dict.fromkeys(marks, 100), "candra": 100}
+    cmap = _letters_cmap(_HEIGHTS, {0x0300 + i: g for i, g in enumerate(marks)})
+    cmap |= {0x0310: "candra"}
+    font = _drawn_gpos_font(heights, cmap,
+                            [_markbase(marks, {g: [_anchor(50, h + 20)]
+                                               for g, h in _HEIGHTS.items()})])
+    _gdef_marks(font, [*marks, "candra"])
+    assert build.anchor_loose_marks(font) == 0
+
+
+def _markmark(mark1, mark2):
+    """One MarkMarkPos: {mark: (class, anchor)} stacking on {mark: [anchors]}."""
+    st = otTables.MarkMarkPos()
+    st.Format = 1
+    st.ClassCount = 1
+    st.Mark1Coverage = otTables.Mark1Coverage()
+    st.Mark1Coverage.glyphs = list(mark1)
+    st.Mark1Array = otTables.Mark1Array()
+    st.Mark1Array.MarkRecord = []
+    for cls, anc in mark1.values():
+        rec = otTables.MarkRecord()
+        rec.Class, rec.MarkAnchor = cls, anc
+        st.Mark1Array.MarkRecord.append(rec)
+    st.Mark2Coverage = otTables.Mark2Coverage()
+    st.Mark2Coverage.glyphs = list(mark2)
+    st.Mark2Array = otTables.Mark2Array()
+    st.Mark2Array.Mark2Record = []
+    for anchors in mark2.values():
+        rec = otTables.Mark2Record()
+        rec.Mark2Anchor = list(anchors)
+        st.Mark2Array.Mark2Record.append(rec)
+    st.Mark2Array.MarkCount = len(mark2)
+    lk = otTables.Lookup()
+    lk.LookupType, lk.LookupFlag, lk.SubTable = 6, 0, [st]
+    lk.SubTableCount = 1
+    return lk
+
+
+def _mkmk_font(stack):
+    """A font whose one mkmk lookup stacks grave and acute on each
+    other: {mark: (Mark1 y, Mark2 y)}."""
+    cmap = {0x0300: "grave", 0x0301: "acute"}
+    font = _GposFont([_markmark({g: (0, _anchor(50, y1)) for g, (y1, _) in stack.items()},
+                                {g: [_anchor(50, y2)] for g, (_, y2) in stack.items()})],
+                     cmap, [".notdef", "grave", "acute"])
+    font["GPOS"].table.FeatureList.FeatureRecord[0].FeatureTag = "mkmk"
+    return font
+
+
+def _mark2_y(font, name):
+    st = font["GPOS"].table.LookupList.Lookup[0].SubTable[0]
+    return st.Mark2Array.Mark2Record[st.Mark2Coverage.glyphs.index(name)].Mark2Anchor[0].YCoordinate
+
+
+def test_mirror_stack_lift_copies_the_uprights_lift_onto_a_collapsed_anchor():
+    """Source Code Pro Italic's grave carries its Mark2 anchor at the
+    height its own Mark1 attaches at, so a second accent stacks ON it;
+    the upright lifts the second by 111 at Regular. The italic takes
+    that lift. A mark whose Mark2 already differs from its Mark1 is the
+    designer's and stays."""
+    ours = _mkmk_font({"grave": (500, 500), "acute": (500, 640)})
+    model = _mkmk_font({"grave": (500, 611), "acute": (500, 700)})
+    assert build.mirror_stack_lift(ours, model) == 1
+    assert _mark2_y(ours, "grave") == 611
+    assert _mark2_y(ours, "acute") == 640
+
+
+def test_mirror_stack_lift_leaves_what_the_model_does_not_lift():
+    """At wght 200 the upright collapses too; there is nothing to copy."""
+    ours = _mkmk_font({"grave": (500, 500), "acute": (500, 500)})
+    model = _mkmk_font({"grave": (500, 500), "acute": (500, 500)})
+    assert build.mirror_stack_lift(ours, model) == 0
+    assert _mark2_y(ours, "grave") == 500
+
+
+def _with_gsub(font, fea):
+    from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
+    addOpenTypeFeaturesFromString(font, fea, tables=["GSUB"])
+    return font
+
+
+def test_letter_variants_follows_single_and_alternate_substitutions_two_steps():
+    """The shaper substitutes before it positions: an accent on a letter
+    locl has swapped attaches to the substitute."""
+    heights = {"a": 500, "a.srb": 500, "a.srb2": 500, "b": 500, "b.alt": 500, "c": 500}
+    font = _cff_font_with_heights(heights)
+    font["cmap"].tables[0].cmap = {0x61: "a", 0x62: "b", 0x63: "c"}
+    _with_gsub(font, "feature locl { sub a by a.srb; } locl;\n"
+                     "feature ss01 { sub a.srb by a.srb2; } ss01;\n"
+                     "feature salt { sub b from [b.alt]; } salt;\n")
+    assert build._letter_variants(font, {"a", "b", "c"}) == {"a.srb", "a.srb2", "b.alt"}
+
+
+def test_anchor_loose_letters_covers_what_gsub_makes_of_a_letter():
+    """The Serbian locl б was in no BaseCoverage, so under `sr` an
+    accent on it landed a cell right, on the next character."""
+    heights = {**_HEIGHTS, "z": 500, "z.srb": 520, "acute": 100}
+    marks = {"acute": (0, _anchor(0, 0))}
+    font = _drawn_gpos_font(
+        heights, _letters_cmap(_HEIGHTS, {0x0301: "acute", 0x7A: "z"}),
+        [_edge_markbase(marks, _HEIGHTS, 20, top=True)])
+    _with_gsub(font, "feature locl { sub z by z.srb; } locl;\n")
+    assert build.anchor_loose_letters(font) == 2
+    sub = font["GPOS"].table.LookupList.Lookup[0].SubTable[0]
+    got = sub.BaseArray.BaseRecord[sub.BaseCoverage.glyphs.index("z.srb")].BaseAnchor[0]
+    assert (got.XCoordinate, got.YCoordinate) == (50, 540)
+
+
+def test_round_outlines_merges_the_overlaps_the_instancer_leaves():
+    """A variable font's masters keep overlapping contours; the static
+    faces drew 300 letters with them, and FreeType rendered a seam at
+    each join. Two overlapping squares come out as one outline of
+    their union's area."""
+    import build_latin
+    from fontTools.pens.areaPen import AreaPen
+    font = _cff_font_with_heights({"a": 100})
+    pen = T2CharStringPen(0, None)
+    for x0 in (0, 50):
+        pen.moveTo((x0, 0))
+        pen.lineTo((x0 + 100, 0))
+        pen.lineTo((x0 + 100, 100))
+        pen.lineTo((x0, 100))
+        pen.closePath()
+    td = font["CFF "].cff.topDictIndex[0]
+    td.CharStrings["a"] = pen.getCharString(private=td.Private)
+    build_latin.round_outlines(font)
+    area = AreaPen(font.getGlyphSet())
+    font.getGlyphSet()["a"].draw(area)
+    assert abs(area.value) == 150 * 100
+    assert font["hmtx"].metrics["a"] == (600, 0)

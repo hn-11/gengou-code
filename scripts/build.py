@@ -746,6 +746,16 @@ def glyph_fd(font, td, name):
     return td.FDSelect[font.getGlyphID(name)] if hasattr(td, "FDArray") else None
 
 
+def set_charstring(td, name, cs):
+    """Replace an existing glyph's charstring, in a CID-keyed CFF (the
+    index is the store) or a plain one (the dict is)."""
+    strings = td.CharStrings
+    if hasattr(strings, "charStringsIndex"):
+        strings.charStringsIndex[strings.charStrings[name]] = cs
+    else:
+        strings[name] = cs
+
+
 def glyph_private(font, td, name):
     """The Private dict a charstring for `name` is written against: its
     own FD's, or the top dict's in a plain CFF."""
@@ -1736,6 +1746,9 @@ def anchor_loose_letters(font, tag="mark", rules=None):
     cmap = font.getBestCmap()
     letters = {gn for cp, gn in cmap.items()
                if unicodedata.category(chr(cp)).startswith("L")}
+    # and what GSUB turns a letter into: the shaper substitutes before
+    # it positions, so the Serbian locl б takes the accent, not б
+    letters |= _letter_variants(font, letters)
     bases = _canonical_bases(cmap)
     gid = font.getGlyphID
     added = 0
@@ -1776,6 +1789,167 @@ def anchor_loose_letters(font, tag="mark", rules=None):
             sub.BaseArray.BaseRecord = [r for _, r in rows]
             sub.BaseArray.BaseCount = len(rows)
     return added
+
+
+# the combining double diacritics (U+035C-0362) tie two characters: the
+# donor draws them centred on the join, a cell wide, and leaves them out
+# of every mark lookup, so unattached they straddle the two cells as
+# meant. Not a mark to place on one base
+DOUBLE_SPAN = frozenset(range(0x035C, 0x0363))
+
+
+def _letter_variants(font, letters):
+    """The glyphs a GSUB single or alternate substitution turns a letter
+    into -- a locl form (the Serbian б), a cvNN or ssNN variant, a
+    superscript -- followed two steps. A mark on a letter the shaper
+    has already swapped attaches to the substitute, so the substitute
+    needs the letter's anchors as much as the letter does."""
+    out = set()
+    if "GSUB" not in font:
+        return out
+    gsub = font["GSUB"].table
+    pairs = []
+    for lookup in gsub.LookupList.Lookup:
+        kind, subs = _unwrap(lookup)
+        if kind in (1, 3):
+            pairs.extend(_subst_pairs(kind, subs, "?"))
+    known = set(letters)
+    for _ in range(2):
+        out |= {dst for src, dst in pairs if src in known and dst not in known}
+        known |= out
+    return out
+
+
+def anchor_loose_marks(font, floor=16, band=300):
+    """Give a combining mark no lookup covers the mark anchor its
+    neighbours share, in the lookup whose marks sit where it does.
+    Returns the count.
+
+    The other half of anchor_loose_letters: a base anchor places a mark
+    only if the mark has an anchor of its own in the same lookup, and
+    Source Code Pro Italic leaves the candrabindu (U+0310) out of its
+    above-mark lookup where the upright has it, so on every italic face
+    a candrabindu landed a cell right of its letter, on the next
+    character. Within a lookup the donor gives every mark the same
+    anchor -- (300, 500) above, (300, -20) below, the italics' shifted
+    by the slant -- so the median over the marks it does cover is the
+    anchor to give the one it does not. The lookup is chosen by ink:
+    the one, among those covering `floor` marks or more, whose marks'
+    ink centre lies nearest the missing mark's, and within `band` of
+    it -- an overlay has no such home and is left alone. Mark-to-base
+    only: which marks may stack on which is the donor's to say. The
+    double diacritics are not marks to place (DOUBLE_SPAN), and a mark
+    drawn with no ink has nothing to place.
+    """
+    cmap = font.getBestCmap()
+    classes = font["GDEF"].table.GlyphClassDef.classDefs if "GDEF" in font else {}
+    gs = font.getGlyphSet()
+    gid = font.getGlyphID
+    subs = [sub for _, parts in _mark_base_lookups(font) for sub in parts]
+    covered = set()
+    for sub in subs:
+        covered |= set(sub.MarkCoverage.glyphs)
+    loose = [g for cp, g in sorted(cmap.items())
+             if classes.get(g) == 3 and g not in covered
+             and cp not in DOUBLE_SPAN and _bounds(gs, g)]
+    # each big one-class subtable: its common anchor and where its
+    # marks' ink sits
+    homes = []
+    for sub in subs:
+        cov, array, records = sub.MarkCoverage, sub.MarkArray, sub.MarkArray.MarkRecord
+        if sub.ClassCount != 1 or len(records) < floor:
+            continue
+        boxes = [b for b in (_bounds(gs, g) for g in cov.glyphs) if b]
+        if not boxes:
+            continue
+        centre = statistics.median((b[1] + b[3]) / 2 for b in boxes)
+        x = otRound(statistics.median(r.MarkAnchor.XCoordinate for r in records))
+        y = otRound(statistics.median(r.MarkAnchor.YCoordinate for r in records))
+        homes.append((centre, x, y, cov, array, records))
+    added = 0
+    for g in loose:
+        box = _bounds(gs, g)
+        mid = (box[1] + box[3]) / 2
+        near = [h for h in homes if abs(h[0] - mid) <= band]
+        if not near:
+            continue
+        _, x, y, cov, array, records = min(near, key=lambda h: abs(h[0] - mid))
+        anchor = otTables.Anchor()
+        anchor.Format = 1
+        anchor.XCoordinate, anchor.YCoordinate = x, y
+        rec = otTables.MarkRecord()
+        rec.Class, rec.MarkAnchor = 0, anchor
+        pairs = sorted(zip(cov.glyphs, records), key=lambda p: gid(p[0]))
+        pairs.append((g, rec))
+        pairs.sort(key=lambda p: gid(p[0]))
+        cov.glyphs = [n for n, _ in pairs]
+        array.MarkRecord = [r for _, r in pairs]
+        array.MarkCount = len(pairs)
+        added += 1
+    return added
+
+
+def _mkmk_anchors(font):
+    """One {codepoint: (Mark1 anchor y, [Mark2 anchor])} per mark-to-mark
+    subtable, for the encoded marks in both of its coverages."""
+    out = []
+    if "GPOS" not in font:
+        return out
+    rev = {g: cp for cp, g in font.getBestCmap().items()}
+    table = font["GPOS"].table
+    want = set()
+    for fr in table.FeatureList.FeatureRecord:
+        if fr.FeatureTag == "mkmk":
+            want |= set(fr.Feature.LookupListIndex)
+    for i in sorted(want):
+        kind, subs = _unwrap_pos(table.LookupList.Lookup[i])
+        if kind != 6:
+            continue
+        for sub in subs:
+            ones = dict(zip(sub.Mark1Coverage.glyphs, sub.Mark1Array.MarkRecord))
+            rows = {}
+            for g, rec in zip(sub.Mark2Coverage.glyphs, sub.Mark2Array.Mark2Record):
+                if g in ones and g in rev:
+                    rows[rev[g]] = (ones[g].MarkAnchor.YCoordinate, rec.Mark2Anchor)
+            if rows:
+                out.append(rows)
+    return out
+
+
+def mirror_stack_lift(font, model):
+    """Where a mark's Mark2 anchor sits at the height its own Mark1
+    anchor attaches at, so that a second mark stacks ON the first
+    instead of above it, lift it by what `model` -- the upright at the
+    same weight -- lifts the same mark. Returns the count.
+
+    Source Code Pro Italic's grave, acute, breve and ring carry a Mark2
+    anchor at exactly the Mark1 height at every weight, and the italic
+    faces drew x̀́ as two accents on top of each other where the upright
+    lifts the second by 111 units at Regular. That the upright's lift
+    is the designer's, weight by weight (30 at Light, 248 at Bold, none
+    at wght 200), is why it is copied rather than replaced by a rule.
+    """
+    theirs = _mkmk_anchors(model)
+    lifted = 0
+    for ours in _mkmk_anchors(font):
+        # the model's subtable that covers the same marks: the two
+        # donors are one family, but their lookups need not be numbered
+        # alike
+        shared, rows = max(((len(ours.keys() & t.keys()), t) for t in theirs),
+                           key=lambda pair: pair[0], default=(0, None))
+        if not shared:
+            continue
+        for cp, (y1, anchors) in ours.items():
+            if cp not in rows:
+                continue
+            model_y1, model_anchors = rows[cp]
+            for anchor, model_anchor in zip(anchors, model_anchors):
+                if anchor is None or model_anchor is None:
+                    continue
+                if anchor.YCoordinate == y1 and model_anchor.YCoordinate != model_y1:
+                    anchor.YCoordinate = y1 + (model_anchor.YCoordinate - model_y1)
+                    lifted += 1
+    return lifted
 
 
 def import_donor_base_anchors(base, donor, glyph_map, placements):

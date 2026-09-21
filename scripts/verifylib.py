@@ -661,9 +661,7 @@ _BOPOMOFO = frozenset(range(0x3100, 0x3130)) | frozenset(range(0x31A0, 0x31C0))
 
 
 
-# the combining double diacritics (U+035C-0362) tie two characters:
-# their ink spans two cells by design, centred on the join
-DOUBLE_SPAN = frozenset(range(0x035C, 0x0363))
+DOUBLE_SPAN = build.DOUBLE_SPAN
 
 
 def ink_spill(bounds, advance, cmap, cell):

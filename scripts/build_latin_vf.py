@@ -491,6 +491,20 @@ def build_style(style, env, out_dir):
     if len(set(loose.values())) != 1:
         raise RuntimeError(f"{style}: fitted base anchors diverged across "
                            f"masters: {loose}")
+    # the marks' side of the gap, per master: each gets the same marks
+    # (what makes the coverage agree) at its own lookup's anchor
+    marks = {w: build.anchor_loose_marks(bases[w]) for w in wghts}
+    if len(set(marks.values())) != 1:
+        raise RuntimeError(f"{style}: loose marks diverged across masters: {marks}")
+    print(f"[{style}] marks given a lookup's anchor: {marks[default_wght]} per master")
+    if italic:
+        # the stacked-accent lift the upright gives each mark, read
+        # off the upright VF at this master's own weight -- a variable
+        # anchor in the result, as it is in the upright
+        upright_src = build._vf_source(env["SCP_VF_U"], 1.0, {"wght": 0})
+        with build.unrounded_cff2_instancing():
+            lifted = {w: build.mirror_stack_lift(bases[w], upright_src.at(w)) for w in wghts}
+        print(f"[{style}] stacked-accent anchors lifted as the upright's: {lifted}")
     if loose[default_wght] < build_latin.LOOSE_FLOOR:
         # as on the static path, and a count rather than a truthiness
         # test for the same reason: the two guards above compare the
