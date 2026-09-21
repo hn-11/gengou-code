@@ -3515,3 +3515,31 @@ def test_mirror_stack_lift_skips_a_mark_whose_classes_differ_from_the_models():
     st.Mark2Array.Mark2Record[0].Mark2Anchor.append(_anchor(50, 700))
     assert anchors.mirror_stack_lift(ours, model) == 0
     assert _mark2_y(ours, "grave") == 500
+
+
+def test_raise_marks_after_capitals_adds_every_capital_to_the_swap_context():
+    """The donor's ccmp names the capitals after which an above-mark is
+    swapped for its raised form; the italic named the Latin ones only.
+    Every cmapped capital of the Latin scripts joins the backtrack of
+    the chain context that calls the swap (a class of twenty capitals
+    or more, calling a lookup that takes the encoded marks to unencoded
+    forms); a lowercase letter does not."""
+    caps = [f"C{i}" for i in range(20)]
+    marks = [f"m{i}" for i in range(20)]
+    heights = {**dict.fromkeys(caps, 700), "Alpha": 700, "Be": 700, "a": 500,
+               "acute.cap": 500, **dict.fromkeys(marks, 500)}
+    font = _cff_font_with_heights(heights)
+    font["cmap"].tables[0].cmap = {**{0x41 + i: g for i, g in enumerate(caps)},
+                                   0x391: "Alpha", 0x411: "Be", 0x61: "a",
+                                   **{0x300 + i: g for i, g in enumerate(marks)}}
+    _with_gsub(font, "lookup CAP { " + " ".join(f"sub {m} by acute.cap;" for m in marks)
+               + " } CAP;\nfeature ccmp { sub [" + " ".join(caps) + "] ["
+               + " ".join(marks) + "]' lookup CAP; } ccmp;\n")
+    assert anchors.raise_marks_after_capitals(font) == 2
+    gsub = font["GSUB"].table
+    chain = [st for lk in gsub.LookupList.Lookup for st in lk.SubTable
+             if lk.LookupType == 6][0]
+    back = set(chain.BacktrackCoverage[0].glyphs)
+    assert {"Alpha", "Be", *caps} <= back and "a" not in back
+    assert chain.BacktrackCoverage[0].glyphs == sorted(back, key=font.getGlyphID)
+    assert anchors.raise_marks_after_capitals(font) == 0

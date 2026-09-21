@@ -249,7 +249,10 @@ def main():
     # instance: a VF's box is the union over its masters, not one
     # location's ink
     check_tables(tf, check, None, None, vf_cmap, codepages=True)
-    for tbl in ("vhea", "vmtx", "VORG", "DSIG"):
+    # and no variable metrics: the advances are hmtx's at every
+    # location, which is what every grid check here relies on (an HVAR
+    # peaking between two instances widened 'e' at wght 450 and passed)
+    for tbl in ("vhea", "vmtx", "VORG", "DSIG", "HVAR", "VVAR", "MVAR"):
         check(tbl not in tf, f"no {tbl} table")
     vf_gpos = {fr.FeatureTag for fr in tf["GPOS"].table.FeatureList.FeatureRecord} \
         if "GPOS" in tf else set()

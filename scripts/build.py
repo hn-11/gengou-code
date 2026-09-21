@@ -4189,6 +4189,14 @@ def build_face(job):
         # the ligatures are the Latin layer's only multi-cell glyphs, so
         # the only ones an advance test cannot tell from a full width
         widen_fullwidth(base, CELL, skip=set(added.values()) | set(alts.values()))
+    # the letters this face has that the Latin face did not: Source Han
+    # Sans's full-width Latin (the fwid forms add_width_alternates maps
+    # the letters to, on which an accent landed at the cell's right
+    # edge) and any letter of the Latin scripts the donor lacks. Fitted
+    # from the lookups imported above, as on the Latin face, and last,
+    # on the ink every pass before has finished with
+    import anchors
+    n_loose = anchors.anchor_loose_letters(base)
     # OS/2 Unicode / code-page range bits, from the now-final cmap
     base["OS/2"].recalcUnicodeRanges(base)
     recalc_codepage_range(base)
@@ -4207,7 +4215,7 @@ def build_face(job):
     return (f"{face_label}{f' [{suffix}]' if suffix else ''}: "
             f"latin={n_scp} fwid={len(fullwidth)} vert={n_vert} "
             f"fitted={n_fit} half={n_half} letters={n_letters} "
-            f"ligs={len(added)} ccmp={n_ccmp} locl={n_locl} mark={n_mark} "
+            f"ligs={len(added)} ccmp={n_ccmp} locl={n_locl} mark={n_mark} loose={n_loose} "
             f"tall={n_tall} -> {out.name}")
 
 

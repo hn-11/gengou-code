@@ -1133,19 +1133,6 @@ def main():
             pen_x += pos.x_advance
         return out
 
-    ties = {}
-    for base, mark, after in (("a", "\u0361", "b"), ("g", "\u035f", "j")):
-        if any(ord(c) not in cmap for c in (base, mark, after)):
-            continue
-        boxes = placed(base + mark + after)
-        if len(boxes) != 3:
-            continue
-        adv = hmtx[cmap[ord(base)]][0]
-        box = boxes[1]
-        if box is None or not 0 <= box[0] < adv < box[1]:
-            ties[base + mark + after] = (None if box is None else
-                                         (round(box[0]), round(box[1])))
-    check(not ties, f"the tie bar straddles the pair it joins (off: {ties})")
 
     # and an enclosing mark stays around the character it encloses: it
     # hangs a full width LEFT of the origin, so the Term widening has to

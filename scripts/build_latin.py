@@ -409,6 +409,8 @@ def graft(base, mona, sans=None, upright=None):
         add_missing_from_sans(base, sans, upright)
     remap_scp_stylistic_sets(base)
     build.add_gsub(base, added, alts, build.LIGATURES)
+    print(f"  capitals added to the raised-accent context: "
+          f"{anchors.raise_marks_after_capitals(base)}")
     if "DSIG" in base:
         del base["DSIG"]
     return added

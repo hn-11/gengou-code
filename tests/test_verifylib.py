@@ -271,7 +271,8 @@ def test_check_gdi_family_name_bounds_nameid_1():
 
 def _mark_font(anchors, heights=None, advance=600, cmap_extra=(), width=100,
                mark_anchor=None, classify_mark=True, mark_cp=0x0301, marks=(),
-               fea_extra="", mark2=None, langsys="", mark_scope="", mark_tail=""):
+               fea_extra="", mark2=None, langsys="", mark_scope="", mark_tail="",
+               mkmk_tail=""):
     """A CFF font whose letters are boxes of the given width and heights,
     with a 'mark' feature compiled by feaLib from {glyph: (x, y)} base
     anchors -- a real GDEF and GPOS, so the shaper can apply it. The
@@ -311,7 +312,7 @@ def _mark_font(anchors, heights=None, advance=600, cmap_extra=(), width=100,
     if mark2:
         stacks = "\n".join(f"    pos mark {g} <anchor {x} {y}> mark @TOP;"
                            for g, (x, y) in mark2.items())
-        fea += f"feature mkmk {{\n{stacks}\n}} mkmk;\n"
+        fea += f"feature mkmk {{\n{stacks}\n{mkmk_tail}\n}} mkmk;\n"
     addOpenTypeFeaturesFromString(font, fea + fea_extra)
     if not classify_mark:
         # feaLib derives GDEF from the markClass, so the "not a mark" case
@@ -899,3 +900,218 @@ def test_check_anchor_placement_does_not_ask_stacking_of_a_glyph_nothing_reaches
     font = _mark_font(anchors, heights, marks={"grave2": None},
                       mark2={"grave2": (50, 0), "acute": (50, 200)})
     assert _placement(font) == []
+
+
+# round 8: an expectation independent of the anchors -------------------
+
+def test_check_marks_seat_catches_one_letters_anchor_off_inside_the_bands():
+    """An anchor wrong on ONE letter by less than a placement band
+    passed every gate: the rule is a median, attach is an equality
+    against the same anchor. The seat gate measures the mark's ink
+    against the letter's."""
+    anchors, heights = _ruled()
+    seated = _mark_font(anchors, heights)
+    assert _gate(lambda f, chk: verifylib.check_marks_seat(f, _shaper_for(f), chk,
+                                                          f.getGlyphSet()), seated) == []
+    anchors["b3"] = (50, heights["b3"] - 300)      # into the letter, within 350
+    font = _mark_font(anchors, heights)
+    assert _placement(font) == []
+    assert _attach(font) == []
+    off = _gate(lambda f, chk: verifylib.check_marks_seat(f, _shaper_for(f), chk,
+                                                         f.getGlyphSet()), font)
+    assert off and "b3" in off[0]
+
+
+def test_check_marks_seat_holds_the_lookups_median():
+    """Every mark's outline moved 200 right with its anchor left behind
+    stays inside each pair's band and moves only the median."""
+    anchors, heights = _ruled()
+    font = _mark_font(anchors, heights, width=100)
+    from fontTools.pens.t2CharStringPen import T2CharStringPen
+    pen = T2CharStringPen(0, None)
+    pen.moveTo((200, 0))
+    pen.lineTo((300, 0))
+    pen.lineTo((300, 500))
+    pen.closePath()
+    td = font["CFF "].cff.topDictIndex[0]
+    td.CharStrings["acute"] = pen.getCharString(private=td.Private)
+    off = _gate(lambda f, chk: verifylib.check_marks_seat(f, _shaper_for(f), chk,
+                                                         f.getGlyphSet()), font)
+    assert off and "median" in off[0]
+
+
+def test_check_cap_forms_wants_the_raised_form_after_every_capital():
+    """The fixture's letters are A..T (b0..b19): after B the acute must
+    not be the plain acute; a font swapping after A only leaves the
+    rest low."""
+    anchors, heights = _ruled()
+    heights["acutecap"] = 500
+    swapped = _mark_font(anchors, heights, marks={"acutecap": None},
+                         fea_extra="feature ccmp { sub [%s] acute' by acutecap; } ccmp;\n"
+                                   % " ".join(anchors))
+    assert _gate(lambda f, chk: verifylib.check_cap_forms(f, _shaper_for(f), chk), swapped) == []
+    partial = _mark_font(anchors, heights, marks={"acutecap": None},
+                         fea_extra="feature ccmp { sub [b0 b1] acute' by acutecap; } ccmp;\n")
+    low = _gate(lambda f, chk: verifylib.check_cap_forms(f, _shaper_for(f), chk), partial)
+    assert low and "D" in low[0].split("low: ")[1]
+
+
+def test_check_tie_bars_wants_the_tie_across_the_join():
+    anchors, heights = _ruled()
+    heights["tie"] = 100
+    font = _mark_font(anchors, heights, cmap_extra={0x61: "b0", 0x62: "b1", 0x361: "tie"},
+                      width=100)
+    # the tie is a 100-wide box at x 0..100 with a 600 advance zeroed by
+    # GDEF: it draws at 600..700 after 'a', inside b's cell -- not across
+    off = _gate(lambda f, chk: verifylib.check_tie_bars(f, _shaper_for(f), chk,
+                                                       f.getGlyphSet()), font)
+    assert off and "a͡b" in off[0]
+
+
+def test_check_letter_glyphs_wants_each_ascii_letter_drawn_and_its_own():
+    font = _metadata_font()
+    from fontTools.pens.ttGlyphPen import TTGlyphPen
+    for g in ("a", "b", ".notdef"):
+        pen = TTGlyphPen(None)
+        pen.moveTo((0, 0))
+        pen.lineTo((100, 0))
+        pen.lineTo((100, 100))
+        pen.closePath()
+        font["glyf"][g] = pen.glyph()
+    font["cmap"].tables[0].cmap = {0x61: "a", 0x62: "b"}
+    out = _gate(lambda f, chk: verifylib.check_letter_glyphs(f, chk, f.getGlyphSet()), font)
+    assert len(out) == 1 and "blank" in out[0]       # c..z, digits, capitals absent
+    font["cmap"].tables[0].cmap = {0x61: "a", 0x62: "a"}
+    out = _gate(lambda f, chk: verifylib.check_letter_glyphs(f, chk, f.getGlyphSet()), font)
+    assert "shared: [('b', 'a')]" in out[0]
+
+
+# the band constants, pinned one unit either side ------------------------
+
+def _placement_with(font, **over):
+    saved = {k: getattr(verifylib, k) for k in over}
+    try:
+        for k, v in over.items():
+            setattr(verifylib, k, v)
+        return _placement(font)
+    finally:
+        for k, v in saved.items():
+            setattr(verifylib, k, v)
+
+
+def test_anchor_y_into_ink_is_the_bound():
+    anchors, heights = _ruled()
+    anchors["b3"] = (50, heights["b3"] - verifylib._ANCHOR_Y_INTO_INK)
+    assert _placement(_mark_font(anchors, heights)) == []
+    anchors["b3"] = (50, heights["b3"] - verifylib._ANCHOR_Y_INTO_INK - 1)
+    assert _placement(_mark_font(anchors, heights))
+
+
+def test_anchor_y_past_edge_is_the_bound():
+    anchors, heights = _ruled()
+    anchors["b3"] = (50, heights["b3"] + verifylib._ANCHOR_Y_PAST_EDGE)
+    assert _placement(_mark_font(anchors, heights)) == []
+    anchors["b3"] = (50, heights["b3"] + verifylib._ANCHOR_Y_PAST_EDGE + 1)
+    assert _placement(_mark_font(anchors, heights))
+
+
+def test_anchor_x_slack_is_the_bound():
+    anchors, heights = _ruled()
+    slack = round(verifylib._ANCHOR_X_SLACK * 600)
+    anchors["b3"] = (100 + slack, heights["b3"] + 20)
+    assert _placement(_mark_font(anchors, heights)) == []
+    anchors["b3"] = (100 + slack + 1, heights["b3"] + 20)
+    assert _placement(_mark_font(anchors, heights))
+
+
+def test_anchor_x_from_centre_is_the_bound():
+    """On a wide glyph the slack is loose and the centre bound is what
+    holds."""
+    heights = {f"b{i}": 700 + 10 * i for i in range(20)}
+    spread = round(verifylib._ANCHOR_X_FROM_CENTRE * 1000)
+    ok = {g: (500, h + 20) for g, h in heights.items()}
+    ok["b3"] = (500 + spread, heights["b3"] + 20)       # one, so the rule stays centred
+    assert _placement(_mark_font(ok, heights, advance=1000, width=1000)) == []
+    ok["b3"] = (500 + spread + 1, heights["b3"] + 20)
+    assert _placement(_mark_font(ok, heights, advance=1000, width=1000))
+
+
+def test_rule_dy_is_the_bound():
+    anchors, heights = _ruled()
+    high = {g: (x, y - 20 + verifylib._RULE_DY) for g, (x, y) in anchors.items()}
+    assert _placement(_mark_font(high, heights)) == []
+    over = {g: (x, y - 20 + verifylib._RULE_DY + 1) for g, (x, y) in anchors.items()}
+    assert _placement(_mark_font(over, heights))
+
+
+def test_mark2_below_ink_is_the_bound():
+    anchors, heights = _ruled()
+    font = _mark_font(anchors, heights, marks={"grave": 0x0300},
+                      mark2={"grave": (50, -verifylib._MARK2_BELOW_INK), "acute": (50, 200)})
+    assert _placement(font) == []
+    font = _mark_font(anchors, heights, marks={"grave": 0x0300},
+                      mark2={"grave": (50, -verifylib._MARK2_BELOW_INK - 1), "acute": (50, 200)})
+    assert _placement(font)
+
+
+def test_letter_and_mark_ranges_reach_their_last_blocks():
+    """Latin Extended Additional letters and the combining supplement
+    marks are asked for (a range dropped from either passed)."""
+    anchors, heights = _ruled()
+    heights["loose"] = 500
+    font = _mark_font(anchors, heights, cmap_extra={0x1EF8: "loose"})
+    assert _coverage(font)
+    font = _mark_font(anchors, heights, mark_cp=0x1DC4)
+    assert 0x1DC4 in verifylib._latin_marks(font, font.getGlyphSet())
+
+
+def test_hold_run_reports_an_unanchored_mark():
+    """A pair the shaper substitutes into a glyph nothing covers is
+    reported as such, not skipped."""
+    anchors, heights = _ruled()
+    heights["acutecap"] = 500
+    orphan = _mark_font(anchors, heights,
+                        fea_extra="feature ccmp { sub acute by acutecap; } ccmp;\n")
+    off = _attach(orphan)
+    assert off and "unanchored" in off[0]
+
+
+def test_reachability_asks_of_mkmk_lookups_too():
+    anchors, heights = _ruled()
+    font = _mark_font(anchors, heights, marks={"grave": 0x0300},
+                      mark2={"grave": (50, 200), "acute": (50, 200)})
+    for fr in font["GPOS"].table.FeatureList.FeatureRecord:
+        if fr.FeatureTag == "mkmk":
+            fr.FeatureTag = "dist"
+    assert any("reached from a mark feature" in m
+               for m in _gate(verifylib.check_mark_reachability, font))
+
+
+def test_langsys_parity_asks_of_mkmk_too():
+    anchors, heights = _ruled()
+    systems = "languagesystem DFLT dflt; languagesystem latn dflt; languagesystem latn SRB;"
+    font = _mark_font(anchors, heights, langsys=systems, marks={"grave": 0x0300},
+                      mark2={"grave": (50, 200), "acute": (50, 200)},
+                      mkmk_tail="script latn; language SRB exclude_dflt;")
+    short = _gate(verifylib.check_langsys_parity, font)
+    assert short and "mkmk" in short[0]
+
+
+def test_mark_features_require_ccmp_in_gpos():
+    anchors, heights = _ruled()
+    font = _mark_font(anchors, heights, marks={"grave": 0x0300},
+                      mark2={"grave": (50, 200)})
+    assert any("GPOS has ccmp" in m for m in _gate(verifylib.check_mark_features, font))
+
+
+def test_mark_model_reads_the_marks_own_class_anchor():
+    """A two-class lookup: the .cap form's class-1 anchor is what the
+    shaper reads, and what the model must read (BaseAnchor[0] read
+    every mark against the first class)."""
+    anchors, heights = _ruled()
+    heights["acutecap"] = 500
+    fea = ("markClass acutecap <anchor 50 0> @CAP;\n"
+           "feature mark { " + "".join(f"pos base {g} <anchor 50 {h + 120}> mark @CAP; "
+                                       for g, h in heights.items() if g.startswith("b")) + "} mark;\n")
+    font = _mark_font(anchors, heights, marks={"acutecap": None}, fea_extra=fea)
+    assert verifylib._MarkModel(font).on_base("b0", "acutecap") == (-600, heights["b0"] + 120, 0)

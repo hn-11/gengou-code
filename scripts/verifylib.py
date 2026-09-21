@@ -6,6 +6,7 @@ harmonize_latin.py share.
 
 import math
 import os
+import statistics
 import sys
 import unicodedata
 from pathlib import Path
@@ -721,11 +722,7 @@ MKMK_FEATURES = frozenset({"mkmk", "vert"})
 # Every other Latin mark must reach every letter
 SPARSE_MARKS = frozenset({0x031A, 0x031B, 0x0334})
 MARK_RANGES = ((0x0300, 0x036F), (0x1AB0, 0x1AFF), (0x1DC0, 0x1DFF))
-# the scripts the Latin layer draws and anchors: Latin through IPA,
-# Greek and Cyrillic, Latin Extended Additional, Greek Extended. What
-# check_anchor_coverage asks of every letter in them
-LETTER_RANGES = ((0x0041, 0x024F), (0x0370, 0x04FF), (0x1E00, 0x1EFF),
-                 (0x1F00, 0x1FFF))
+LETTER_RANGES = anchors.LETTER_RANGES
 # from wght 300 up a second accent is lifted off the first: the donor's
 # own mkmk anchors lift it 30 at Light and 111 at Regular, and only at
 # its wght-200 master -- below every named instance -- do they not
@@ -773,6 +770,21 @@ _MARK2_BELOW_INK = 150       # measured 86
 # fresh coverage) sits on its own ink still and the attach gate uses
 # whatever anchor it finds; this is what says so
 _MARK_Y_FROM_EDGE = {True: (-150, 40), False: (-60, 180)}
+# where a mark's ink lands against its letter's, shaped -- an
+# expectation independent of the anchors, which every other gate reads
+# and the attach gate is an equality against. Measured over every
+# letter x mark of the 30 statics: an above-mark's ink begins 92 below
+# to 118 above the letter's top (median 71-82), a below-mark's ends 156
+# below to 150 above the letter's bottom (median -23..52), and the
+# mark's ink centre sits 285 left to 299 right of the letter's (the
+# italic's slant, the ogonek's right-hand seat; medians -73..114). The
+# per-pair bands are set clear of those; the medians are held tighter,
+# since a whole lookup's marks moved 200 units sideways stay inside
+# every pair's band and move only the median
+_SEAT_DY = {True: (-150, 180), False: (-200, 200)}
+_SEAT_DX = 330
+_SEAT_MEDIAN_DX = 160
+_SEAT_MEDIAN_DY = (-60, 130)
 # the ascender letters and the above-accents an accent must clear: with
 # the anchors right, the mark's ink starts above the letter's; drawn
 # through the stem of b d f h k l (58 of 84 pairs, on the first graft)
@@ -907,6 +919,16 @@ def check_mark_reachability(tf, check, label=""):
            or (kind == 6 and not tags & MKMK_FEATURES)]
     check(not off, f"every mark lookup is reached from a mark feature{label} "
                    f"(off: {off})")
+    # and the other way about: a mark feature reaches mark lookups only
+    # (a contextual or pair lookup under 'mark' is outside every gate
+    # here), and nothing in this family attaches marks to ligatures --
+    # a mark-to-ligature lookup would be walked by the shaper and by no
+    # gate
+    odd = [(i, kind, sorted(tags)) for i, kind, _, tags in _pos_lookups(tf)
+           if kind == 5 or (tags & {"mark", "mkmk"} and kind not in (1, 4, 6))]
+    check(not odd, f"the mark features reach mark lookups (and the donor's single "
+                   f"adjustment) only, and there is no mark-to-ligature lookup{label} "
+                   f"(off: {odd})")
     # and its flag lets it see its own marks: IgnoreMarks on a mark
     # lookup, or a MarkAttachmentType class its marks are not in, is a
     # lookup that never applies (the model mirrors the class filter for
@@ -1012,8 +1034,11 @@ def check_anchor_placement(tf, check, gs, label=""):
                      or abs(rule[2]) > _RULE_DY):
             off.setdefault(i, []).append(("rule", rule))
         for gn, rec in zip(sub.BaseCoverage.glyphs, sub.BaseArray.BaseRecord):
-            anchor = rec.BaseAnchor[0] if rec.BaseAnchor else None
-            box = build._bounds(gs, gn)
+          box = build._bounds(gs, gn)
+          # every class's anchor: the shaper reads BaseAnchor[the mark's
+          # class], and the .cap forms of the marks are a class of their
+          # own in a two-class lookup
+          for cls, anchor in enumerate(rec.BaseAnchor or []):
             if anchor is None:
                 if sub.ClassCount == 1 and box:
                     off.setdefault(i, []).append((gn, None))
@@ -1035,7 +1060,7 @@ def check_anchor_placement(tf, check, gs, label=""):
                     or abs(x - centre) > spread
                     or not lo <= y <= hi):
                 off.setdefault(i, []).append(
-                    (gn, x, y, tuple(round(v) for v in box)))
+                    (gn, cls, x, y, tuple(round(v) for v in box)))
         for gn, rec in zip(sub.MarkCoverage.glyphs, sub.MarkArray.MarkRecord):
             bad = mark_off(gn, rec.MarkAnchor, top)
             if bad:
@@ -1416,6 +1441,165 @@ def check_marks_clear(tf, shape, check, gs, label=""):
                        f"({pairs} pairs; through: {through})")
 
 
+def check_marks_seat(tf, shape, check, gs, label=""):
+    """Every mark's ink lands on its letter's: shaped, and measured
+    against the letter's ink rather than against the anchors.
+
+    Every other gate reads the anchors, and check_marks_attach holds
+    the shaper to those same anchors -- so an anchor wrong on ONE
+    letter by less than a placement band (350 units into the ink, a
+    third of a cell sideways; 5 px at 14 px) passed them all, as did a
+    second anchor class the placement gate did not read, a
+    mark-to-ligature lookup nothing walked, and every mark's outline
+    moved 200 units with its anchor left behind (round 8, mutants 1,
+    2, 3, 8, 10, 11). This asks the drawing: for every letter with two
+    marks of each rule-following lookup and every mark with three
+    letters, the first mark's ink begins within _SEAT_DY of the edge
+    the lookup attaches by and its centre within _SEAT_DX of the
+    letter's; and, per lookup, the medians are held to
+    _SEAT_MEDIAN_DX / _SEAT_MEDIAN_DY, which a whole lookup's marks
+    moved together cannot pass. A pair the shaper composes is the
+    donor's own drawing and is not asked."""
+    cmap = tf.getBestCmap()
+    rev = {g: cp for cp, g in cmap.items()}
+    order = tf.getGlyphOrder()
+    hmtx = tf["hmtx"].metrics
+    off = {}
+    medians = {}
+    for i, sub in _mark_base_subtables(tf):
+        rule = anchors._anchor_rule(gs, sub)
+        if rule is None:
+            continue            # the donor's sparse lookups: no edge to hold to
+        top = rule[0]
+        marks = [g for g in sub.MarkCoverage.glyphs
+                 if g in rev and rev[g] not in SPARSE_MARKS]
+        bases = [g for g in sub.BaseCoverage.glyphs if g in rev]
+        probes = {(b, m) for b in bases for m in marks[:2]}
+        probes |= {(b, m) for b in bases[:3] for m in marks}
+        dxs, dys = [], []
+        for base_g, mark_g in sorted(probes, key=lambda p: (order.index(p[0]), order.index(p[1]))):
+            infos, positions = shape(chr(rev[base_g]) + chr(rev[mark_g]), {})
+            got = [order[info.codepoint] for info in infos]
+            if len(got) < 2:
+                continue
+            letter = build._bounds(gs, got[0])
+            if not letter:
+                continue
+            for j in range(1, len(got)):
+                mark = build._bounds(gs, got[j])
+                if not mark or got[j] not in sub.MarkCoverage.glyphs:
+                    continue
+                x0 = hmtx[got[0]][0] + positions[j].x_offset
+                dx = x0 + (mark[0] + mark[2]) / 2 - (letter[0] + letter[2]) / 2
+                dy = ((positions[j].y_offset + mark[1] - letter[3]) if top
+                      else (letter[1] - positions[j].y_offset - mark[3]))
+                dxs.append(dx)
+                dys.append(dy)
+                lo, hi = _SEAT_DY[top]
+                if not lo <= dy <= hi or abs(dx) > _SEAT_DX:
+                    off.setdefault(i, []).append((got[0], got[j], round(dx), round(dy)))
+                break
+        if dxs:
+            mdx, mdy = statistics.median(dxs), statistics.median(dys)
+            medians[i] = (round(mdx), round(mdy))
+            if abs(mdx) > _SEAT_MEDIAN_DX or not _SEAT_MEDIAN_DY[0] <= mdy <= _SEAT_MEDIAN_DY[1]:
+                off.setdefault(i, []).append(("median", round(mdx), round(mdy)))
+    worst = {i: (len(v), v[:2]) for i, v in off.items()}
+    check(medians and not off,
+          f"every mark's ink sits on its letter's{label} (medians dx, dy by lookup: "
+          f"{medians}; off: {worst})")
+
+
+def check_letter_glyphs(tf, check, gs, label=""):
+    """The ASCII letters and digits each map to a glyph of their own
+    that draws, and .notdef draws: a cmap that sends 'e' to the space
+    or to 'o' passed every gate that reads the cmap by glyph, and a
+    blank .notdef renders an unknown character as nothing rather than
+    a box."""
+    cmap = tf.getBestCmap()
+    letters = [chr(c) for c in (*range(0x30, 0x3A), *range(0x41, 0x5B), *range(0x61, 0x7B))]
+    seen = {}
+    blank, shared = [], []
+    for ch in letters:
+        g = cmap.get(ord(ch))
+        if g is None:
+            blank.append(ch)
+            continue
+        if not build._bounds(gs, g):
+            blank.append(ch)
+        if g in seen:
+            shared.append((ch, seen[g]))
+        seen[g] = ch
+    check(not blank and not shared,
+          f"every ASCII letter and digit has an inked glyph of its own{label} "
+          f"(blank: {blank}; shared: {shared})")
+    check(bool(build._bounds(gs, tf.getGlyphOrder()[0])), f".notdef draws{label}")
+
+
+def check_cap_forms(tf, shape, check, label=""):
+    """After every capital, an above-mark is swapped for a raised form:
+    the acute after a capital is never the plain acute.
+
+    Source Code Pro's ccmp names the capitals that raise an accent, and
+    named the Latin ones only in the italic, the Latin and Cyrillic in
+    the upright: Α+U+0301 set the lowercase acute 80-96 units above the
+    capital, taller than the line at Bold
+    (anchors.raise_marks_after_capitals). Asked of every cmapped
+    uppercase letter of the Latin and Cyrillic scripts that no
+    precomposed character absorbs, on a face that raises at all. The
+    Greek capitals are the donor's own case: after them the acute is
+    the tonos form, set at the letter's shoulder, and the raised form
+    is not what Greek asks for."""
+    cmap = tf.getBestCmap()
+    order = tf.getGlyphOrder()
+    if ord("B") not in cmap or 0x0301 not in cmap:
+        return
+    infos, _ = shape("B\u0301", {})
+    if len(infos) != 2 or order[infos[1].codepoint] == cmap[0x0301]:
+        return                      # this face does not raise: nothing to hold
+    low, probed = [], 0
+    for cp, g in sorted(cmap.items()):
+        ch = chr(cp)
+        if not any(lo <= cp <= hi for lo, hi in LETTER_RANGES) or 0x0370 <= cp <= 0x03FF \
+                or 0x1F00 <= cp <= 0x1FFF:
+            continue
+        if unicodedata.category(ch) != "Lu" or len(unicodedata.normalize("NFC", ch + "\u0301")) == 1:
+            continue
+        infos, _ = shape(ch + "\u0301", {})
+        if len(infos) != 2:
+            continue
+        probed += 1
+        if order[infos[1].codepoint] == cmap[0x0301]:
+            low.append(ch)
+    check(probed and not low, f"every capital raises the accent after it{label} "
+                              f"({probed} capitals; low: {''.join(low)})")
+
+
+def check_tie_bars(tf, shape, check, gs, label=""):
+    """A double diacritic straddles the pair it joins: a+U+0361+b draws
+    the tie from inside a's cell to inside b's, g+U+035F+j the same
+    below. Unanchored by design (DOUBLE_SPAN), so the ink is what says
+    it is drawn where it should be."""
+    cmap = tf.getBestCmap()
+    order = tf.getGlyphOrder()
+    hmtx = tf["hmtx"].metrics
+    ties = {}
+    for base, mark, after in (("a", "\u0361", "b"), ("g", "\u035f", "j")):
+        if any(ord(c) not in cmap for c in (base, mark, after)):
+            continue
+        infos, positions = shape(base + mark + after, {})
+        if len(infos) != 3:
+            continue
+        box = build._bounds(gs, order[infos[1].codepoint])
+        pen_x = positions[0].x_advance
+        adv = hmtx[cmap[ord(base)]][0]
+        span = None if box is None else (box[0] + pen_x + positions[1].x_offset,
+                                          box[2] + pen_x + positions[1].x_offset)
+        if span is None or not 0 <= span[0] < adv < span[1]:
+            ties[base + mark + after] = None if span is None else tuple(round(v) for v in span)
+    check(not ties, f"the tie bar straddles the pair it joins{label} (off: {ties})")
+
+
 def check_marks(tf, check, shape, gs, label=""):
     """Every mark gate, in the order they build on each other: the
     features and classes, the lookups' reachability, the language
@@ -1428,7 +1612,10 @@ def check_marks(tf, check, shape, gs, label=""):
     check_anchor_coverage(tf, check, gs, label)
     check_marks_attach(tf, shape, check, label)
     check_marks_stack(tf, shape, check, label)
+    check_marks_seat(tf, shape, check, gs, label)
     check_marks_clear(tf, shape, check, gs, label)
+    check_cap_forms(tf, shape, check, label)
+    check_tie_bars(tf, shape, check, gs, label)
 
 
 def vf_region_peaks(tf, axis_tag="wght"):

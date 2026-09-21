@@ -23,6 +23,14 @@ from build import (  # noqa: E402
 from fontTools.misc.roundTools import otRound
 from fontTools.ttLib.tables import otTables
 
+# the scripts the Latin layer draws and anchors: Latin through IPA and
+# the modifier letters, Greek, Cyrillic and its supplement, the
+# phonetic extensions, Latin Extended Additional, Greek Extended. The
+# letters anchor_loose_letters gives an anchor and check_anchor_coverage
+# asks one of -- by range, because a JP face maps 17,000 kanji that are
+# letters to Unicode and take no accent
+LETTER_RANGES = ((0x0041, 0x02FF), (0x0370, 0x052F), (0x1D00, 0x1FFF))
+
 
 def _mark_base_lookups(font):
     """[(lookup index, [MarkBasePos subtables])] under 'mark', Extension
@@ -227,9 +235,11 @@ def anchor_loose_letters(font, rules=None):
     gs = font.getGlyphSet()
     cmap = font.getBestCmap()
     letters = {gn for cp, gn in cmap.items()
-               if unicodedata.category(chr(cp)).startswith("L")}
+               if any(lo <= cp <= hi for lo, hi in LETTER_RANGES)
+               and unicodedata.category(chr(cp)).startswith("L")}
     # and what GSUB turns a letter into: the shaper substitutes before
-    # it positions, so the Serbian locl б takes the accent, not б
+    # it positions, so the Serbian locl б takes the accent, not б, and
+    # a JP face's full-width Ａ (fwid) takes it, not A
     letters |= _letter_variants(font, letters)
     bases = _canonical_bases(cmap)
     gid = font.getGlyphID
@@ -282,10 +292,12 @@ DOUBLE_SPAN = frozenset(range(0x035C, 0x0363))
 
 # the GSUB features whose output is still the letter, drawn another
 # way, and so still takes the letter's accent: a language form, a
-# stylistic or character variant, a case form. Not a width form (fwid,
-# hwid), a vertical form, a superscript or a fraction figure -- those
-# are other glyphs drawn elsewhere, and their marks fall where they fall
-VARIANT_FEATURES = frozenset({"locl", "salt", "case"}
+# stylistic or character variant, a case form, the JP faces' full-width
+# form (Source Han Sans's own fwid, a letter in a 1000 cell, on which an
+# unattached mark landed at the cell's right edge). Not a half-width or
+# vertical form, a superscript or a fraction figure -- those are other
+# glyphs drawn elsewhere, and their marks fall where they fall
+VARIANT_FEATURES = frozenset({"locl", "salt", "case", "fwid"}
                              | {f"cv{i:02d}" for i in range(1, 100)}
                              | {f"ss{i:02d}" for i in range(1, 21)})
 
@@ -403,6 +415,70 @@ def anchor_loose_marks(font, floor=16, band=300, near=80):
         array.MarkRecord = [r for _, r in pairs]
         array.MarkCount = len(pairs)
         added += 1
+    return added
+
+
+def raise_marks_after_capitals(font):
+    """Put every capital of the Latin layer's scripts into the context
+    that swaps an above-mark for its raised form. Returns the count
+    added.
+
+    Source Code Pro's ccmp swaps the acute for acute.cap after a
+    capital -- a chain context whose backtrack names the capitals --
+    but names only the Latin ones in the italic and the Latin and
+    Cyrillic in the upright: A+U+0301 raised the accent, Α+U+0301 and
+    (italic) А+U+0301 set the lowercase form 80-96 units above the
+    capital instead of 34-47, taller than the line at Bold. Source Sans
+    3 Italic, the second donor, swaps after its own Greek and Cyrillic
+    capitals; this gives the donor's context the same reach: every
+    cmapped uppercase letter in LETTER_RANGES joins the backtrack of
+    each ccmp chain context that calls a lookup swapping encoded marks
+    for unencoded ones after a class of capitals."""
+    if "GSUB" not in font:
+        return 0
+    gsub = font["GSUB"].table
+    cmap = font.getBestCmap()
+    rev = {g: cp for cp, g in cmap.items()}
+    capitals = {g for cp, g in cmap.items()
+                if any(lo <= cp <= hi for lo, hi in LETTER_RANGES)
+                and unicodedata.category(chr(cp)) == "Lu"}
+    ccmp = set()
+    for fr in gsub.FeatureList.FeatureRecord:
+        if fr.FeatureTag == "ccmp":
+            ccmp |= set(fr.Feature.LookupListIndex)
+    lookups = gsub.LookupList.Lookup
+    gid = font.getGlyphID
+
+    def swaps_marks(index):
+        """A single substitution taking a good number of the encoded
+        combining marks to glyphs no codepoint names (the upright's
+        also takes unencoded variants along, and one pair lands on an
+        encoded glyph)."""
+        kind, subs = _unwrap(lookups[index])
+        if kind != 1:
+            return False
+        pairs = [(a, b) for st in subs for a, b in st.mapping.items()]
+        marks = sum(a in rev and 0x0300 <= rev[a] <= 0x036F and b not in rev
+                    for a, b in pairs)
+        return marks >= 10
+
+    added = 0
+    for i in sorted(ccmp):
+        kind, subs = _unwrap(lookups[i])
+        if kind != 6:
+            continue
+        for st in subs:
+            if getattr(st, "Format", None) != 3 or len(st.BacktrackCoverage or ()) != 1:
+                continue
+            if not any(swaps_marks(r.LookupListIndex) for r in st.SubstLookupRecord):
+                continue
+            have = set(st.BacktrackCoverage[0].glyphs)
+            if sum(unicodedata.category(chr(rev[g])) == "Lu" for g in have if g in rev) < 20:
+                continue          # not the capitals' context
+            new = capitals - have
+            if new:
+                st.BacktrackCoverage[0].glyphs = sorted(have | new, key=gid)
+                added += len(new)
     return added
 
 
