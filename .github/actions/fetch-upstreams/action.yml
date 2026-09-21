@@ -79,9 +79,10 @@ runs:
           curl -sSfL -o "$1" "$2" || { echo "FAILED: $2"; exit 22; }
           got=$(sha256sum "$1" | cut -d' ' -f1)
           [ "$got" = "$3" ] || {
-            echo "::error::$2 is not the pinned asset (sha256 $got, pinned $3).\
- Either the upstream replaced it under the same tag, or the pin is stale:\
- check the release, then update the *_SHA pins in this action."
+            # one line: a shell continuation indented past the left edge of
+            # this block scalar would end the block, and YAML would read the
+            # rest of the file as a mapping
+            echo "::error::$2 is not the pinned asset (sha256 $got, pinned $3). Either the upstream replaced it under the same tag, or the pin is stale: check the release, then update the *_SHA pins in this action."
             exit 1
           }
         }

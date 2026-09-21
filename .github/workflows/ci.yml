@@ -24,8 +24,11 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install -r requirements.txt ruff pytest
+      - run: pip install -r requirements.txt ruff pytest pyyaml
       - run: ruff check scripts/ tests/
+      # a workflow file GitHub cannot load is not a failing build, it is
+      # no build, and nothing else here reads these files
+      - run: python scripts/lint_workflows.py
       - run: python -m pytest tests/ -q
   # one weight, style and family per job: the Latin donor (build_latin.py),
   # then the JP face on top (build.py), then both verified side by side;
