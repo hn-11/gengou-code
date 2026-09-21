@@ -12,11 +12,17 @@ single-component tag (a one-off hotfix, no VF drop) leaves the SCP pins at
 their current values - noted on stderr and in the summary - while the other
 upstreams still move; a slash-joined tag without a -vf part fails loudly.
 
-Every download URL is probed before anything is written. If an upstream
-renames an asset, this fails here with the URL in hand instead of opening a
-PR whose CI dies twenty minutes later at the fetch step.
+Every asset is downloaded and hashed before anything is written - the pins
+carry a sha256 beside each tag, because a GitHub release asset can be
+replaced without the tag moving, and the tag alone therefore does not say
+which bytes were built. If an upstream renames an asset, this fails here
+with the URL in hand instead of opening a PR whose CI dies twenty minutes
+later at the fetch step. If an upstream *replaces* an asset under a tag that
+did not move, this fails too, and says so: that is the case the hashes exist
+for, and it must not be papered over by writing the new hash.
 """
 
+import hashlib
 import os
 import re
 import subprocess
@@ -61,29 +67,70 @@ def scp_vf_zip(tag: str) -> str:
     raise ValueError(f"no -vf component in source-code-pro tag {tag!r}")
 
 
-def download_urls(pins: dict[str, str]) -> list[str]:
+# Which tag pins select each asset: a hash is allowed to move only when
+# one of these moved with it.
+SELECTORS = {
+    "SHS_SHA": ("SHS_TAG",),
+    "SCP_SHA": ("SCP_TAG", "SCP_VF_ZIP"),
+    "MONA_SHA": ("MONA_TAG",),
+    "NF_SHA": ("NF_TAG",),
+}
+
+
+def download_urls(pins: dict[str, str]) -> dict[str, str]:
     mona = pins["MONA_TAG"]
-    return [
-        f"https://github.com/{SHS_REPO}/releases/download/"
-        f"{pins['SHS_TAG']}/17_SourceHanSansJP.zip",
+    return {
+        "SHS_SHA": f"https://github.com/{SHS_REPO}/releases/download/"
+                   f"{pins['SHS_TAG']}/17_SourceHanSansJP.zip",
         # SCP_TAG is stored %2F-encoded, so it drops into the path as-is.
-        f"https://github.com/{SCP_REPO}/releases/download/"
-        f"{pins['SCP_TAG']}/{pins['SCP_VF_ZIP']}",
-        f"https://github.com/{MONA_REPO}/releases/download/"
-        f"{mona}/monaspace-variable-{mona}.zip",
-        f"https://github.com/{NF_REPO}/releases/download/"
-        f"{pins['NF_TAG']}/NerdFontsSymbolsOnly.zip",
-    ]
+        "SCP_SHA": f"https://github.com/{SCP_REPO}/releases/download/"
+                   f"{pins['SCP_TAG']}/{pins['SCP_VF_ZIP']}",
+        "MONA_SHA": f"https://github.com/{MONA_REPO}/releases/download/"
+                    f"{mona}/monaspace-variable-{mona}.zip",
+        "NF_SHA": f"https://github.com/{NF_REPO}/releases/download/"
+                  f"{pins['NF_TAG']}/NerdFontsSymbolsOnly.zip",
+    }
 
 
-def probe(url: str) -> None:
-    req = urllib.request.Request(url, method="HEAD")
+def digest(url: str) -> str:
+    """The asset's sha256, streamed rather than held in memory (the Source
+    Han Sans zip is 27 MB). Doubles as the reachability probe a HEAD used
+    to be: an upstream that renamed an asset fails here."""
+    sha = hashlib.sha256()
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with urllib.request.urlopen(url, timeout=300) as resp:
             if resp.status >= 400:
                 raise SystemExit(f"HTTP {resp.status} for {url}")
+            for chunk in iter(lambda: resp.read(1 << 20), b""):
+                sha.update(chunk)
     except urllib.error.URLError as exc:
         raise SystemExit(f"cannot reach {url}: {exc}") from exc
+    return sha.hexdigest()
+
+
+def hash_pins(current: dict[str, str], new: dict[str, str]) -> dict[str, str]:
+    """The sha256 of every asset `new` selects, checked against the pins.
+
+    A hash that moved while every tag selecting it stayed put means the
+    upstream replaced the asset under a fixed tag. Rewriting the pin then
+    would launder exactly what the pin is for, so this stops instead and
+    leaves the decision to a person."""
+    out = {}
+    for key, url in download_urls(new).items():
+        got = digest(url)
+        moved = any(current[k] != new[k] for k in SELECTORS[key])
+        if not moved and current.get(key) and current[key] != got:
+            raise SystemExit(
+                f"{url}\n"
+                f"  was replaced under an unmoved pin: sha256 {got}, "
+                f"pinned {current[key]}.\n"
+                f"  The tag did not change, so these are different bytes "
+                f"under the same name.\n"
+                f"  Check the upstream release before touching "
+                f"{key} in {ACTION}."
+            )
+        out[key] = got
+    return out
 
 
 def emit(changed: bool) -> None:
@@ -123,17 +170,20 @@ def main() -> int:
         "MONA_TAG": latest_tag(MONA_REPO),
         "NF_TAG": latest_tag(NF_REPO),
     }
-    missing = set(new) - set(current)
+    missing = (set(new) | set(SELECTORS)) - set(current)
     if missing:
         raise SystemExit(f"{ACTION} is missing pins: {sorted(missing)}")
 
     moved = {k: (current[k], v) for k, v in new.items() if current[k] != v}
+    # every run hashes the assets, moved or not: a replacement under a tag
+    # that did not move is the case the hashes exist for, and a run that
+    # returned early would never see it
+    new.update(hash_pins(current, new))
+    moved.update({k: (current[k], v) for k, v in new.items()
+                  if k in SELECTORS and current.get(k) != v})
     if not moved:
         emit(False)
         return 0
-
-    for url in download_urls(new):
-        probe(url)
 
     ACTION.write_text(
         PIN_RE.sub(lambda m: m["head"] + new.get(m["key"], m["val"]) + m["tail"], text)

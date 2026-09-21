@@ -134,14 +134,22 @@ NF_SYMBOLS=... python scripts/nerdpatch.py [面のパス | 名前の一部]
 上流の固定タグは `.github/actions/fetch-upstreams/action.yml` の
 「Pin upstream releases」ステップ（`SHS_TAG` / `SCP_TAG` / `SCP_VF_ZIP` /
 `MONA_TAG` / `NF_TAG`）に一元化されており、`ci.yml` / `release.yml` は
-このアクションを共有しています。
+このアクションを共有しています。同じステップに各アセットの SHA-256
+（`SHS_SHA` / `SCP_SHA` / `MONA_SHA` / `NF_SHA`）も置いてあり、取得した
+zip がこれと一致しなければ展開せずにその場で落ちます。GitHub のリリース
+資産はタグを変えずに差し替えられるので、**タグだけではどのバイト列で
+ビルドしたかを言えない**ためです。キャッシュキーもタグではなくハッシュ
+から作っています。
 
 通常は手で更新する必要はありません。`upstream-sync.yml`（毎週月曜 実行、
 `workflow_dispatch` でも起動可）が検知から出荷までを通しで回します:
 
 1. `scripts/bump_pins.py` が各上流の `releases/latest` を引き、ピンを書き
-   換える（ダウンロード URL を事前に HEAD で検証するので、上流がアセット
-   名を変えた場合はここで落ちる）。
+   換える。書き換える前に 4 つのアセットを実際に取得してハッシュを取るので、
+   上流がアセット名を変えた場合はここで落ちる。**タグが動いていないのに
+   ハッシュが変わっていた場合も落ちる** —— それは資産が差し替えられたと
+   いうことで、ピンを黙って書き換えるとハッシュを置いている意味がなくなる
+   ため、人間の判断に委ねる。
 2. `chore/upstream-sync` ブランチに PR を作成する。
 3. CI の各ジョブ（`upstream-sync.yml` の `REQUIRED_CHECKS`）が緑になるのを待って squash マージする。
 4. パッチを 1 つ上げたタグで `release.yml` を dispatch する。

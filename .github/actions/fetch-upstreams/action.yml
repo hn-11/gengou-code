@@ -37,6 +37,15 @@ runs:
         echo "SCP_VF_ZIP=VF-source-code-VF-1.026R.zip" >> "$GITHUB_ENV"
         echo "MONA_TAG=v1.400" >> "$GITHUB_ENV"
         echo "NF_TAG=v3.4.0" >> "$GITHUB_ENV"
+        # A GitHub release asset can be replaced without the tag moving, so
+        # the tag alone does not say which bytes were built. These do, and
+        # the fetch below refuses anything else. bump_pins.py rewrites them
+        # with the pins, and fails rather than rewriting one whose tag stayed
+        # put - that is the replacement this guards against.
+        echo "SHS_SHA=076a167394a2bf125a7ab13164a5ea1ce529b988d867c11052e83473b2a704f1" >> "$GITHUB_ENV"
+        echo "SCP_SHA=0660ba0cd1478f92cfcf2ad790b7aa29f8adb2daf15598f452a65ae61c9c9fb1" >> "$GITHUB_ENV"
+        echo "MONA_SHA=b69a7f2a3c455c89dcb6cc23b61bb3fb8beecba728ccdebeccd80577e58de0c8" >> "$GITHUB_ENV"
+        echo "NF_SHA=8e617904b980fe3648a4b116808788fe50c99d2d495376cb7c0badbd8a564c47" >> "$GITHUB_ENV"
     - name: Fetch upstreams (cached)
       uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       id: up
@@ -46,23 +55,43 @@ runs:
         # SCP_TAG as well as SCP_VF_ZIP: bump_pins.py derives the zip name
         # from the tag's -vf component alone, so a release that moves only
         # the upright or italic one left the key — and the cache — unchanged
-        key: upstreams-${{ env.SHS_TAG }}-${{ env.SCP_TAG }}-${{ env.SCP_VF_ZIP }}-${{ env.MONA_TAG }}-${{ env.NF_TAG }}
+        # The hashes, not the tags: a replaced asset under an unchanged tag
+        # moves the hash, and the cache must not serve the old extraction
+        # (or hide the replacement from the verification below).
+        key: upstreams-${{ env.SHS_SHA }}-${{ env.SCP_SHA }}-${{ env.MONA_SHA }}-${{ env.NF_SHA }}
     - if: steps.up.outputs.cache-hit != 'true'
       shell: bash
       run: |
         mkdir -p upstreams
-        fetch() { echo "fetching $2"; curl -sSfL -o "$1" "$2" || { echo "FAILED: $2"; exit 22; }; }
+        # $3 is the pinned sha256: nothing is unzipped before the bytes
+        # match it, so a replaced or truncated asset stops the run here
+        # rather than becoming fonts nobody looks at again.
+        fetch() {
+          echo "fetching $2"
+          curl -sSfL -o "$1" "$2" || { echo "FAILED: $2"; exit 22; }
+          got=$(sha256sum "$1" | cut -d' ' -f1)
+          [ "$got" = "$3" ] || {
+            echo "::error::$2 is not the pinned asset (sha256 $got, pinned $3).\
+ Either the upstream replaced it under the same tag, or the pin is stale:\
+ check the release, then update the *_SHA pins in this action."
+            exit 1
+          }
+        }
         fetch /tmp/shs.zip \
-          "https://github.com/adobe-fonts/source-han-sans/releases/download/${SHS_TAG}/17_SourceHanSansJP.zip"
+          "https://github.com/adobe-fonts/source-han-sans/releases/download/${SHS_TAG}/17_SourceHanSansJP.zip" \
+          "$SHS_SHA"
         unzip -qo /tmp/shs.zip -d upstreams/shs
         fetch /tmp/scp.zip \
-          "https://github.com/adobe-fonts/source-code-pro/releases/download/${SCP_TAG}/${SCP_VF_ZIP}"
+          "https://github.com/adobe-fonts/source-code-pro/releases/download/${SCP_TAG}/${SCP_VF_ZIP}" \
+          "$SCP_SHA"
         unzip -qo /tmp/scp.zip -d upstreams/scp
         fetch /tmp/mona.zip \
-          "https://github.com/githubnext/monaspace/releases/download/${MONA_TAG}/monaspace-variable-${MONA_TAG}.zip"
+          "https://github.com/githubnext/monaspace/releases/download/${MONA_TAG}/monaspace-variable-${MONA_TAG}.zip" \
+          "$MONA_SHA"
         unzip -qo /tmp/mona.zip -d upstreams/mona
         fetch /tmp/nf.zip \
-          "https://github.com/ryanoasis/nerd-fonts/releases/download/${NF_TAG}/NerdFontsSymbolsOnly.zip"
+          "https://github.com/ryanoasis/nerd-fonts/releases/download/${NF_TAG}/NerdFontsSymbolsOnly.zip" \
+          "$NF_SHA"
         unzip -qo /tmp/nf.zip -d upstreams/nf
     - name: Export upstream paths
       id: paths
