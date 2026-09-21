@@ -26,16 +26,13 @@ import build  # noqa: E402
 import build_latin_vf  # noqa: E402
 from verifylib import (  # noqa: E402
     Checker,
-    check_anchor_coverage,
-    check_anchor_placement,
     check_coverage_order,
     check_features_work,
     check_gdef_marks,
     check_gdi_family_name,
     check_heights,
     check_mark_class_closure,
-    check_mark_features,
-    check_marks_attach,
+    check_marks,
     check_private,
     check_style_bits,
     check_tables,
@@ -43,6 +40,7 @@ from verifylib import (  # noqa: E402
     ink_spill,
     make_shaper,
     static_faces,
+    vf_region_peaks,
 )
 
 FONT = Path(sys.argv[1]) if len(sys.argv) > 1 else (
@@ -298,23 +296,24 @@ def main():
     # Italic instance is where the statics' own weight extreme first
     # showed a leaning ascender; it is the one a default-only gate
     # misses, and it is a named instance here.
-    locations = sorted({round(axis.defaultValue), round(axis.minValue),
-                        round(axis.maxValue)}
-                       | {round(i.coordinates["wght"])
-                          for i in tf["fvar"].instances
-                          if "wght" in i.coordinates})
+    # the default, the two ends, every named instance -- and every
+    # master, read off the variation stores: a delta scoped to the
+    # region that peaks at the wght-365 master is zero at all of the
+    # former (verifylib.vf_region_peaks)
+    locations = sorted({axis.defaultValue, axis.minValue, axis.maxValue}
+                       | {i.coordinates["wght"] for i in tf["fvar"].instances
+                          if "wght" in i.coordinates}
+                       | set(vf_region_peaks(tf)))
+    peaks = vf_region_peaks(tf)
+    check(any(axis.minValue < p < axis.maxValue for p in peaks),
+          f"an intermediate master is probed ({[round(p, 2) for p in peaks]})")
     for loc in locations:
         inst = instantiateVariableFont(TTFont(FONT), {"wght": loc}, inplace=False)
         buf = io.BytesIO()
         inst.save(buf)
         inst = TTFont(io.BytesIO(buf.getvalue()))
         shape_at, gs_at = make_shaper(buf.getvalue()), inst.getGlyphSet()
-        at = f" at wght {loc}"
-        check_anchor_placement(inst, check, gs_at, at)
-        check_anchor_coverage(inst, check, gs_at, at)
-        check_marks_attach(inst, shape_at, check, at)
-        check_mark_features(inst, check, shape_at, gs_at, inst.getGlyphOrder(),
-                            inst.getBestCmap(), at)
+        check_marks(inst, check, shape_at, gs_at, f" at wght {round(loc, 2):g}")
     check_features_work(shape_default, check, vf_cmap)
     # the nameIDs verify_latin.py requires of the statics; 13 and 14 are
     # the licence and its URL, and dropping all seven passed this file

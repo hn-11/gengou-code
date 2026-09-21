@@ -3486,3 +3486,29 @@ def test_round_outlines_merges_the_overlaps_the_instancer_leaves():
     font.getGlyphSet()["a"].draw(area)
     assert abs(area.value) == 150 * 100
     assert font["hmtx"].metrics["a"] == (600, 0)
+
+
+def test_anchor_loose_marks_keeps_every_other_marks_anchor_across_two_insertions():
+    """The second insertion once paired a record list kept from before
+    the first with the fresh coverage, one off: the italic's caron took
+    the .cap anchor and drew through b's ascender."""
+    marks = _sixteen_marks()
+    marks["hi0"] = (0, _anchor(50, 180))       # a higher-drawn mark, its own anchor
+    heights = {**_HEIGHTS, **dict.fromkeys(marks, 100), "hi0": 300,
+               "candra": 100, "candra.cap": 300}
+    cmap = _letters_cmap(_HEIGHTS, {0x0300 + i: g for i, g in enumerate(marks)})
+    cmap |= {0x0310: "candra"}
+    font = _drawn_gpos_font(heights, cmap,
+                            [_markbase(marks, {g: [_anchor(50, h + 20)]
+                                               for g, h in _HEIGHTS.items()})])
+    _gdef_marks(font, [*marks, "candra", "candra.cap"])
+    _with_gsub(font, "feature ccmp { sub candra by candra.cap; } ccmp;\n")
+    before = {g: (r.MarkAnchor.XCoordinate, r.MarkAnchor.YCoordinate)
+              for g, r in zip(*[(s.MarkCoverage.glyphs, s.MarkArray.MarkRecord)
+                                for s in [font["GPOS"].table.LookupList.Lookup[0].SubTable[0]]][0])}
+    assert build.anchor_loose_marks(font) == 2
+    sub = font["GPOS"].table.LookupList.Lookup[0].SubTable[0]
+    after = {g: (r.MarkAnchor.XCoordinate, r.MarkAnchor.YCoordinate)
+             for g, r in zip(sub.MarkCoverage.glyphs, sub.MarkArray.MarkRecord)}
+    assert all(after[g] == a for g, a in before.items())
+    assert after["candra"] == (50, 0) and after["candra.cap"] == (50, 180)

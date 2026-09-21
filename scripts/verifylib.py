@@ -5,12 +5,14 @@ harmonize_latin.py share.
 """
 
 import math
+import statistics
 import sys
 import unicodedata
 from pathlib import Path
 
 import uharfbuzz as hb
 from fontTools.pens.boundsPen import BoundsPen
+from fontTools.varLib.models import piecewiseLinearMap
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build  # noqa: E402
@@ -595,48 +597,51 @@ def check_mark_class_closure(tf, check):
 
 
 # the above-marks the mkmk probe stacks two at a time
-STACK_MARKS = "\u0300\u0301\u0302\u0303\u0304\u0306\u0307\u0308\u030c\u030a"
 
 
-def check_mark_features(tf, check, shape, gs, order, cmap, label=""):
-    """The three GPOS features that put a mark where it belongs, the
-    GDEF classes their lookups filter on, and that a second accent is
-    actually lifted off the first.
+# ---- combining marks ---------------------------------------------------
+#
+# A combining mark in these donors is a spacing glyph -- Source Code
+# Pro's acute has a cell of advance with the ink inside it -- and the
+# shaper zeroes that advance for a mark. So a mark the font cannot
+# place does not land somewhere approximate: it lands one whole cell to
+# the right, on top of the next character. Every gate below exists
+# because some build shipped exactly that, or was shown it could: the
+# probe-set checks this file used to run reached one lookup in seven,
+# and round 7 then built twelve corrupted faces that passed the first
+# rewrite of these gates -- a NULL anchor, a lookup cut below the rule
+# floor, a mark dropped from a lookup's coverage, the .cap variants
+# uncovered, a mark's own anchor moved off its ink, a uniform drift of
+# every base anchor, mkmk anchors moved or removed, a language system
+# without the mark feature, a mark lookup under another feature, ccmp
+# composing to the wrong glyph, a variable-font delta at the unprobed
+# master. Each is named at the gate that now catches it.
 
-    The Latin faces inherit Source Code Pro's GPOS whole and the
-    variable fonts get theirs from a varLib merge, and both asked only
-    that 'mark' was there and 'kern' was not. Dropping 'mkmk' — or
-    clearing GDEF's MarkAttachClassDef, which is what its lookups
-    filter on — draws the two accents of x + U+0300 + U+0301 on top of
-    one another, and dropping GPOS 'ccmp' drops the tie bar's lift over
-    an ascender back to 0. All three passed both verifiers."""
-    gpos = {fr.FeatureTag for fr in tf["GPOS"].table.FeatureList.FeatureRecord} \
-        if "GPOS" in tf else set()
-    for tag in ("mark", "mkmk", "ccmp"):
-        check(tag in gpos, f"GPOS has {tag} ({sorted(gpos)})")
-    gdef = getattr(tf.get("GDEF"), "table", None)
-    named = set((getattr(getattr(gdef, "MarkAttachClassDef", None),
-                         "classDefs", None) or {}).values())
-    filtered = {lookup.LookupFlag >> 8
-                for lookup in (tf["GPOS"].table.LookupList.Lookup
-                               if "GPOS" in tf else [])} - {0}
-    check(filtered <= named,
-          f"GDEF names the mark classes GPOS filters on "
-          f"({sorted(filtered)}; GDEF has {sorted(named)})")
-    lifted = probes = 0
-    for base in "xz":
-        for first, second in zip(STACK_MARKS, STACK_MARKS[1:] + STACK_MARKS[:1]):
-            text = base + first + second
-            if any(ord(c) not in cmap for c in text):
-                continue
-            infos, positions = shape(text, {})
-            if len(infos) != 3:
-                continue          # composed: nothing left to stack
-            probes += 1
-            lifted += positions[2].y_offset > 0
-    check(probes and lifted, f"a second accent is lifted off the first"
-                             f"{label} ({lifted} of {probes} probes; 'mkmk')")
-
+# the common above-accents the donor lets a second mark stack on (its
+# mkmk Mark2 coverage; the caron is not among them)
+STACKABLE_MARKS = "\u0300\u0301\u0302\u0303\u0304\u0306\u0307\u0308\u030a"
+# the features a mark-to-base (4) or mark-to-mark (6) lookup may be
+# reached from: a lookup under any other feature still runs in a shaper
+# (HarfBuzz applies whatever GPOS names) and is outside every gate that
+# walks by feature, so the walk below is by lookup type and this is
+# asked of the feature instead
+MARK_FEATURES = frozenset({"mark", "abvm", "blwm", "vert"})
+MKMK_FEATURES = frozenset({"mkmk", "vert"})
+# the combining marks the donor anchors on a handful of letters only
+# (a lookup of 1-4 bases each: the left angle above, the horn, the
+# tilde overlay) and no rule extends -- see build.anchor_loose_letters.
+# Every other Latin mark must reach every letter
+SPARSE_MARKS = frozenset({0x031A, 0x031B, 0x0334})
+MARK_RANGES = ((0x0300, 0x036F), (0x1AB0, 0x1AFF), (0x1DC0, 0x1DFF))
+# the scripts the Latin layer draws and anchors: Latin through IPA,
+# Greek and Cyrillic, Latin Extended Additional, Greek Extended. What
+# check_anchor_coverage asks of every letter in them
+LETTER_RANGES = ((0x0041, 0x024F), (0x0370, 0x04FF), (0x1E00, 0x1EFF),
+                 (0x1F00, 0x1FFF))
+# from wght 300 up a second accent is lifted off the first: the donor's
+# own mkmk anchors lift it 30 at Light and 111 at Regular, and only at
+# its wght-200 master -- below every named instance -- do they not
+LIFT_FROM_WEIGHT = 300
 
 # Bounds for check_anchor_placement, from the anchors the ten statics
 # and the two variable fonts actually carry -- 36,269 of them. An
@@ -650,17 +655,46 @@ def check_mark_features(tf, check, shape, gs, order, cmap, label=""):
 # full-width glyph legitimately spreads its anchors further than a
 # one-cell one. One cell: 100 and 360. Full width: 167 and 600.
 _ANCHOR_X_SLACK = 0.167      # measured 70 of 600
-# as a share of the glyph's own advance, because a full-width glyph
-# legitimately spreads its anchors further than a one-cell one: the
-# Latin faces measure at most 0.42 of the advance, the JP faces 0.51
-# (Source Han Sans's own CJK anchors, which sit near the cell edge)
 _ANCHOR_X_FROM_CENTRE = 0.60  # measured 0.42 Latin, 0.51 JP
 _ANCHOR_Y_PAST_EDGE = 150    # measured 40 / 48
 _ANCHOR_Y_INTO_INK = 350     # measured 184 / 197
+# the rule a lookup's anchors follow (build._anchor_rule: a median
+# offset from the ink centre and from the ink edge) is itself bounded:
+# a uniform drift of every anchor passes each anchor's own band and
+# moves the fit instead. Measured over every face: dx 0..58 above and
+# -55..106 below (of a 600 or 1000 advance), dy 14..20 above and
+# -18..12 below
+_RULE_DX = {True: 0.15, False: 0.25}   # measured 0.097 above, 0.177 below
+_RULE_DY = 60                          # measured 20
+# a mark's own anchor (MarkArray / Mark1Array), against the mark's ink:
+# measured -190..65 from the ink centre, and within 130 of the ink
+# vertically. A mark anchor moved off its ink moves every accent the
+# same way, and the attach gate cannot see it because it derives its
+# expectation from the same anchor
+_MARK_X_FROM_CENTRE = 0.40   # measured 190 of 600
+_MARK_Y_PAST_INK = 250       # measured 130
+# where a second accent stacks (Mark2Array): measured from 86 below the
+# ink bottom to 2 short of the ink top
+_MARK2_BELOW_INK = 150       # measured 86
+# within a lookup the donor gives every mark drawn at one height the
+# same anchor -- (300, 500) for the above-marks, (300, 680) for their
+# .cap forms -- so a mark's anchor is held to the median over the marks
+# whose ink centre is within _MARK_BAND of its own. A mark given a
+# neighbour's anchor (the caron with the .cap form's, 169 up, when a
+# build paired a stale record list with a fresh coverage) sits on its
+# own ink still, and the attach gate uses whatever anchor it finds;
+# this is what says so. Measured deviation 78, at Bold, where the two
+# bands nearly meet
+_MARK_BAND = 80
+_MARK_ANCHOR_SPREAD = 120    # measured 78
+# the ascender letters and the above-accents an accent must clear: with
+# the anchors right, the mark's ink starts above the letter's; drawn
+# through the stem of b d f h k l (58 of 84 pairs, on the first graft)
+# it is a rendering defect no table check sees, and the one the JP
+# verifier caught when the caron took the .cap anchor
+CLEAR_BASES = "bdfhklt"
+CLEAR_MARKS = STACKABLE_MARKS + "\u030c"
 _BOPOMOFO = frozenset(range(0x3100, 0x3130)) | frozenset(range(0x31A0, 0x31C0))
-
-
-
 DOUBLE_SPAN = build.DOUBLE_SPAN
 
 
@@ -687,20 +721,33 @@ def ink_spill(bounds, advance, cmap, cell):
     return spill
 
 
-# the scripts the Latin layer draws and anchors: Latin through IPA,
-# Greek and Cyrillic, Latin Extended Additional, Greek Extended. What
-# check_anchor_coverage asks of every letter in them
-LETTER_RANGES = ((0x0041, 0x024F), (0x0370, 0x04FF), (0x1E00, 0x1EFF),
-                 (0x1F00, 0x1FFF))
+def _pos_lookups(tf):
+    """[(index, LookupType, [subtables], {feature tags})] over every
+    GPOS lookup, Extension unwrapped -- by type, not by feature, so a
+    lookup registered under the wrong feature is still walked."""
+    if "GPOS" not in tf:
+        return []
+    table = tf["GPOS"].table
+    tags = {}
+    for fr in table.FeatureList.FeatureRecord:
+        for li in fr.Feature.LookupListIndex:
+            tags.setdefault(li, set()).add(fr.FeatureTag)
+    out = []
+    for i, lookup in enumerate(table.LookupList.Lookup):
+        kind, subs = build._unwrap_pos(lookup)
+        out.append((i, kind, subs, tags.get(i, set())))
+    return out
 
 
 def _mark_base_subtables(tf):
-    """[(lookup index, subtable)] for the mark-to-base subtables that
-    place a mark ON the letter -- Source Han Sans's Bopomofo tone marks,
-    which go beside the syllable, are left out by name."""
+    """[(lookup index, subtable)] for every mark-to-base subtable that
+    places a mark ON the letter -- Source Han Sans's Bopomofo tone
+    marks, which go beside the syllable, are left out by name."""
     rev = {g: cp for cp, g in tf.getBestCmap().items()}
     out = []
-    for i, subs in build._mark_base_lookups(tf):
+    for i, kind, subs, _ in _pos_lookups(tf):
+        if kind != 4:
+            continue
         for sub in subs:
             if any(rev.get(g) in _BOPOMOFO for g in sub.BaseCoverage.glyphs):
                 continue
@@ -708,148 +755,150 @@ def _mark_base_subtables(tf):
     return out
 
 
-def check_anchor_coverage(tf, check, gs, label=""):
-    """Every letter the Latin layer draws is a base in every mark lookup
-    that follows a rule.
+def _mark_mark_subtables(tf):
+    return [(i, sub) for i, kind, subs, _ in _pos_lookups(tf) if kind == 6
+            for sub in subs]
 
-    This is build.anchor_loose_letters' own invariant, read back: that
-    pass gives a base anchor to every letter a rule-following lookup
-    did not cover, so afterwards none is missing. A letter that IS
-    missing means the pass did not reach this face, or reached it and
-    lost letters -- which is the state the two variable fonts shipped
-    in for a round, 502 anchors against the statics' 3,313, while every
-    check then in place sampled 27 letters and saw none of it. No
-    sample here: the coverage is compared against the cmap.
-    """
+
+def _letters(tf, gs):
+    """The glyphs that take an accent: every cmapped letter of the
+    Latin layer's scripts that draws, and what GSUB turns one into
+    (the Serbian locl б, a cvNN variant), since the shaper substitutes
+    before it positions."""
     cmap = tf.getBestCmap()
     letters = {g for cp, g in cmap.items()
                if any(lo <= cp <= hi for lo, hi in LETTER_RANGES)
-               and unicodedata.category(chr(cp)).startswith("L")
-               and build._bounds(gs, g)}
-    missing = {}
-    for i, sub in _mark_base_subtables(tf):
-        if build._anchor_rule(gs, sub) is None:
-            continue           # too few bases to follow a rule: the donor's own
-        gap = letters - set(sub.BaseCoverage.glyphs)
-        if gap:
-            missing[i] = (len(gap), sorted(gap)[:3])
-    check(not missing, f"every letter is a base in every rule-following mark "
-                       f"lookup{label} ({len(letters)} letters; missing, by "
-                       f"lookup: {missing})")
+               and unicodedata.category(chr(cp)).startswith("L")}
+    letters |= build._letter_variants(tf, letters)
+    return {g for g in letters if build._bounds(gs, g)}
 
 
-def check_marks_attach(tf, shape, check, label=""):
-    """The shaper puts each mark exactly where its anchors say.
+def _latin_marks(tf, gs):
+    """{codepoint: glyph} for the combining marks the Latin layer
+    encodes and GDEF files as marks, less the double diacritics."""
+    classes = tf["GDEF"].table.GlyphClassDef.classDefs if "GDEF" in tf else {}
+    return {cp: g for cp, g in tf.getBestCmap().items()
+            if any(lo <= cp <= hi for lo, hi in MARK_RANGES)
+            and classes.get(g) == 3 and cp not in DOUBLE_SPAN and build._bounds(gs, g)}
 
-    check_anchor_placement asks whether the anchors are right; this
-    asks whether they are USED. A right anchor is applied only if the
-    mark is a mark in GDEF, the lookup is reached from the feature, its
-    flag does not filter the mark out, and nothing earlier in the run
-    composed or substituted the pair away. When it is applied the
-    mark's position is fully determined -- the mark anchor is laid on
-    the base anchor -- so the check is an equality, not a threshold:
-    x_offset == base.x - mark.x - the base's advance (the pen has moved
-    on), y_offset == base.y - mark.y, and x_advance == 0. The advance
-    is part of it because the shaper positions a glyph it finds in
-    MarkCoverage whether or not GDEF calls it a mark; what GDEF decides
-    is whether its spacing advance is zeroed, and a mark that keeps one
-    pushes the next character along by a cell. The probe-set checks
-    this replaces re-derived the geometry from ink with allowances
-    instead, and every allowance was either a false positive on the
-    next weight or a hole.
 
-    Coverage-driven: every base in each subtable's coverage against one
-    of its marks, and every mark against one of its bases -- every
-    anchor in the face is exercised, not 215 pairs. A pair the shaper
-    composes into one glyph, or substitutes a variant into, is skipped
-    and counted, so a face where nothing at all attaches still fails.
-    """
-    cmap = tf.getBestCmap()
-    rev = {g: cp for cp, g in cmap.items()}
-    order = tf.getGlyphOrder()
-    hmtx = tf["hmtx"].metrics
-    subtables = _mark_base_subtables(tf)
+def check_mark_features(tf, check, label=""):
+    """The GPOS features that put a mark where it belongs, and the GDEF
+    classes their lookups filter on.
 
-    def expected(base_g, mark_g):
-        """What the FIRST subtable covering both puts the mark at."""
-        for _, sub in subtables:
-            if base_g not in sub.BaseCoverage.glyphs:
+    Dropping 'mkmk' -- or clearing GDEF's MarkAttachClassDef, which is
+    what its lookups filter on -- draws the two accents of x + U+0300 +
+    U+0301 on top of one another, and dropping GPOS 'ccmp' drops the
+    tie bar's lift over an ascender back to 0."""
+    gpos = {fr.FeatureTag for fr in tf["GPOS"].table.FeatureList.FeatureRecord} \
+        if "GPOS" in tf else set()
+    for tag in ("mark", "mkmk", "ccmp"):
+        check(tag in gpos, f"GPOS has {tag}{label} ({sorted(gpos)})")
+    gdef = getattr(tf.get("GDEF"), "table", None)
+    named = set((getattr(getattr(gdef, "MarkAttachClassDef", None),
+                         "classDefs", None) or {}).values())
+    filtered = {lookup.LookupFlag >> 8
+                for lookup in (tf["GPOS"].table.LookupList.Lookup
+                               if "GPOS" in tf else [])} - {0}
+    check(filtered <= named,
+          f"GDEF names the mark classes GPOS filters on{label} "
+          f"({sorted(filtered)}; GDEF has {sorted(named)})")
+
+
+def check_mark_reachability(tf, check, label=""):
+    """Every mark-to-base lookup is reached from a mark feature and
+    every mark-to-mark lookup from mkmk (or vert, for the vertical
+    forms).
+
+    A lookup moved under GPOS 'ccmp' still runs -- HarfBuzz applies
+    what the feature names -- but was outside every gate that walked
+    the 'mark' feature, so its base anchors moved a cell left passed
+    (round 7, mutant 13). The gates below walk by lookup type; this is
+    what keeps the feature honest."""
+    off = [(i, kind, sorted(tags)) for i, kind, _, tags in _pos_lookups(tf)
+           if (kind == 4 and not tags & MARK_FEATURES)
+           or (kind == 6 and not tags & MKMK_FEATURES)]
+    check(not off, f"every mark lookup is reached from a mark feature{label} "
+                   f"(off: {off})")
+
+
+def check_langsys_parity(tf, check, label=""):
+    """Every language system reaches the same mark features as every
+    other.
+
+    A shaper applies the features of the LangSys it resolves the run
+    to, and a LangSys that lost 'mark' loses every accent under that
+    language alone: cyrl/SRB without mark+mkmk put а+U+0301's accent
+    a cell right under lang=sr and nowhere else (round 7, mutant 7).
+    Every gate here shapes with the script and language HarfBuzz
+    guesses, so this reads the table instead."""
+    if "GPOS" not in tf:
+        return
+    table = tf["GPOS"].table
+    tags = [fr.FeatureTag for fr in table.FeatureList.FeatureRecord]
+    reach = {}
+    for sr in table.ScriptList.ScriptRecord:
+        systems = [("dflt", sr.Script.DefaultLangSys)]
+        systems += [(lr.LangSysTag, lr.LangSys) for lr in sr.Script.LangSysRecord]
+        for lang, ls in systems:
+            if ls is None:
                 continue
-            if mark_g not in sub.MarkCoverage.glyphs:
-                continue
-            rec = sub.MarkArray.MarkRecord[sub.MarkCoverage.glyphs.index(mark_g)]
-            base = sub.BaseArray.BaseRecord[sub.BaseCoverage.glyphs.index(base_g)]
-            ba, ma = base.BaseAnchor[rec.Class], rec.MarkAnchor
-            if ba is None or ma is None:
-                return None
-            return (ba.XCoordinate - ma.XCoordinate - hmtx[base_g][0],
-                    ba.YCoordinate - ma.YCoordinate, 0)
-        return None
-
-    def encoded(glyphs):
-        return [g for g in glyphs if g in rev]
-
-    exact = skipped = 0
-    wrong = {}
-    seen = set()
-    for i, sub in subtables:
-        marks = encoded(sub.MarkCoverage.glyphs)
-        bases = encoded(sub.BaseCoverage.glyphs)
-        if not marks or not bases:
-            continue
-        pairs = [(b, marks[0]) for b in bases] + [(bases[0], m) for m in marks]
-        for base_g, mark_g in pairs:
-            if (base_g, mark_g) in seen:
-                continue
-            seen.add((base_g, mark_g))
-            want = expected(base_g, mark_g)
-            infos, positions = shape(chr(rev[base_g]) + chr(rev[mark_g]), {})
-            got = [order[info.codepoint] for info in infos]
-            if want is None or got != [base_g, mark_g]:
-                skipped += 1          # composed, substituted, or unanchored
-                continue
-            pos = (positions[1].x_offset, positions[1].y_offset,
-                   positions[1].x_advance)
-            if pos == want:
-                exact += 1
-            else:
-                wrong.setdefault(i, []).append((base_g, mark_g, pos, want))
-    worst = {i: (len(v), v[:2]) for i, v in wrong.items()}
-    check(exact and not wrong,
-          f"the shaper lays every mark on its anchor{label} "
-          f"({exact} pairs exact, {skipped} skipped; off, by lookup: {worst})")
+            reach[(sr.ScriptTag, lang)] = frozenset(
+                tags[i] for i in ls.FeatureIndex) & {"mark", "mkmk"}
+    every = frozenset().union(*reach.values()) if reach else frozenset()
+    short = {k: sorted(every - v) for k, v in reach.items() if v != every}
+    check(not short, f"every language system reaches the mark features{label} "
+                     f"({len(reach)} systems; short: {short})")
 
 
 def check_anchor_placement(tf, check, gs, label=""):
-    """Every base anchor sits on the glyph it belongs to.
+    """Every anchor sits on the glyph it belongs to: a base anchor on
+    its letter, in the band its lookup's rule puts it; a mark anchor on
+    the mark's own ink; a stacking anchor on the mark it stacks on.
 
-    The other two accent checks shape a probe set -- 27 letters by ten
-    above-accents -- and that reaches ONE of the seven mark-to-base
-    lookups and 215 of the 2,811 anchors a face carries. 88% of them
-    are in the cedilla, below-mark and ogonek lookups, which no probe
-    touched: moving every one of those a whole cell left, so that a
-    cedilla draws inside the PREVIOUS character's cell, passed every
-    gate this repository had. So did zeroing their x, and so did
-    lifting any mark to three cells above its letter -- there was no
-    upper bound anywhere.
-
-    This one has no probe set to miss. It reads the anchors themselves,
-    asserts each lies on its own glyph, and covers every anchor in
-    every lookup at once -- 2,811 per Latin face against the probe
-    set's 215. Which edge a lookup's anchors track
-    comes from the lookup's own anchors (build._anchor_rule), the same
-    way the build fits them; a lookup too small to fit is held to the
-    looser rule that the anchor be somewhere on the glyph at all.
-    """
+    Structural -- no shaper, no probe set to miss: it reads the anchors
+    themselves. A base anchor must lie inside the letter's ink plus a
+    sixth of the advance, within 0.6 of the advance from the ink's
+    centre, and on the right side of whichever ink edge its lookup's
+    own anchors track (build._anchor_rule); a NULL anchor in a one-
+    class lookup is an anchor that places nothing (mutant 5). The
+    fitted rule's own offsets are bounded too, since a uniform drift of
+    every anchor moves the fit rather than any anchor's residual
+    (mutant 4). A mark's anchor must sit on the mark's ink (mutant 2),
+    which the attach gate cannot ask, deriving its expectation from
+    that same anchor; and a Mark2 anchor between the ink bottom and the
+    ink top of the mark another stacks on (mutant 1), lifting it by
+    something from wght 300 up (the italic donor's grave, acute, breve
+    and ring did not, and drew x̀́ as one accent on the other)."""
     off = {}
     hmtx = tf["hmtx"].metrics
+    cmap = tf.getBestCmap()
+    rev = {g: cp for cp, g in cmap.items()}
+
+    def mark_off(gn, anchor):
+        box = build._bounds(gs, gn)
+        if anchor is None or not box:
+            return None
+        x, y = anchor.XCoordinate, anchor.YCoordinate
+        if (abs(x - (box[0] + box[2]) / 2) > _MARK_X_FROM_CENTRE * build.CELL
+                or not box[1] - _MARK_Y_PAST_INK <= y <= box[3] + _MARK_Y_PAST_INK):
+            return (gn, x, y, tuple(round(v) for v in box))
+        return None
+
     for i, sub in _mark_base_subtables(tf):
         rule = build._anchor_rule(gs, sub)
         top = rule[0] if rule else None
+        if rule and (abs(rule[1]) > _RULE_DX[rule[0]] * max(hmtx[g][0] for g in sub.BaseCoverage.glyphs)
+                     or abs(rule[2]) > _RULE_DY):
+            off.setdefault(i, []).append(("rule", rule))
         for gn, rec in zip(sub.BaseCoverage.glyphs, sub.BaseArray.BaseRecord):
             anchor = rec.BaseAnchor[0] if rec.BaseAnchor else None
             box = build._bounds(gs, gn)
-            if anchor is None or not box:
+            if anchor is None:
+                if sub.ClassCount == 1 and box:
+                    off.setdefault(i, []).append((gn, None))
+                continue
+            if not box:
                 continue
             x, y = anchor.XCoordinate, anchor.YCoordinate
             centre = (box[0] + box[2]) / 2
@@ -867,9 +916,385 @@ def check_anchor_placement(tf, check, gs, label=""):
                     or not lo <= y <= hi):
                 off.setdefault(i, []).append(
                     (gn, x, y, tuple(round(v) for v in box)))
+        rows = []
+        for gn, rec in zip(sub.MarkCoverage.glyphs, sub.MarkArray.MarkRecord):
+            bad = mark_off(gn, rec.MarkAnchor)
+            if bad:
+                off.setdefault(i, []).append(bad)
+            box = build._bounds(gs, gn)
+            if box and rec.MarkAnchor is not None:
+                rows.append((gn, (box[1] + box[3]) / 2, rec.MarkAnchor))
+        if len(rows) >= 16:
+            for gn, mid, anchor in rows:
+                alike = [a for _, c, a in rows if abs(c - mid) <= _MARK_BAND]
+                mx = statistics.median(a.XCoordinate for a in alike)
+                my = statistics.median(a.YCoordinate for a in alike)
+                if max(abs(anchor.XCoordinate - mx), abs(anchor.YCoordinate - my)) > _MARK_ANCHOR_SPREAD:
+                    off.setdefault(i, []).append(
+                        (gn, anchor.XCoordinate, anchor.YCoordinate,
+                         "against its band's", (mx, my)))
+    lift_due = tf["OS/2"].usWeightClass >= LIFT_FROM_WEIGHT if "OS/2" in tf else True
+    for i, sub in _mark_mark_subtables(tf):
+        ones = {}
+        for gn, rec in zip(sub.Mark1Coverage.glyphs, sub.Mark1Array.MarkRecord):
+            ones[gn] = rec.MarkAnchor
+            bad = mark_off(gn, rec.MarkAnchor)
+            if bad:
+                off.setdefault(i, []).append(bad)
+        for gn, rec in zip(sub.Mark2Coverage.glyphs, sub.Mark2Array.Mark2Record):
+            box = build._bounds(gs, gn)
+            if not box:
+                continue
+            for anchor in rec.Mark2Anchor:
+                if anchor is None:
+                    continue
+                y = anchor.YCoordinate
+                own = ones.get(gn)
+                collapsed = (lift_due and own is not None and y <= own.YCoordinate
+                             and rev.get(gn) is not None)
+                if (not box[1] - _MARK2_BELOW_INK <= y <= box[3]
+                        or abs(anchor.XCoordinate - (box[0] + box[2]) / 2)
+                        > _MARK_X_FROM_CENTRE * build.CELL or collapsed):
+                    off.setdefault(i, []).append(
+                        (gn, anchor.XCoordinate, y, tuple(round(v) for v in box),
+                         "stacks on itself" if collapsed else "off the mark"))
     worst = {i: (len(v), v[:2]) for i, v in off.items()}
-    check(not off, f"every base anchor sits on its own glyph{label} "
+    check(not off, f"every anchor sits on its own glyph{label} "
                    f"(off, by lookup: {worst})")
+
+
+def check_anchor_coverage(tf, check, gs, label=""):
+    """Every combining mark of the Latin layer can be placed on every
+    letter: the lookups covering the mark cover, between them, every
+    letter and every variant GSUB makes of one.
+
+    build.anchor_loose_letters' own invariant, read back by mark rather
+    than by lookup. Read by lookup, "a lookup with fewer bases than the
+    rule needs is the donor's own and asks nothing" excused a lookup
+    cut from 833 bases to 15 (mutant 12): the fewer bases survived,
+    the less was asked. By mark there is no floor to fall under: the
+    acute must reach every letter, whatever lookup it is in, and the
+    three marks the donor anchors on a handful of letters only are
+    named (SPARSE_MARKS). The two variable fonts once shipped with 502
+    base anchors against the statics' 3,313 while every probe passed;
+    this is what would have said so."""
+    letters = _letters(tf, gs)
+    marks = _latin_marks(tf, gs)
+    subtables = _mark_base_subtables(tf)
+    missing = {}
+    for cp, g in sorted(marks.items()):
+        if cp in SPARSE_MARKS:
+            continue
+        covered = set()
+        for _, sub in subtables:
+            if g in sub.MarkCoverage.glyphs:
+                covered |= set(sub.BaseCoverage.glyphs)
+        gap = letters - covered
+        if gap:
+            missing[f"U+{cp:04X}"] = (len(gap), sorted(gap)[:3])
+    check(not missing, f"every mark reaches every letter{label} "
+                       f"({len(marks)} marks, {len(letters)} letters; short, by "
+                       f"mark: {missing})")
+
+
+class _MarkModel:
+    """What GPOS says a run of one base and its marks is positioned
+    as, read off the tables so the shaper can be held to it exactly.
+
+    A mark attaches to the base through the first mark-to-base
+    subtable covering both (its anchor laid on the base's, the base's
+    advance already taken by the pen: x_offset = base.x - mark.x -
+    advance, y_offset = base.y - mark.y, x_advance = 0), unless a
+    mark-to-mark subtable covers the mark before it as Mark2 and this
+    one as Mark1, in which case it stacks: the previous mark's offset
+    plus (Mark2 anchor - Mark1 anchor). A NULL anchor places nothing,
+    and a mark nothing covers is placed nowhere -- both are None."""
+
+    def __init__(self, tf):
+        self.hmtx = tf["hmtx"].metrics
+        self.bases = _mark_base_subtables(tf)
+        self.stacks = _mark_mark_subtables(tf)
+
+    def on_base(self, base_g, mark_g):
+        for _, sub in self.bases:
+            if base_g not in sub.BaseCoverage.glyphs or mark_g not in sub.MarkCoverage.glyphs:
+                continue
+            rec = sub.MarkArray.MarkRecord[sub.MarkCoverage.glyphs.index(mark_g)]
+            base = sub.BaseArray.BaseRecord[sub.BaseCoverage.glyphs.index(base_g)]
+            ba, ma = base.BaseAnchor[rec.Class], rec.MarkAnchor
+            if ba is None or ma is None:
+                return None
+            return (ba.XCoordinate - ma.XCoordinate - self.hmtx[base_g][0],
+                    ba.YCoordinate - ma.YCoordinate, 0)
+        return None
+
+    def on_mark(self, below_g, mark_g):
+        """(Mark2 anchor - Mark1 anchor), or None if the pair does not
+        stack."""
+        for _, sub in self.stacks:
+            if below_g not in sub.Mark2Coverage.glyphs or mark_g not in sub.Mark1Coverage.glyphs:
+                continue
+            rec = sub.Mark1Array.MarkRecord[sub.Mark1Coverage.glyphs.index(mark_g)]
+            a2 = sub.Mark2Array.Mark2Record[sub.Mark2Coverage.glyphs.index(below_g)].Mark2Anchor[rec.Class]
+            a1 = rec.MarkAnchor
+            if a2 is None or a1 is None:
+                return None
+            return (a2.XCoordinate - a1.XCoordinate, a2.YCoordinate - a1.YCoordinate)
+        return None
+
+    def run(self, glyphs):
+        """The expected (x_offset, y_offset, x_advance) of each mark in
+        a shaped run [base, mark, mark, ...], None where nothing
+        places it."""
+        out = []
+        prev = None
+        for j, g in enumerate(glyphs[1:], 1):
+            lift = self.on_mark(glyphs[j - 1], g) if j > 1 and prev is not None else None
+            if lift is not None:
+                pos = (prev[0] + lift[0], prev[1] + lift[1], 0)
+            else:
+                pos = self.on_base(glyphs[0], g)
+            out.append(pos)
+            prev = pos
+        return out
+
+
+def _hold_run(model, shape, order, rev, text, wrong, key):
+    """Shape `text` and hold every mark in the result to the model.
+    Returns the count of marks placed exactly; a run composed into one
+    glyph counts as one when that glyph is the composed character's.
+    A sparse mark (SPARSE_MARKS) the model places nowhere is the
+    donor's own handful of letters, not a finding."""
+    infos, positions = shape(text, {})
+    got = [order[info.codepoint] for info in infos]
+    if len(got) == 1:
+        whole = unicodedata.normalize("NFC", text)
+        if len(whole) == 1 and rev.get(got[0]) == ord(whole):
+            return 1
+        wrong.setdefault(key, []).append((text, "composed to", got[0]))
+        return 0
+    n = 0
+    for j, expect in enumerate(model.run(got), 1):
+        pos = (positions[j].x_offset, positions[j].y_offset, positions[j].x_advance)
+        if expect is None:
+            if rev.get(got[j]) in SPARSE_MARKS:
+                continue
+            wrong.setdefault(key, []).append((text, got, "unanchored", got[j]))
+        elif pos == expect:
+            n += 1
+        else:
+            wrong.setdefault(key, []).append((text, got, got[j], pos, expect))
+    return n
+
+
+def check_marks_attach(tf, shape, check, label=""):
+    """The shaper puts each mark exactly where its anchors say.
+
+    check_anchor_placement asks whether the anchors are right; this
+    asks whether they are USED. A right anchor is applied only if the
+    mark is a mark in GDEF, the lookup is reached, its flag does not
+    filter the mark out, and nothing earlier in the run composed or
+    substituted the pair away. When it is applied the mark's position
+    is fully determined, so the check is an equality, not a threshold
+    (_MarkModel says which): x_offset == base.x - mark.x - the base's
+    advance, y_offset == base.y - mark.y, and x_advance == 0. The
+    advance is part of it because the shaper positions a glyph it
+    finds in MarkCoverage whether or not GDEF calls it a mark; what
+    GDEF decides is whether its spacing advance is zeroed, and a mark
+    that keeps one pushes the next character along by a cell.
+
+    Coverage-driven: every base in each subtable against one of its
+    marks, and every mark against one of its bases. Nothing is skipped
+    (the first rewrite skipped 38% of its pairs as "composed or
+    substituted", which hid a mark dropped from the coverage and the
+    .cap variants uncovered, mutants 10 and 6): whatever the shaper
+    makes of the pair -- the acute swapped for acute.cap after a
+    capital, a precomposed base decomposed and its marks reordered --
+    is held to the model glyph by glyph, and a pair composed into one
+    glyph must compose to the cmap's glyph for that character
+    (mutant 9). The three sparse marks may fall off a letter their
+    lookup does not cover (SPARSE_MARKS); nothing else may."""
+    rev = {g: cp for cp, g in tf.getBestCmap().items()}
+    order = tf.getGlyphOrder()
+    model = _MarkModel(tf)
+    exact = 0
+    wrong = {}
+    seen = set()
+    for i, sub in model.bases:
+        marks = [g for g in sub.MarkCoverage.glyphs if g in rev]
+        bases = [g for g in sub.BaseCoverage.glyphs if g in rev]
+        if not marks or not bases:
+            continue
+        pairs = [(b, marks[0]) for b in bases] + [(bases[0], m) for m in marks]
+        for base_g, mark_g in pairs:
+            if (base_g, mark_g) in seen:
+                continue
+            seen.add((base_g, mark_g))
+            exact += _hold_run(model, shape, order, rev,
+                               chr(rev[base_g]) + chr(rev[mark_g]), wrong, i)
+    worst = {i: (len(v), v[:2]) for i, v in wrong.items()}
+    check(exact and not wrong,
+          f"the shaper lays every mark on its anchor{label} "
+          f"({exact} marks exact; off, by lookup: {worst})")
+
+
+def check_marks_stack(tf, shape, check, label=""):
+    """A second accent stacks exactly where the first one's Mark2
+    anchor says, and the common above-accents can all be stacked on.
+
+    The mark-to-mark half of check_marks_attach, through the same
+    model: the second mark's offset is the first's plus (Mark2 anchor
+    - its own Mark1 anchor). Every Mark2 mark against one Mark1 and
+    one Mark2 against every Mark1, each on a letter the first mark
+    attaches to that no precomposed character absorbs. Asking only
+    that SOME probe was lifted passed a face where four of the ten
+    stacked on themselves (mutant 8); asking every pair does not, and
+    a mark removed from Mark2Coverage is a mark nothing can stack on."""
+    cmap = tf.getBestCmap()
+    rev = {g: cp for cp, g in cmap.items()}
+    order = tf.getGlyphOrder()
+    gs = tf.getGlyphSet()
+    model = _MarkModel(tf)
+    stackable = set()
+    for _, sub in model.stacks:
+        for g, rec in zip(sub.Mark2Coverage.glyphs, sub.Mark2Array.Mark2Record):
+            if g in rev and any(a is not None for a in rec.Mark2Anchor):
+                stackable.add(rev[g])
+    cannot = [f"U+{ord(c):04X}" for c in STACKABLE_MARKS
+              if ord(c) in cmap and ord(c) not in stackable]
+    check(not cannot, f"every common accent can take a second one{label} "
+                      f"(no Mark2 anchor: {cannot})")
+
+    seats = {}
+
+    def seat(mark_g):
+        """A letter the mark attaches to as [letter, mark], exactly."""
+        if mark_g in seats:
+            return seats[mark_g]
+        seats[mark_g] = None
+        for _, sub in model.bases:
+            if mark_g not in sub.MarkCoverage.glyphs:
+                continue
+            for base_g in sub.BaseCoverage.glyphs:
+                if base_g not in rev or not build._bounds(gs, base_g):
+                    continue
+                text = chr(rev[base_g]) + chr(rev[mark_g])
+                if len(unicodedata.normalize("NFC", text)) != 2:
+                    continue
+                infos, positions = shape(text, {})
+                if [order[i.codepoint] for i in infos] != [base_g, mark_g]:
+                    continue
+                if model.on_base(base_g, mark_g) == (
+                        positions[1].x_offset, positions[1].y_offset,
+                        positions[1].x_advance):
+                    seats[mark_g] = base_g
+                    return base_g
+        return None
+
+    exact = 0
+    wrong = {}
+    for i, sub in model.stacks:
+        ones = [g for g in sub.Mark1Coverage.glyphs if g in rev]
+        twos = [g for g in sub.Mark2Coverage.glyphs if g in rev]
+        if not ones or not twos:
+            continue
+        pairs = {(m2, ones[0]) for m2 in twos} | {(twos[0], m1) for m1 in ones}
+        for m2, m1 in sorted(pairs, key=lambda p: (order.index(p[0]), order.index(p[1]))):
+            if model.on_mark(m2, m1) is None:
+                continue          # this class does not stack here
+            base_g = seat(m2)
+            if base_g is None:
+                wrong.setdefault(i, []).append((m2, "attaches to no letter"))
+                continue
+            text = chr(rev[base_g]) + chr(rev[m2]) + chr(rev[m1])
+            if len(unicodedata.normalize("NFC", text)) != 3:
+                continue
+            exact += _hold_run(model, shape, order, rev, text, wrong, i)
+    worst = {i: (len(v), v[:2]) for i, v in wrong.items()}
+    check(exact and not wrong,
+          f"the shaper stacks every second mark on the first{label} "
+          f"({exact} marks exact; off, by lookup: {worst})")
+
+
+def check_marks_clear(tf, shape, check, gs, label=""):
+    """An accent sits ON an ascender letter, not through it: for each
+    of CLEAR_BASES and CLEAR_MARKS, the mark's ink begins above the
+    letter's.
+
+    Source Code Pro places its marks entirely in GPOS -- the top anchor
+    of an ascender is 229 units above an x-height letter's -- and a
+    wrong anchor on either side is a mark drawn through the stem. A
+    probe set, kept because it asks something no table bound can: the
+    letters it names are exactly the ones whose ink reaches the mark."""
+    cmap = tf.getBestCmap()
+    order = tf.getGlyphOrder()
+    through, pairs = {}, 0
+    for base in CLEAR_BASES:
+        for mark in CLEAR_MARKS:
+            if ord(base) not in cmap or ord(mark) not in cmap:
+                continue
+            infos, positions = shape(base + mark, {})
+            if len(infos) != 2:
+                continue        # composed into one glyph: nothing to clear
+            boxes = [build._bounds(gs, order[info.codepoint]) for info in infos]
+            pairs += 1
+            if None in boxes:
+                through[base + mark] = None
+            elif boxes[1][1] + positions[1].y_offset < boxes[0][3]:
+                through[base + mark] = (round(boxes[0][3]),
+                                        round(boxes[1][1] + positions[1].y_offset))
+    check(not through, f"an accent clears the letter it sits on{label} "
+                       f"({pairs} pairs; through: {through})")
+
+
+def check_marks(tf, check, shape, gs, label=""):
+    """Every mark gate, in the order they build on each other: the
+    features and classes, the lookups' reachability, the language
+    systems, the anchors themselves, the coverage, then what the
+    shaper makes of them -- exactly, and clear of the letter."""
+    check_mark_features(tf, check, label)
+    check_mark_reachability(tf, check, label)
+    check_langsys_parity(tf, check, label)
+    check_anchor_placement(tf, check, gs, label)
+    check_anchor_coverage(tf, check, gs, label)
+    check_marks_attach(tf, shape, check, label)
+    check_marks_stack(tf, shape, check, label)
+    check_marks_clear(tf, shape, check, gs, label)
+
+
+def vf_region_peaks(tf, axis_tag="wght"):
+    """The user-space locations of every variation region's peak on
+    `axis_tag`, from the CFF2 and GDEF variation stores -- the masters.
+
+    A delta scoped to the region that peaks at an intermediate master
+    is zero at the default and at the axis ends, and a fraction of
+    itself at the named instances between: verify_latin_vf.py probing
+    the default, the ends and the instances passed a font whose base
+    anchors dropped 400 units at the wght-365 master (mutant 11). The
+    peaks are read through avar back to user space."""
+    fvar = tf["fvar"]
+    index = next(i for i, a in enumerate(fvar.axes) if a.axisTag == axis_tag)
+    axis = fvar.axes[index]
+    peaks = set()
+    stores = []
+    if "GDEF" in tf and getattr(tf["GDEF"].table, "VarStore", None) is not None:
+        stores.append(tf["GDEF"].table.VarStore)
+    if "CFF2" in tf:
+        vs = getattr(tf["CFF2"].cff.topDictIndex[0], "VarStore", None)
+        if vs is not None:
+            stores.append(vs.otVarStore)
+    for store in stores:
+        for region in store.VarRegionList.Region:
+            peaks.add(region.VarRegionAxis[index].PeakCoord)
+    segments = tf["avar"].segments[axis_tag] if "avar" in tf else {}
+    inverse = {v: k for k, v in segments.items()}
+
+    def user(n):
+        if inverse:
+            n = piecewiseLinearMap(n, inverse)
+        span = (axis.defaultValue - axis.minValue) if n < 0 else (axis.maxValue - axis.defaultValue)
+        return axis.defaultValue + n * span
+    return sorted(user(n) for n in peaks if n != 0)
 
 
 # one ligature from each stylistic-set group (build.LIGATURES' `group`),

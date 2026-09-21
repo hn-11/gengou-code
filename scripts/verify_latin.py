@@ -17,16 +17,13 @@ import build_latin  # noqa: E402
 from verify import CASES  # noqa: E402
 from verifylib import (  # noqa: E402
     Checker,
-    check_anchor_coverage,
-    check_anchor_placement,
     check_coverage_order,
     check_features_work,
     check_gdef_marks,
     check_gdi_family_name,
     check_heights,
     check_mark_class_closure,
-    check_mark_features,
-    check_marks_attach,
+    check_marks,
     check_private,
     check_stat,
     check_style_bits,
@@ -180,15 +177,11 @@ def main():
 
     shape = make_shaper(FONT)
     gs, order = tf.getGlyphSet(), tf.getGlyphOrder()
-    # the three mark gates: every anchor is on its glyph, every letter
-    # has one in every rule-following lookup, and the shaper lays each
-    # mark exactly on its anchor (verifylib says why there are three)
-    check_anchor_placement(tf, check, gs)
-    check_anchor_coverage(tf, check, gs)
-    check_marks_attach(tf, shape, check)
+    # the mark gates: the anchors themselves, their coverage, and what
+    # the shaper makes of them (verifylib says why there are seven)
+    check_marks(tf, check, shape, gs)
     check_heights(tf, check, gs, cmap)
     check_zones(tf, check, cmap)
-    check_mark_features(tf, check, shape, gs, order, cmap)
     check_features_work(shape, check, cmap)
     on = {"calt": True, "liga": True}
     for text, want in CASES:

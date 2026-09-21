@@ -1798,19 +1798,34 @@ def anchor_loose_letters(font, tag="mark", rules=None):
 DOUBLE_SPAN = frozenset(range(0x035C, 0x0363))
 
 
-def _letter_variants(font, letters):
-    """The glyphs a GSUB single or alternate substitution turns a letter
-    into -- a locl form (the Serbian б), a cvNN or ssNN variant, a
-    superscript -- followed two steps. A mark on a letter the shaper
-    has already swapped attaches to the substitute, so the substitute
-    needs the letter's anchors as much as the letter does."""
+# the GSUB features whose output is still the letter, drawn another
+# way, and so still takes the letter's accent: a language form, a
+# stylistic or character variant, a case form. Not a width form (fwid,
+# hwid), a vertical form, a superscript or a fraction figure -- those
+# are other glyphs drawn elsewhere, and their marks fall where they fall
+VARIANT_FEATURES = frozenset({"locl", "salt", "case"}
+                             | {f"cv{i:02d}" for i in range(1, 100)}
+                             | {f"ss{i:02d}" for i in range(1, 21)})
+
+
+def _letter_variants(font, letters, features=VARIANT_FEATURES):
+    """The glyphs a GSUB single or alternate substitution under one of
+    `features` (None: any feature) turns a letter into -- a locl form
+    (the Serbian б), a cvNN or ssNN variant -- followed two steps. A
+    mark on a letter the shaper has already swapped attaches to the
+    substitute, so the substitute needs the letter's anchors as much
+    as the letter does."""
     out = set()
     if "GSUB" not in font:
         return out
     gsub = font["GSUB"].table
+    want = set()
+    for fr in gsub.FeatureList.FeatureRecord:
+        if features is None or fr.FeatureTag in features:
+            want |= set(fr.Feature.LookupListIndex)
     pairs = []
-    for lookup in gsub.LookupList.Lookup:
-        kind, subs = _unwrap(lookup)
+    for i in sorted(want):
+        kind, subs = _unwrap(gsub.LookupList.Lookup[i])
         if kind in (1, 3):
             pairs.extend(_subst_pairs(kind, subs, "?"))
     known = set(letters)
@@ -1820,7 +1835,7 @@ def _letter_variants(font, letters):
     return out
 
 
-def anchor_loose_marks(font, floor=16, band=300):
+def anchor_loose_marks(font, floor=16, band=300, near=80):
     """Give a combining mark no lookup covers the mark anchor its
     neighbours share, in the lookup whose marks sit where it does.
     Returns the count.
@@ -1830,13 +1845,17 @@ def anchor_loose_marks(font, floor=16, band=300):
     Source Code Pro Italic leaves the candrabindu (U+0310) out of its
     above-mark lookup where the upright has it, so on every italic face
     a candrabindu landed a cell right of its letter, on the next
-    character. Within a lookup the donor gives every mark the same
-    anchor -- (300, 500) above, (300, -20) below, the italics' shifted
-    by the slant -- so the median over the marks it does cover is the
-    anchor to give the one it does not. The lookup is chosen by ink:
-    the one, among those covering `floor` marks or more, whose marks'
-    ink centre lies nearest the missing mark's, and within `band` of
-    it -- an overlay has no such home and is left alone. Mark-to-base
+    character. Within a lookup the donor gives every mark drawn at one
+    height the same anchor -- (300, 500) for the above-marks, (300,
+    680) for their .cap forms drawn higher for a capital, (300, -20)
+    below, the italics' shifted by the slant -- so the median over the
+    covered marks whose ink sits within `near` of this one's is the
+    anchor to give it. The lookup is chosen the same way: the one,
+    among those covering `floor` marks or more, whose marks' ink centre
+    lies nearest, and within `band` -- an overlay has no such home and
+    is left alone. A mark is every GDEF mark in the combining blocks
+    and every glyph GSUB makes of one (the .cap form ccmp swaps in
+    after a capital, which the donor leaves out with it). Mark-to-base
     only: which marks may stack on which is the donor's to say. The
     double diacritics are not marks to place (DOUBLE_SPAN), and a mark
     drawn with no ink has nothing to place.
@@ -1849,37 +1868,45 @@ def anchor_loose_marks(font, floor=16, band=300):
     covered = set()
     for sub in subs:
         covered |= set(sub.MarkCoverage.glyphs)
-    loose = [g for cp, g in sorted(cmap.items())
-             if classes.get(g) == 3 and g not in covered
-             and cp not in DOUBLE_SPAN and _bounds(gs, g)]
-    # each big one-class subtable: its common anchor and where its
-    # marks' ink sits
+    marks = {g for cp, g in cmap.items() if classes.get(g) == 3 and cp not in DOUBLE_SPAN}
+    marks |= {g for g in _letter_variants(font, marks, features=None) if classes.get(g) == 3}
+    loose = [g for g in sorted(marks, key=gid) if g not in covered and _bounds(gs, g)]
+    # each big one-class subtable: where its marks' ink sits, and each
+    # mark's own anchor and ink centre
     homes = []
     for sub in subs:
         cov, array, records = sub.MarkCoverage, sub.MarkArray, sub.MarkArray.MarkRecord
         if sub.ClassCount != 1 or len(records) < floor:
             continue
-        boxes = [b for b in (_bounds(gs, g) for g in cov.glyphs) if b]
-        if not boxes:
+        rows = [((b[1] + b[3]) / 2, r.MarkAnchor) for g, r in zip(cov.glyphs, records)
+                for b in [_bounds(gs, g)] if b]
+        if not rows:
             continue
-        centre = statistics.median((b[1] + b[3]) / 2 for b in boxes)
-        x = otRound(statistics.median(r.MarkAnchor.XCoordinate for r in records))
-        y = otRound(statistics.median(r.MarkAnchor.YCoordinate for r in records))
-        homes.append((centre, x, y, cov, array, records))
+        centre = statistics.median(c for c, _ in rows)
+        homes.append((centre, rows, sub))
     added = 0
     for g in loose:
         box = _bounds(gs, g)
         mid = (box[1] + box[3]) / 2
-        near = [h for h in homes if abs(h[0] - mid) <= band]
-        if not near:
+        close = [h for h in homes if abs(h[0] - mid) <= band]
+        if not close:
             continue
-        _, x, y, cov, array, records = min(near, key=lambda h: abs(h[0] - mid))
+        _, rows, sub = min(close, key=lambda h: abs(h[0] - mid))
+        alike = [a for c, a in rows if abs(c - mid) <= near] or [a for _, a in rows]
+        x = otRound(statistics.median(a.XCoordinate for a in alike))
+        y = otRound(statistics.median(a.YCoordinate for a in alike))
         anchor = otTables.Anchor()
         anchor.Format = 1
         anchor.XCoordinate, anchor.YCoordinate = x, y
         rec = otTables.MarkRecord()
         rec.Class, rec.MarkAnchor = 0, anchor
-        pairs = sorted(zip(cov.glyphs, records), key=lambda p: gid(p[0]))
+        # read the subtable afresh for each insertion: the coverage and
+        # the records are replaced together below, and a list kept from
+        # before the first insertion would pair every mark after it
+        # with its neighbour's anchor (the italic's caron took the .cap
+        # anchor that way, and drew through b's ascender)
+        cov, array = sub.MarkCoverage, sub.MarkArray
+        pairs = list(zip(cov.glyphs, array.MarkRecord))
         pairs.append((g, rec))
         pairs.sort(key=lambda p: gid(p[0]))
         cov.glyphs = [n for n, _ in pairs]

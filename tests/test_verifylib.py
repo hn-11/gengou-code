@@ -270,15 +270,23 @@ def test_check_gdi_family_name_bounds_nameid_1():
 # --- the mark gates: placement, coverage, attachment ------------------------
 
 def _mark_font(anchors, heights=None, advance=600, cmap_extra=(), width=100,
-               mark_anchor=(50, 0), classify_mark=True):
+               mark_anchor=None, classify_mark=True, mark_cp=0x0301, marks=(),
+               fea_extra="", mark2=None, langsys="", mark_scope="", mark_tail=""):
     """A CFF font whose letters are boxes of the given width and heights,
     with a 'mark' feature compiled by feaLib from {glyph: (x, y)} base
-    anchors -- a real GDEF and GPOS, so the shaper can apply it."""
+    anchors -- a real GDEF and GPOS, so the shaper can apply it. The
+    mark is 'acute' at `mark_cp`, anchored at `mark_anchor` (the ink's
+    bottom centre by default); `marks` adds more, all in the one mark
+    class; `mark2` gives marks a Mark2 anchor in an mkmk feature;
+    `fea_extra` is appended verbatim; `langsys` is written before the
+    features, `mark_scope` (script/language statements) at the top of
+    the mark feature and `mark_tail` at its end."""
     from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
     from fontTools.fontBuilder import FontBuilder
     from fontTools.pens.t2CharStringPen import T2CharStringPen
     heights = heights or {}
-    order = [".notdef", "acute", *dict.fromkeys([*anchors, *heights])]
+    marks = dict(marks)
+    order = [".notdef", "acute", *dict.fromkeys([*marks, *anchors, *heights])]
     charstrings = {}
     for g in order:
         pen = T2CharStringPen(0, None)
@@ -289,7 +297,8 @@ def _mark_font(anchors, heights=None, advance=600, cmap_extra=(), width=100,
         charstrings[g] = pen.getCharString()
     fb = FontBuilder(1000, isTTF=False)
     fb.setupGlyphOrder(order)
-    fb.setupCharacterMap({0x0301: "acute",
+    fb.setupCharacterMap({mark_cp: "acute",
+                          **{cp: g for g, cp in marks.items() if cp is not None},
                           **{0x41 + i: g for i, g in enumerate(anchors)},
                           **dict(cmap_extra)})
     fb.setupCFF("T", {}, charstrings, {})
@@ -300,12 +309,18 @@ def _mark_font(anchors, heights=None, advance=600, cmap_extra=(), width=100,
     fb.setupOS2()
     fb.setupPost()
     font = fb.font
-    mx, my = mark_anchor
+    mx, my = mark_anchor or (width // 2, 0)
+    classes = "\n".join(f"markClass {g} <anchor {mx} {my}> @TOP;"
+                        for g in ["acute", *marks])
     bases = "\n".join(f"    pos base {g} <anchor {x} {y}> mark @TOP;"
-                       for g, (x, y) in anchors.items())
-    fea = (f"markClass acute <anchor {mx} {my}> @TOP;\n"
-           f"feature mark {{\n{bases}\n}} mark;\n")
-    addOpenTypeFeaturesFromString(font, fea)
+                      for g, (x, y) in anchors.items())
+    fea = (f"{langsys}\n{classes}\nfeature mark {{\n{mark_scope}\n{bases}\n"
+           f"{mark_tail}\n}} mark;\n")
+    if mark2:
+        stacks = "\n".join(f"    pos mark {g} <anchor {x} {y}> mark @TOP;"
+                           for g, (x, y) in mark2.items())
+        fea += f"feature mkmk {{\n{stacks}\n}} mkmk;\n"
+    addOpenTypeFeaturesFromString(font, fea + fea_extra)
     if not classify_mark:
         # feaLib derives GDEF from the markClass, so the "not a mark" case
         # is made afterwards: the accent filed as a base outright, which
@@ -340,6 +355,16 @@ def _coverage(font):
 
 def _attach(font):
     return _gate(lambda f, chk: verifylib.check_marks_attach(f, _shaper_for(f), chk),
+                 font)
+
+
+def _stack(font):
+    return _gate(lambda f, chk: verifylib.check_marks_stack(f, _shaper_for(f), chk),
+                 font)
+
+
+def _all_marks(font):
+    return _gate(lambda f, chk: verifylib.check_marks(f, chk, _shaper_for(f), f.getGlyphSet()),
                  font)
 
 
@@ -430,11 +455,35 @@ def test_check_anchor_coverage_catches_a_letter_no_lookup_covers():
     assert _coverage(font)
 
 
-def test_check_anchor_coverage_ignores_a_lookup_that_follows_no_rule():
-    """Too few bases to fit one: the donor's own few-letter marks (the
-    horn on O and U) are not asked to cover the alphabet."""
+def test_check_anchor_coverage_is_asked_by_mark_not_by_lookup():
+    """A lookup cut from 833 bases to 15 fell under the rule floor and
+    was excused as "the donor's own" (round 7, mutant 12): the fewer
+    letters survived, the less was asked. By mark there is no floor
+    -- the acute must reach every letter whatever lookup carries it."""
     font = _mark_font({"b0": (50, 420)}, {"b0": 400, "loose": 500},
                       cmap_extra={0x5A: "loose"})
+    assert _coverage(font)
+
+
+def test_check_anchor_coverage_excuses_the_donors_sparse_marks_by_name():
+    """The horn, the left angle above and the tilde overlay are anchored
+    on a handful of letters by design (SPARSE_MARKS)."""
+    font = _mark_font({"b0": (50, 420)}, {"b0": 400, "loose": 500},
+                      cmap_extra={0x5A: "loose"}, mark_cp=0x031B)
+    assert _coverage(font) == []
+
+
+def test_check_anchor_coverage_asks_for_what_gsub_makes_of_a_letter():
+    """The Serbian locl б takes the accent, not б: a substitute no
+    lookup covers is a letter no lookup covers."""
+    anchors, heights = _ruled()
+    heights["b0.srb"] = 500
+    font = _mark_font(anchors, heights,
+                      fea_extra="feature locl { sub b0 by b0.srb; } locl;\n")
+    assert _coverage(font)
+    anchors["b0.srb"] = (50, 520)
+    font = _mark_font(anchors, heights,
+                      fea_extra="feature locl { sub b0 by b0.srb; } locl;\n")
     assert _coverage(font) == []
 
 
@@ -548,3 +597,165 @@ def test_ink_spill_skips_a_zero_advance_glyph():
     """A combining mark has no advance to be inside of."""
     assert verifylib.ink_spill({"acute": (-400, 500, -100, 700)},
                                lambda g: 0, {0x301: "acute"}, 600) == []
+
+
+# the round-7 gates ----------------------------------------------------------
+
+def test_check_anchor_placement_catches_a_null_base_anchor():
+    """A NULL anchor in a one-class lookup places nothing: the mark lands
+    a cell right (round 7, mutant 5), and the pair looked "skipped"."""
+    anchors, heights = _ruled()
+    font = _mark_font(anchors, heights,
+                      fea_extra="feature mark { pos base b0 <anchor NULL> mark @TOP; } mark;\n")
+    assert _placement(font)
+
+
+def test_check_anchor_placement_catches_a_uniform_drift_through_the_rule():
+    """Every anchor 130 down still sits inside each anchor's own band;
+    the fitted rule's offset is what moves (round 7, mutant 4)."""
+    anchors, heights = _ruled()
+    low = {g: (x, y - 150) for g, (x, y) in anchors.items()}
+    assert _placement(_mark_font(low, heights))
+
+
+def test_check_anchor_placement_catches_a_mark_anchor_off_the_marks_ink():
+    """The attach gate derives its expectation from the mark anchor, so
+    a mark anchor 350 right of its ink moved every accent 350 right and
+    passed it (round 7, mutant 2)."""
+    anchors, heights = _ruled()
+    assert _placement(_mark_font(anchors, heights, mark_anchor=(400, 0)))
+
+
+def test_check_anchor_placement_catches_a_second_mark_stacking_on_itself():
+    """A Mark2 anchor at the Mark1 height draws x̀́ as one accent on the
+    other -- the italic donor's grave, acute, breve and ring."""
+    anchors, heights = _ruled()
+    stacked = _mark_font(anchors, heights, marks={"grave": 0x0300},
+                         mark2={"grave": (50, 200)})
+    assert _placement(stacked) == []
+    flat = _mark_font(anchors, heights, marks={"grave": 0x0300},
+                      mark2={"grave": (50, 0)})
+    assert _placement(flat)
+
+
+def test_check_marks_attach_holds_a_substituted_mark_to_its_own_anchor():
+    """ccmp swaps the acute for its .cap form after a capital; the pair
+    then attaches through the substitute's anchor, or not at all
+    (round 7, mutants 10 and 6)."""
+    anchors, heights = _ruled()
+    heights["acutecap"] = 500
+    swapped = _mark_font(anchors, heights, marks={"acutecap": None},
+                         fea_extra="feature ccmp { sub acute by acutecap; } ccmp;\n")
+    assert _attach(swapped) == []
+    orphan = _mark_font(anchors, heights,
+                        fea_extra="feature ccmp { sub acute by acutecap; } ccmp;\n")
+    assert _attach(orphan)
+
+
+def test_check_marks_attach_holds_a_composed_pair_to_the_composed_character():
+    """A pair the shaper composes must compose to the cmap's glyph for
+    that character (round 7, mutant 9). With Á in the cmap the shaper
+    composes A + U+0301 itself; without it, a ccmp ligature that
+    composes the pair to some other glyph is the only composition."""
+    anchors, heights = _ruled()
+    heights["Aacute"] = heights["other"] = 500
+    right = _mark_font(anchors, heights, cmap_extra={0xC1: "Aacute"})
+    assert _attach(right) == []
+    wrong = _mark_font(anchors, heights,
+                       fea_extra="feature ccmp { sub b0 acute by other; } ccmp;\n")
+    assert _attach(wrong)
+
+
+def test_check_marks_stack_is_an_equality_on_the_second_mark():
+    anchors, heights = _ruled()
+    font = _mark_font(anchors, heights, marks={"grave": 0x0300},
+                      mark2={"grave": (50, 200), "acute": (50, 200)})
+    assert _stack(font) == []
+
+
+def test_check_marks_stack_wants_a_mark2_anchor_on_every_common_accent():
+    """A mark removed from Mark2Coverage is a mark nothing can stack on
+    (round 7, mutant 8)."""
+    anchors, heights = _ruled()
+    font = _mark_font(anchors, heights, marks={"grave": 0x0300},
+                      mark2={"acute": (50, 200)})
+    assert any("no Mark2 anchor" in m for m in _stack(font))
+
+
+def test_check_mark_reachability_wants_mark_lookups_under_a_mark_feature():
+    """A lookup under GPOS 'dist' still runs, outside every gate that
+    walked the 'mark' feature (round 7, mutant 13)."""
+    anchors, heights = _ruled()
+    stray = _mark_font(anchors, heights,
+                       fea_extra="feature dist { pos base b1 <anchor 50 440> mark @TOP; } dist;\n")
+    assert _gate(verifylib.check_mark_reachability, stray)
+    assert _gate(verifylib.check_mark_reachability, _mark_font(anchors, heights)) == []
+
+
+def test_check_langsys_parity_wants_every_language_to_reach_the_marks():
+    """cyrl/SRB without 'mark' loses every accent under lang=sr alone
+    (round 7, mutant 7)."""
+    anchors, heights = _ruled()
+    systems = ("languagesystem DFLT dflt; languagesystem latn dflt; "
+               "languagesystem latn SRB;")
+    # SRB has a GPOS feature of its own, so its LangSys exists there --
+    # without mark (a LangSys only GSUB knows falls back to dflt in GPOS)
+    short = _mark_font(anchors, heights, langsys=systems,
+                       mark_tail="script latn; language SRB exclude_dflt;",
+                       fea_extra="feature dist { script latn; language SRB exclude_dflt; "
+                                 "pos b0 <0 10 0 0>; } dist;\n")
+    assert _gate(verifylib.check_langsys_parity, short)
+    whole = _mark_font(anchors, heights, langsys=systems,
+                       fea_extra="feature dist { script latn; language SRB exclude_dflt; "
+                                 "pos b0 <0 10 0 0>; } dist;\n")
+    assert _gate(verifylib.check_langsys_parity, whole) == []
+
+
+def test_check_mark_features_wants_the_gdef_classes_gpos_filters_on():
+    anchors, heights = _ruled()
+    font = _mark_font(anchors, heights, marks={"grave": 0x0300},
+                      mark2={"grave": (50, 200)},
+                      fea_extra="feature ccmp { pos b1 <0 10 0 0>; } ccmp;\n")
+    assert _gate(verifylib.check_mark_features, font) == []
+    font["GPOS"].table.LookupList.Lookup[0].LookupFlag = 2 << 8
+    assert _gate(verifylib.check_mark_features, font)
+
+
+def test_check_marks_runs_every_gate_and_passes_a_sound_face():
+    anchors, heights = _ruled()
+    font = _mark_font(anchors, heights, marks={"grave": 0x0300},
+                      mark2={"grave": (50, 200), "acute": (50, 200)},
+                      fea_extra="feature ccmp { pos b1 <0 10 0 0>; } ccmp;\n")
+    assert _all_marks(font) == []
+
+
+def test_check_anchor_placement_holds_a_mark_anchor_to_its_ink_bands_median():
+    """A mark given a neighbour's anchor sits on its own ink still and
+    attaches exactly through it -- the italic caron with the .cap
+    form's, 169 up, drew through b's ascender and passed every other
+    gate but the JP clearance probe."""
+    anchors, heights = _ruled()
+    marks = {f"m{i}": None for i in range(16)}
+    heights.update(dict.fromkeys(marks, 500))
+    even = _mark_font(anchors, heights, marks=marks)
+    assert _placement(even) == []
+    font = _mark_font(anchors, heights, marks=marks)
+    sub = font["GPOS"].table.LookupList.Lookup[0].SubTable[0]
+    sub.MarkArray.MarkRecord[sub.MarkCoverage.glyphs.index("m3")].MarkAnchor.YCoordinate += 169
+    assert any("against its band" in m for m in _placement(font))
+
+
+def test_check_marks_clear_catches_an_accent_through_an_ascender():
+    """The mark's ink has to begin above the letter's."""
+    anchors, heights = _ruled()
+    heights["tall"] = 700
+    anchors["tall"] = (50, 720)
+    font = _mark_font(anchors, heights, cmap_extra={0x62: "tall"})
+    clear = _gate(lambda f, chk: verifylib.check_marks_clear(f, _shaper_for(f), chk,
+                                                              f.getGlyphSet()), font)
+    assert clear == []
+    anchors["tall"] = (50, 520)
+    font = _mark_font(anchors, heights, cmap_extra={0x62: "tall"})
+    through = _gate(lambda f, chk: verifylib.check_marks_clear(f, _shaper_for(f), chk,
+                                                                f.getGlyphSet()), font)
+    assert through and "b́" in through[0]

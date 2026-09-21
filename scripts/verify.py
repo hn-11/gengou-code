@@ -15,13 +15,11 @@ import build  # noqa: E402
 from build import FULLWIDTH, _unwrap, _unwrap_pos  # noqa: E402
 from verifylib import (  # noqa: E402
     Checker,
-    check_anchor_coverage,
-    check_anchor_placement,
     check_coverage_order,
     check_features_work,
     check_gdi_family_name,
     check_mark_class_closure,
-    check_marks_attach,
+    check_marks,
     check_private,
     check_stat,
     check_style_bits,
@@ -302,8 +300,6 @@ def main():
     # from: import_scp_marks moves every one of them by a cell, and the
     # exact-attachment check is what says the moved anchor and the moved
     # mark still meet
-    check_anchor_placement(tf, check, tf.getGlyphSet())
-    check_anchor_coverage(tf, check, tf.getGlyphSet())
     check_mark_class_closure(tf, check)
     check_private(tf, check)
 
@@ -454,7 +450,7 @@ def main():
     # the exact-attachment half of the mark gates (the anchor half runs
     # above, before a shaper exists): the moved anchor and the moved
     # mark still meet
-    check_marks_attach(tf, shape_infos, check)
+    check_marks(tf, check, shape_infos, tf.getGlyphSet())
 
     # the hinting the build spends a minute a face on: nothing here read
     # it, and a face whose autohint pass silently did nothing — which is
@@ -952,34 +948,6 @@ def main():
     check(not loose, f"ccmp fires only in the donor's own context "
                      f"(off: {loose})")
 
-    # an accent has to sit ON the letter, not through it. Source Code
-    # Pro places its combining marks entirely in GPOS — the top anchor
-    # of an ascender is 229 units above an x-height letter's — and the
-    # graft, which gives a mark a 0 advance and shifts its ink one cell
-    # left, got the x-height case right and drew the accent through the
-    # stem of b d f h k l: 58 of 84 pairs shared ink (import_scp_marks
-    # carries the donor's 'mark' and 'mkmk' over)
-    through, pairs = {}, 0
-    for base in "bdfhklt":
-        for mark in ACCENTS:
-            if ord(base) not in cmap or ord(mark) not in cmap:
-                continue
-            infos, positions = shape_infos(base + mark, {})
-            if len(infos) != 2:
-                continue        # composed into one glyph: nothing to clear
-            boxes = []
-            for info, pos in zip(infos, positions):
-                pen = BoundsPen(arrow_gs)
-                arrow_gs[glyph_order[info.codepoint]].draw(pen)
-                boxes.append(None if pen.bounds is None else
-                             (pen.bounds[1] + pos.y_offset,
-                              pen.bounds[3] + pos.y_offset))
-            pairs += 1
-            if None in boxes or boxes[1][0] < boxes[0][1]:
-                through[base + mark] = (None if None in boxes else
-                                        (round(boxes[0][1]), round(boxes[1][0])))
-    check(not through, f"an accent clears the letter it sits on "
-                       f"({pairs} pairs; through: {through})")
 
     # and a second accent is lifted clear of the first ('mkmk'). Not
     # every pair needs the lift — a flat macron under a ring keeps its
