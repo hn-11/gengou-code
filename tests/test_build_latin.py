@@ -356,9 +356,10 @@ def test_add_missing_from_sans_fills_only_what_the_upright_also_draws():
     donor = _cff_with_greek({0x03B1: 300, 0x03B2: 700,
                              0x03B3: 300, 0x03B4: 300})
     before = face.getBestCmap()[0x03B1]
-    added, condensed = build_latin.add_missing_from_sans(
+    added, condensed, anchors = build_latin.add_missing_from_sans(
         face, donor, {0x03B1, 0x03B2, 0x03B4})        # gamma withheld
     assert (added, condensed) == (2, 1)                # beta's 700 does not fit
+    assert anchors == 0                                # this donor has no GPOS
     cmap = face.getBestCmap()
     assert 0x03B3 not in cmap                          # not in the upright set
     assert cmap[0x03B1] == before                      # untouched

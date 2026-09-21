@@ -285,6 +285,11 @@ def graft_master(base, mona_source, slant, sans_source=None, upright=None):
         # only scales and shifts them
         build_latin.add_missing_from_sans(
             base, sans_source.matched(target, erode=False), upright)
+        # the anchors this writes are the donor's, read at THIS master's
+        # weight, so the masters' GPOS can differ where the donor's own
+        # anchors move with weight. varLib wants the non-CFF2 tables
+        # byte-identical, and takes the default master's; a check below
+        # says so if they diverge
     build_latin.remap_scp_stylistic_sets(base)
     build.add_gsub(base, added, alts, build.LIGATURES)
     build.classify_unicode_marks(base)

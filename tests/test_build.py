@@ -2699,3 +2699,138 @@ def test_append_glyph_gives_a_zero_width_mark_no_vertical_advance_either():
     assert font["vmtx"].metrics["mark"][0] == 0          # not the donor's 1000
     assert font["hmtx"].metrics["letter"][0] == 600
     assert font["vmtx"].metrics["letter"][0] == 1000     # a letter still does
+
+
+# --- import_donor_base_anchors ---------------------------------------------
+
+def _anchor(x, y):
+    a = otTables.Anchor()
+    a.Format, a.XCoordinate, a.YCoordinate = 1, x, y
+    return a
+
+
+def _markbase(marks, bases):
+    """One MarkBasePos: {mark glyph: (class, anchor)}, {base: [anchors]}."""
+    st = otTables.MarkBasePos()
+    st.Format = 1
+    st.ClassCount = 1
+    st.MarkCoverage = otTables.MarkCoverage()
+    st.MarkCoverage.glyphs = list(marks)
+    st.MarkArray = otTables.MarkArray()
+    st.MarkArray.MarkRecord = []
+    for cls, anc in marks.values():
+        rec = otTables.MarkRecord()
+        rec.Class, rec.MarkAnchor = cls, anc
+        st.MarkArray.MarkRecord.append(rec)
+    st.BaseCoverage = otTables.BaseCoverage()
+    st.BaseCoverage.glyphs = list(bases)
+    st.BaseArray = otTables.BaseArray()
+    st.BaseArray.BaseRecord = []
+    for anchors in bases.values():
+        rec = otTables.BaseRecord()
+        rec.BaseAnchor = list(anchors)
+        st.BaseArray.BaseRecord.append(rec)
+    st.BaseArray.BaseCount = len(bases)
+    lk = otTables.Lookup()
+    lk.LookupType, lk.LookupFlag, lk.SubTable = 4, 0, [st]
+    lk.SubTableCount = 1
+    return lk
+
+
+class _GposFont:
+    """Enough font for the mark helpers: a GPOS with `mark` over the
+    given lookups, a cmap, and a glyph order for getGlyphID."""
+
+    def __init__(self, lookups, cmap, order):
+        table = otTables.GPOS()
+        table.LookupList = _FakeLookupList(lookups)
+        fr = FakeFeatureRecord("mark", FakeFeature(list(range(len(lookups)))))
+        table.FeatureList = FakeFeatureList([fr])
+        self._tables = {"GPOS": FakeTable(table)}
+        self._cmap = dict(cmap)
+        self._order = list(order)
+
+    def __contains__(self, key):
+        return key in self._tables
+
+    def __getitem__(self, key):
+        return self._tables[key]
+
+    def getBestCmap(self):
+        return self._cmap
+
+    def getGlyphID(self, name):
+        return self._order.index(name)
+
+
+def test_pair_mark_lookups_matches_on_the_marks_each_one_attaches():
+    """Position would be an assumption; the marks they cover are the
+    fonts' own statement of what each lookup is for."""
+    top = {"acute": (0, _anchor(0, 0))}
+    bottom = {"cedilla": (0, _anchor(0, 0))}
+    ours = _GposFont([_markbase(bottom, {}), _markbase(top, {})],
+                     {0x0301: "acute", 0x0327: "cedilla"},
+                     [".notdef", "acute", "cedilla"])
+    theirs = _GposFont([_markbase(top, {}), _markbase(bottom, {})],
+                       {0x0301: "acute", 0x0327: "cedilla"},
+                       [".notdef", "acute", "cedilla"])
+    # ours: 0 is bottom, 1 is top; theirs: 0 is top, 1 is bottom
+    assert build.pair_mark_lookups(ours, theirs) == {0: 1, 1: 0}
+
+
+def test_pair_mark_lookups_gives_up_rather_than_guess():
+    """Two of ours wanting the same one of theirs is not a pairing, and
+    writing one class's anchors into another would misplace every accent
+    of that class."""
+    top = {"acute": (0, _anchor(0, 0))}
+    ours = _GposFont([_markbase(top, {}), _markbase(top, {})],
+                     {0x0301: "acute"}, [".notdef", "acute"])
+    theirs = _GposFont([_markbase(top, {})], {0x0301: "acute"},
+                       [".notdef", "acute"])
+    assert build.pair_mark_lookups(ours, theirs) == {}
+
+
+def test_pair_mark_lookups_refuses_a_tie():
+    """Two of theirs equally close to one of ours: picking either is a
+    coin toss, and the anchors of the wrong class land every accent of
+    that class somewhere else."""
+    top = {"acute": (0, _anchor(0, 0))}
+    ours = _GposFont([_markbase(top, {})], {0x0301: "acute"},
+                     [".notdef", "acute"])
+    theirs = _GposFont([_markbase(top, {}), _markbase(top, {})],
+                       {0x0301: "acute"}, [".notdef", "acute"])
+    assert build.pair_mark_lookups(ours, theirs) == {}
+
+
+def test_import_donor_base_anchors_moves_the_anchor_with_the_outline():
+    marks = {"acute": (0, _anchor(0, 0))}
+    ours = _GposFont([_markbase(marks, {"z": [_anchor(300, 700)]})],
+                     {0x0301: "acute", ord("z"): "z"},
+                     [".notdef", "acute", "alpha", "z"])
+    theirs = _GposFont([_markbase(marks, {"donor_alpha": [_anchor(400, 500)]})],
+                       {0x0301: "acute"}, [".notdef", "acute", "donor_alpha"])
+
+    added = build.import_donor_base_anchors(
+        ours, theirs, {"donor_alpha": "alpha"}, {"alpha": (0.5, 20)})
+
+    assert added == 1
+    sub = ours["GPOS"].table.LookupList.Lookup[0].SubTable[0]
+    # sorted by glyph id: alpha (2) before z (3), not appended at the end
+    assert sub.BaseCoverage.glyphs == ["alpha", "z"]
+    assert sub.BaseArray.BaseCount == 2
+    got = sub.BaseArray.BaseRecord[0].BaseAnchor[0]
+    assert (got.XCoordinate, got.YCoordinate) == (220, 500)   # 400*0.5 + 20
+    assert got.Format == 1
+    assert sub.BaseArray.BaseRecord[1].BaseAnchor[0].XCoordinate == 300
+
+
+def test_import_donor_base_anchors_leaves_a_base_the_face_already_has():
+    marks = {"acute": (0, _anchor(0, 0))}
+    ours = _GposFont([_markbase(marks, {"alpha": [_anchor(300, 700)]})],
+                     {0x0301: "acute"}, [".notdef", "acute", "alpha"])
+    theirs = _GposFont([_markbase(marks, {"donor_alpha": [_anchor(9, 9)]})],
+                       {0x0301: "acute"}, [".notdef", "acute", "donor_alpha"])
+    assert build.import_donor_base_anchors(
+        ours, theirs, {"donor_alpha": "alpha"}, {}) == 0
+    sub = ours["GPOS"].table.LookupList.Lookup[0].SubTable[0]
+    assert sub.BaseArray.BaseRecord[0].BaseAnchor[0].XCoordinate == 300

@@ -1514,6 +1514,137 @@ def _remap_mark_subtable(sub, kind, gmap, gid):
     return True
 
 
+def _mark_base_lookups(font, tag="mark"):
+    """[(lookup index, [MarkBasePos subtables])] under `tag`, Extension
+    unwrapped, in LookupList order."""
+    if "GPOS" not in font:
+        return []
+    table = font["GPOS"].table
+    want = set()
+    for fr in table.FeatureList.FeatureRecord:
+        if fr.FeatureTag == tag:
+            want |= set(fr.Feature.LookupListIndex)
+    out = []
+    for i in sorted(want):
+        kind, subs = _unwrap_pos(table.LookupList.Lookup[i])
+        if kind == 4:
+            out.append((i, subs))
+    return out
+
+
+def _mark_codepoints(font, subtables):
+    """The codepoints of the marks a lookup's subtables cover."""
+    rev = {gn: cp for cp, gn in font.getBestCmap().items()}
+    out = set()
+    for sub in subtables:
+        out |= {rev[g] for g in sub.MarkCoverage.glyphs if g in rev}
+    return out
+
+
+def pair_mark_lookups(base, donor):
+    """Match the face's mark lookups to a donor's, by the marks they
+    attach rather than by position.
+
+    Both fonts here are Adobe's, built from the same feature source, so
+    each lookup carries one class and the two fonts' lookups line up one
+    for one — but "line up" has to be established, not assumed, because
+    the anchors of one class written into another would put every accent
+    of that class in the wrong place. Pairing on the mark codepoints
+    they cover says it in the fonts' own terms. Returns {our lookup
+    index: donor lookup index}, or {} when the match is not a bijection.
+    """
+    ours = _mark_base_lookups(base)
+    theirs = _mark_base_lookups(donor)
+    if not ours or not theirs:
+        return {}
+    donor_marks = {j: _mark_codepoints(donor, subs) for j, subs in theirs}
+    pairs = {}
+    for i, subs in ours:
+        mine = _mark_codepoints(base, subs)
+        ranked = sorted(((len(mine & cps), j) for j, cps in donor_marks.items()),
+                        reverse=True)
+        if not ranked or ranked[0][0] == 0:
+            continue                       # nothing of ours is in theirs
+        if len(ranked) > 1 and ranked[0][0] == ranked[1][0]:
+            return {}                      # a tie is not a match, it is a guess
+        pairs[i] = ranked[0][1]
+    # one of theirs answering to two of ours is not a pairing either
+    return pairs if len(pairs) == len(set(pairs.values())) else {}
+
+
+def _plain_anchor(anchor, sx, dx):
+    """A donor anchor as plain coordinates, moved with the outline.
+
+    Format 2 names a point on the donor's contour and Format 3 hangs a
+    device table off it; neither survives redrawing the glyph, so both
+    come across as Format 1. The x is scaled and shifted exactly as
+    cell_fit moved the ink it sits on; the y is untouched, as the
+    outline's is."""
+    if anchor is None:
+        return None
+    out = otTables.Anchor()
+    out.Format = 1
+    out.XCoordinate = otRound(anchor.XCoordinate * sx + dx)
+    out.YCoordinate = anchor.YCoordinate
+    return out
+
+
+def import_donor_base_anchors(base, donor, glyph_map, placements):
+    """Give letters taken from a second donor that donor's own base
+    anchors, inside the face's own mark lookups. Returns how many
+    (glyph, lookup) anchors were added.
+
+    The face positions accents with its first donor's lookups: a mark
+    array over that donor's marks, a base array over its bases. A letter
+    appended from somewhere else is a stranger to both, so an accent
+    over it falls wherever the outline happens to land — which is what
+    Greek and Cyrillic did in the italic faces, where every accent sat
+    at offset 0.
+
+    Only the BASE side comes across. A mark's own anchor is a point on
+    the mark, and the marks in the run are the face's own, so theirs is
+    the one that must be used; the base's anchor is a point on the base,
+    and that is the donor's to give. Mixing the two is not a compromise,
+    it is how mark attachment is defined.
+    """
+    pairs = pair_mark_lookups(base, donor)
+    if not pairs:
+        return 0
+    ours = dict(_mark_base_lookups(base))
+    theirs = dict(_mark_base_lookups(donor))
+    gid = base.getGlyphID
+    added = 0
+    for our_i, their_i in pairs.items():
+        our_subs, their_subs = ours[our_i], theirs[their_i]
+        if len(our_subs) != 1 or len(their_subs) != 1:
+            continue          # one subtable each here; anything else is theirs
+        ours_sub, theirs_sub = our_subs[0], their_subs[0]
+        if ours_sub.ClassCount != theirs_sub.ClassCount:
+            continue          # the classes would not line up
+        have = set(ours_sub.BaseCoverage.glyphs)
+        rows = list(zip(ours_sub.BaseCoverage.glyphs,
+                        ours_sub.BaseArray.BaseRecord))
+        for name, rec in zip(theirs_sub.BaseCoverage.glyphs,
+                             theirs_sub.BaseArray.BaseRecord):
+            ours_name = glyph_map.get(name)
+            if ours_name is None or ours_name in have:
+                continue
+            sx, dx = placements.get(ours_name, (1.0, 0))
+            moved = otTables.BaseRecord()
+            moved.BaseAnchor = [_plain_anchor(a, sx, dx)
+                                for a in rec.BaseAnchor]
+            if not any(moved.BaseAnchor):
+                continue
+            rows.append((ours_name, moved))
+            have.add(ours_name)
+            added += 1
+        rows.sort(key=lambda pair: gid(pair[0]))
+        ours_sub.BaseCoverage.glyphs = [g for g, _ in rows]
+        ours_sub.BaseArray.BaseRecord = [r for _, r in rows]
+        ours_sub.BaseArray.BaseCount = len(rows)
+    return added
+
+
 def _remap_single_pos(sub, gmap, gid, marks):
     """Rewrite a SinglePos subtable in our glyph names, keeping the
     placement it carries and dropping the advance.

@@ -174,8 +174,8 @@ SANS_BLOCKS = ((0x0370, 0x04FF),)
 
 def add_missing_from_sans(font, sans, upright):
     """Append the Greek and Cyrillic of `sans` for the codepoints this
-    face has none, one cell each. Returns how many were added and how
-    many of those had to be condensed.
+    face has none, one cell each. Returns (added, condensed, base
+    anchors carried across).
 
     `upright` is the codepoint set the upright faces draw, and bounds
     this one: Source Sans covers ten letters in these blocks that Source
@@ -186,6 +186,10 @@ def add_missing_from_sans(font, sans, upright):
     td, cmap, fd_index, private, vdon = build.append_context(font)
     sans_cm, sans_gs = sans.getBestCmap(), sans.getGlyphSet()
     new, condensed = {}, 0
+    # {donor glyph: ours} and {ours: the x scale and offset cell_fit
+    # used}, for import_donor_base_anchors: an anchor is a point on the
+    # outline and has to move with it
+    donor_map, placements = {}, {}
     for lo, hi in SANS_BLOCKS:
         for cp in range(lo, hi + 1):
             if cp in cmap or cp not in sans_cm or cp not in upright:
@@ -202,10 +206,13 @@ def add_missing_from_sans(font, sans, upright):
             build.append_glyph(font, td, name, pen.getCharString(private=private),
                                fd_index, CELL, None, vdon)
             new[cp] = name
+            donor_map[src] = name
+            placements[name] = (sx, dx)
     build.set_cmap(font, new, add_new=True)
+    anchors = build.import_donor_base_anchors(font, sans, donor_map, placements)
     print(f"  Greek and Cyrillic SCP Italic lacks, from Source Sans: "
-          f"{len(new)} ({condensed} condensed)")
-    return len(new), condensed
+          f"{len(new)} ({condensed} condensed, {anchors} base anchors)")
+    return len(new), condensed, anchors
 
 
 def remap_scp_stylistic_sets(font):
