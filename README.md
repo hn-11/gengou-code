@@ -372,7 +372,7 @@ Source Code Pro VF / Source Sans 3 VF / Monaspace VF の Releases から
 `build_latin.py` の出力先）を見る。`verify.py` と `verify_latin_vf.py` は
 `SCP_VF_U` / `SCP_VF_I` があれば `=` のバーを Source Code Pro の
 インスタンスと突き合わせる。
-`GENGOU_VERSION`（例 `5.0.0`）を立てると name テーブルにその版番号を刻む
+`GENGOU_VERSION`（例 `6.0.0`）を立てると name テーブルにその版番号を刻む
 （リリースワークフローがタグから渡す。未設定なら上流のリビジョンをそのまま
 残す）。
 

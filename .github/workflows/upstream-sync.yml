@@ -59,6 +59,11 @@ jobs:
       # tag *is* the version (font revision comes from the base font), and an
       # upstream refresh is a patch: the fonts are rebuilt from newer sources
       # with nothing in this repo changed but the pins.
+      #
+      # bump_pins.next_release does the bump, and refuses to go below
+      # MIN_RELEASE: this job merges its own PR and dispatches the release
+      # unattended, so without that floor the first sync after a release
+      # that renames the families would publish them as a patch.
       - name: Compute next version
         id: version
         run: |
@@ -67,7 +72,7 @@ jobs:
             echo "no v* tag to bump from" >&2
             exit 1
           fi
-          next=$(echo "${latest#v}" | awk -F. '{printf "v%d.%d.%d", $1, $2, $3 + 1}')
+          next=$(python scripts/bump_pins.py --next "$latest")
           echo "next=$next" >> "$GITHUB_OUTPUT"
           echo "$latest -> $next"
 

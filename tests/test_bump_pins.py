@@ -143,6 +143,44 @@ def test_main_writes_the_moved_tag_and_its_new_hash(monkeypatch, tmp_path,
     assert "`MONA_TAG`" in summary and "`MONA_SHA`" in summary
 
 
+# --- next_release -------------------------------------------------------------
+
+def test_next_release_bumps_the_patch():
+    """An upstream refresh is a patch: newer sources, nothing in this
+    repo changed but the pins."""
+    assert bump_pins.next_release("v6.0.0", floor="6.0.0") == "v6.0.1"
+    assert bump_pins.next_release("v6.1.9", floor="6.0.0") == "v6.1.10"
+
+
+def test_next_release_refuses_to_bump_below_the_floor():
+    """The sync merges its own PR and dispatches the release with no one
+    watching, so a floor is the only thing standing between a rename and
+    a patch release of it. v5.0.0 shipped the family as Sumi Moji."""
+    with pytest.raises(SystemExit, match="MIN_RELEASE"):
+        bump_pins.next_release("v5.0.0", floor="6.0.0")
+    with pytest.raises(SystemExit, match="MIN_RELEASE"):
+        bump_pins.next_release("v5.9.9", floor="6.0.0")
+
+
+def test_next_release_takes_the_floor_itself_as_enough():
+    """Once the major tag is cut by hand, the sync carries on from it."""
+    assert bump_pins.next_release("v6.0.0", floor="6.0.0") == "v6.0.1"
+
+
+def test_next_release_refuses_a_tag_it_cannot_read():
+    with pytest.raises(SystemExit, match="not a vMAJOR"):
+        bump_pins.next_release("v6.0", floor="6.0.0")
+    with pytest.raises(SystemExit, match="not a vMAJOR"):
+        bump_pins.next_release("nightly", floor="6.0.0")
+
+
+def test_the_shipped_floor_is_above_the_last_release_under_the_old_name():
+    """The constant itself, not just the mechanism: v5.0.0 is the last
+    tag, and this code renames the families."""
+    with pytest.raises(SystemExit):
+        bump_pins.next_release("v5.0.0")
+
+
 # --- digest ------------------------------------------------------------------
 
 class _Resp:

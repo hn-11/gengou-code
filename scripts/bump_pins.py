@@ -33,6 +33,16 @@ from pathlib import Path
 
 ACTION = Path(".github/actions/fetch-upstreams/action.yml")
 
+# The lowest version this code may be released as. The weekly sync cuts
+# a PATCH bump of the newest tag, which is right for an upstream refresh
+# -- newer sources, nothing in this repo changed but the pins -- and
+# wrong the first time after a release that changes what the fonts ARE.
+# v5.0.0 shipped the family as Sumi Moji; this code ships it as Gengou,
+# with different family names, PostScript names and vendor ID, so the
+# next tag is a major one and a human has to cut it. Raise this whenever
+# a release changes something a patch bump would misrepresent.
+MIN_RELEASE = "6.0.0"
+
 SHS_REPO = "adobe-fonts/source-han-sans"
 SCP_REPO = "adobe-fonts/source-code-pro"
 SS_REPO = "adobe-fonts/source-sans"
@@ -161,7 +171,34 @@ PINS = ("SHS_TAG", "SCP_TAG", "SCP_VF_ZIP", "SS_TAG", "MONA_TAG", "NF_TAG",
         *SELECTORS)
 
 
+def next_release(latest, floor=MIN_RELEASE):
+    """The tag an upstream refresh cuts from `latest`: its patch bumped.
+
+    Refuses to return anything below `floor` rather than bumping into
+    it, because the sync merges its own PR and dispatches the release
+    with no one watching -- so the first sync after a rename would have
+    published new family names, new PostScript names and a new vendor ID
+    as v5.0.1, generated notes and all. Cut the major tag by hand first.
+    """
+    parts = latest.lstrip("v").split(".")
+    if len(parts) != 3 or not all(p.isdigit() for p in parts):
+        raise SystemExit(f"cannot bump {latest!r}: not a vMAJOR.MINOR.PATCH tag")
+    nxt = (int(parts[0]), int(parts[1]), int(parts[2]) + 1)
+    want = tuple(int(p) for p in floor.split("."))
+    if nxt < want:
+        raise SystemExit(
+            f"the newest tag is {latest}, so an upstream refresh would cut "
+            f"v{'.'.join(map(str, nxt))} -- below this code's MIN_RELEASE of "
+            f"v{floor}. This release changes what the fonts are, not just "
+            f"which upstream they came from; cut v{floor} by hand, then the "
+            f"sync can patch-bump from there.")
+    return "v" + ".".join(str(n) for n in nxt)
+
+
 def main() -> int:
+    if len(sys.argv) > 2 and sys.argv[1] == "--next":
+        print(next_release(sys.argv[2]))
+        return 0
     text = ACTION.read_text()
     current = {m["key"]: m["val"] for m in PIN_RE.finditer(text)}
     if not current:

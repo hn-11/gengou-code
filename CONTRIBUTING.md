@@ -11,8 +11,9 @@ Source Sans 3 / Monaspace）を CI 上で合成して作られています。ソ
 pip install -r requirements.txt
 ```
 
-ビルドは2段階です。まず `scripts/build_latin.py` が Source Code Pro VF と
-Monaspace VF から欧文レイヤー Gengouを `dist/latin` に組み、
+ビルドは2段階です。まず `scripts/build_latin.py` が Source Code Pro VF・
+Monaspace VF・Source Sans 3 VF Italic（斜体のギリシャ・キリル）から
+欧文レイヤー Gengou を `dist/latin` に組み、
 次に `scripts/build.py` がそれを Source Han Sans JP に接ぎ木します。
 それぞれが読む環境変数:
 
@@ -25,12 +26,19 @@ Monaspace VF から欧文レイヤー Gengouを `dist/latin` に組み、
 | `SHS_DIR` | `build.py` | `SourceHanSansJP-<Weight>.otf` が入ったディレクトリ | [Source Han Sans Releases](https://github.com/adobe-fonts/source-han-sans/releases) |
 | `NF_SYMBOLS` | `nerdpatch.py` | `SymbolsNerdFontMono-Regular.ttf` へのパス | [Nerd Fonts Releases](https://github.com/ryanoasis/nerd-fonts/releases) の `NerdFontsSymbolsOnly.zip` |
 | `LATIN_DIR` | `build.py`（任意、既定 `dist/latin`） | `build_latin.py` の出力先 | — |
-| `GENGOU_VERSION` | 3つとも（任意） | リリース版番号（例 `5.0.0`）。未設定なら上流のリビジョンを name に残す | — |
+| `GENGOU_VERSION` | 3つとも（任意） | リリース版番号（例 `6.0.0`）。未設定なら上流のリビジョンを name に残す | — |
 | `GENGOU_SKIP_AUTOHINT` | `build.py` / `build_latin.py`（任意） | `1` でヒント付けをスキップ（試しビルドの時短用） | — |
 
 取得元の URL パターンや正確なタグは `.github/actions/fetch-upstreams/action.yml`
 と `.github/workflows/ci.yml` を参照してください（そのまま実行可能な
 リファレンスです）。
+
+リリースのタグがバージョンです（バージョンファイルはありません）。上流を
+取り込み直すだけのリリースはパッチ上げで、週次の `upstream-sync` が自分で
+PR を出して自分でマージし、そのタグで `release.yml` を叩きます。**フォントの
+中身そのものが変わるリリースは、先に人間がメジャータグを切る必要があります**
+——`scripts/bump_pins.py` の `MIN_RELEASE` がその下限で、下回る自動リリースは
+落ちます。改名したこのリリースの場合、次のタグは `v6.0.0` です。
 
 ```sh
 # export しておく（`VAR=... \` の行継続は直後の 1 コマンドにしか効かない）
