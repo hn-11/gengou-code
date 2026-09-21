@@ -18,8 +18,12 @@ is bar-matched per master with erosion DISABLED (VFSource.matched
 erode=False): erosion is a pathops boolean op on a fixed outline, not an
 interpolatable deformation, so a VF master can't take that path (see
 docs/gengou-plan.md 段階2) — below SCP wght ≈366 Monaspace's punctuation
-just stays at its own wght-200 floor instead, slightly heavier than the
-bar-matched ideal. draw_clean's pathops.simplify pass is also disabled for
+just stays at its own wght-200 floor instead. That is not slight: at the
+Light instance (wght 300) the '=' bar is 53 units against the static
+Light's 37, and 106 glyphs — the ASCII punctuation, the arrows and
+inequalities, every ligature — carry 43-56% more ink than the static,
+so within that one instance the letters go to 56% of Regular while the
+operators stay at 86-92%. docs/gengou-plan.md 6 節 has the numbers. draw_clean's pathops.simplify pass is also disabled for
 the same reason (overlap removal is not guaranteed point-compatible across
 weights); masters keep overlapping contours, same as Adobe ships SCP's own
 VF. No hinting, no subroutinizing: CFF2 VFs don't carry per-master hints
