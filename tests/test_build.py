@@ -2674,3 +2674,28 @@ def test_update_bbox_after_checks_the_vertical_extents_too():
     dropped = {"pl": ((40, 0, 100, 100), (600, 40), (1000, 5))}
     assert build.update_bbox_after(font, {"pl": (40, 0, 100, 100)},
                                    dropped) is False
+
+
+def test_append_glyph_gives_a_zero_width_mark_no_vertical_advance_either():
+    """A combining mark must not advance in either direction. Copying
+    the donor's vertical advance gave every grafted accent a full cell
+    of it, which is not what a mark is."""
+    font = _cff_font_with_widths({"A": 600})
+    font["vmtx"] = _FakeMtx({"A": (1000, 120)})
+    font["vhea"] = SimpleNamespace(ascent=880, descent=-120)
+    cff = font["CFF "].cff
+    td = cff[cff.fontNames[0]]
+    pen = T2CharStringPen(0, None)
+    pen.moveTo((0, 0))
+    pen.lineTo((100, 0))
+    pen.lineTo((100, 100))
+    pen.closePath()
+    cs = pen.getCharString()
+
+    build.append_glyph(font, td, "mark", cs, None, 0, vdonor="A")
+    build.append_glyph(font, td, "letter", cs, None, 600, vdonor="A")
+
+    assert font["hmtx"].metrics["mark"][0] == 0
+    assert font["vmtx"].metrics["mark"][0] == 0          # not the donor's 1000
+    assert font["hmtx"].metrics["letter"][0] == 600
+    assert font["vmtx"].metrics["letter"][0] == 1000     # a letter still does

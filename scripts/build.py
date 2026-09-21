@@ -646,7 +646,13 @@ def note_redrawn(font, names):
 def append_glyph(font, td, name, cs, fd_index, width, lsb=None, vdonor=None):
     """Append one built glyph. Returns its outline box (None if blank),
     which it measures anyway for the side bearing — update_bbox_after's
-    caller wants it and should not pay for it twice."""
+    caller wants it and should not pay for it twice.
+
+    A glyph appended at width 0 is a combining mark, and takes 0 for its
+    vertical advance as well as its horizontal one. Copying the donor's
+    1000 gave every grafted accent a full cell of vertical advance it
+    must not have; Source Han Sans's own thirteen marks keep the 1000 it
+    ships them with, which is its vertical design, not ours to rewrite."""
     order = font.getGlyphOrder()
     order.append(name)
     if td.charset is not order:  # same list object for CFF fonts
@@ -672,7 +678,7 @@ def append_glyph(font, td, name, cs, fd_index, width, lsb=None, vdonor=None):
         # layout does, and reads no VORG at all. The CFF VORG in the same
         # file said 880 for all of them, so the two tables disagreed
         font["vmtx"].metrics[name] = (
-            font["vmtx"].metrics[vdonor][0],
+            0 if width == 0 else font["vmtx"].metrics[vdonor][0],
             otRound(vmtx_origin(font, vdonor) - (box[3] if box else 0)))
     note_redrawn(font, [name])
     # two sets, because they answer two questions. _built is every glyph
