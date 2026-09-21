@@ -1722,6 +1722,15 @@ def import_scp_marks(base, scp, default_map, marks):
     return len(live)
 
 
+# (usWinAscent, usWinDescent) for every JP face — a clipping bound in
+# the GDI paths and their line height. Pinned rather than measured: this
+# family's ink reaches 1808 / -1048 and covering it would give a 2856u
+# line, more than twice the 1257u every renderer honouring
+# USE_TYPO_METRICS uses. See copy_line_metrics for where each number
+# comes from, and verify.WIN_METRICS, which holds the built faces to it.
+WIN_METRICS = (1160, 454)
+
+
 def copy_line_metrics(base, latin):
     """The line pitch of an English terminal font: hhea and typo ascender
     / descender / line gap from the Latin donor (Source Code Pro's 984 /
@@ -1730,20 +1739,34 @@ def copy_line_metrics(base, latin):
     Han Sans (1160 / -288, 15% more). Source Han Sans's own kanji body
     (880 / -120) sits inside.
 
-    usWinAscent / Descent stay Source Han Sans's (1160 / 288). They are
-    a clipping bound as much as a line height, and Source Han Sans's own
-    ink goes well past 984 — so bringing them down to the typo metrics
-    would clip glyphs in the GDI paths that read them. The cost is that
-    those same paths (legacy conhost, Notepad, Office's GDI text) still
-    lay out a 1448u line where DirectWrite, CoreText and HarfBuzz lay
-    out 1257u; USE_TYPO_METRICS tells everything that reads it which to
-    prefer."""
+    usWinAscent / Descent are pinned to WIN_METRICS. They are a clipping
+    bound as much as a line height, and Source Han Sans's own ink goes
+    well past 984 — so bringing them down to the typo metrics would clip
+    glyphs in the GDI paths that read them. The cost is that those same
+    paths (legacy conhost, Notepad, Office's GDI text) lay out a 1614u
+    line where DirectWrite, CoreText and HarfBuzz lay out 1257u;
+    USE_TYPO_METRICS tells everything that reads it which to prefer.
+
+    The ascent is Source Han Sans's own 1160. The descent is 454 rather
+    than Source Han Sans's 288, because the Latin layer grafted over it
+    draws deeper than Source Han Sans does: the box-drawing elements
+    reach -400 and the shade blocks -454, and at 288 the GDI paths
+    sliced the bottom off 111 codepoints, 101 of them box drawing — a
+    terminal font's frames and rules breaking in exactly the renderers
+    that read this field. 454 is what the Latin family already declares
+    for the same ink (build_latin.harmonise_win measures 1060 / 454), so
+    this is the JP faces catching up to their own Latin layer rather
+    than a new policy. Two codepoints stay outside it, the vertical kana
+    repeat marks U+3031 and U+3032 at -549; covering them would cost
+    another 6% of GDI line height for two characters no terminal sets.
+    """
     for tbl, attrs in (
         ("hhea", ("ascent", "descent", "lineGap")),
         ("OS/2", ("sTypoAscender", "sTypoDescender", "sTypoLineGap")),
     ):
         for a in attrs:
             setattr(base[tbl], a, getattr(latin[tbl], a))
+    base["OS/2"].usWinAscent, base["OS/2"].usWinDescent = WIN_METRICS
     base["OS/2"].fsSelection |= 1 << 7   # USE_TYPO_METRICS
 
 

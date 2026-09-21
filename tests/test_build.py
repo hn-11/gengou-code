@@ -2383,3 +2383,30 @@ def test_classify_unicode_marks_follows_a_mark_through_its_substitutes():
     assert classes["mark"] == classes["cap"] == classes["capalt"] == 3
     assert classes["base"] == 1 and "lig" not in classes
     assert build.classify_unicode_marks(font) == []      # idempotent
+
+
+class _Tbl:
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+
+def test_copy_line_metrics_takes_the_line_from_the_latin_and_pins_the_win_box():
+    """The line pitch comes from the Latin donor; the win box does not.
+    It is pinned, because it is a clipping bound in the GDI paths and
+    this family's ink runs far past any line it would be sane to
+    declare -- and because at Source Han Sans's own 288 the Latin
+    layer's box drawing (-400) and shade blocks (-454) were sliced."""
+    base = {"hhea": _Tbl(ascent=1160, descent=-288, lineGap=0),
+            "OS/2": _Tbl(sTypoAscender=1160, sTypoDescender=-288, sTypoLineGap=0,
+                         usWinAscent=1160, usWinDescent=288, fsSelection=0x40)}
+    latin = {"hhea": _Tbl(ascent=984, descent=-273, lineGap=0),
+             "OS/2": _Tbl(sTypoAscender=984, sTypoDescender=-273, sTypoLineGap=0,
+                          usWinAscent=1060, usWinDescent=454, fsSelection=0x40)}
+    build.copy_line_metrics(base, latin)
+    assert (base["hhea"].ascent, base["hhea"].descent) == (984, -273)
+    assert (base["OS/2"].sTypoAscender, base["OS/2"].sTypoDescender) == (984, -273)
+    assert base["OS/2"].fsSelection & (1 << 7)            # USE_TYPO_METRICS
+    assert (base["OS/2"].usWinAscent, base["OS/2"].usWinDescent) == build.WIN_METRICS
+    assert build.WIN_METRICS == (1160, 454)
+    # deep enough for the shade blocks, and not the typo descender
+    assert build.WIN_METRICS[1] >= 454 > 288

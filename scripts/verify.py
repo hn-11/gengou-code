@@ -54,9 +54,10 @@ CASES = [
     ("日本語 != x", 7),
 ]
 
-# Source Han Sans's own (usWinAscent, usWinDescent), kept by
-# copy_line_metrics for every JP face; see the check that reads it
-WIN_METRICS = (1160, 288)
+# the (usWinAscent, usWinDescent) copy_line_metrics pins on every JP
+# face: Source Han Sans's own ascent, and a descent deep enough for the
+# Latin layer's box drawing. Read from build so the two cannot drift
+WIN_METRICS = build.WIN_METRICS
 
 # drawn to tile, so a run of them must show no seam: the full-width low
 # line and overline, the wave dash, a quadrant, and the box-drawing and
@@ -1629,16 +1630,15 @@ def main():
     ok = os2.sTypoAscender > 0 and os2.sTypoDescender < 0
     check(ok, f"OS/2 typo metrics sane "
               f"(typoAsc={os2.sTypoAscender}, typoDesc={os2.sTypoDescender})")
-    # pinned, not merely positive: these are Source Han Sans's own, kept
-    # deliberately (copy_line_metrics, README 行の高さ). They are the GDI
-    # line height as much as a clipping bound, and this family's ink
-    # reaches 1808/-1048 — covering it would give a 2856u line, more than
-    # twice the 1257u every renderer that honours USE_TYPO_METRICS uses.
-    # The cost is that the Latin layer's box drawing (-400) and block
-    # elements (-454) sit below the bound; docs/gengou-plan.md carries
-    # the measurement and what raising it would trade
+    # pinned, not merely positive (copy_line_metrics, README 行の高さ).
+    # They are the GDI line height as much as a clipping bound, and this
+    # family's ink reaches 1808/-1048 — covering it would give a 2856u
+    # line, more than twice the 1257u every renderer that honours
+    # USE_TYPO_METRICS uses. The descent does cover the Latin layer's
+    # box drawing (-400) and shade blocks (-454); docs/gengou-plan.md
+    # carries the measurement and the two codepoints left outside
     check((os2.usWinAscent, os2.usWinDescent) == WIN_METRICS,
-          f"win metrics are Source Han Sans's {WIN_METRICS}, got "
+          f"win metrics are the pinned {WIN_METRICS}, got "
           f"({os2.usWinAscent}, {os2.usWinDescent})")
 
     if "Nerd Font" in fam:
