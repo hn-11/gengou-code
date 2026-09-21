@@ -910,7 +910,7 @@ def test_fit_to_grid_centres_proportional_advances_on_the_grid():
         pen = BoundsPen(gs)
         gs[g].draw(pen)
         assert pen.bounds[0] == want_lsb == hmtx[g][1]     # centred, lsb kept in step
-    assert font._redrawn == {"kana", "jamo", "dash"}
+    assert build.state_of(font).redrawn == {"kana", "jamo", "dash"}
 
 
 def _path(points):
@@ -1177,7 +1177,7 @@ def test_narrow_letters_leaves_the_latin_donor_s_own_glyphs_alone():
     its own Latin sibling."""
     font = _cff_font_with_widths({"grafted": 600})
     font["cmap"].tables[0].cmap = {0x496: "grafted"}
-    font._built = {"grafted"}
+    build.state_of(font).built = {"grafted"}
     assert build.narrow_letters(font, 600) == 0
 
 
@@ -1207,7 +1207,7 @@ def test_narrow_halfwidth_leaves_the_latin_donors_glyph_alone():
         td = font["CFF "].cff.topDictIndex[0]
         td.CharStrings[g] = pen.getCharString(private=td.Private)
     font["cmap"].tables[0].cmap = {0x20A9: "won", 0xFFA1: "jamo"}
-    font._built = {"won"}
+    build.state_of(font).built = {"won"}
     assert build.narrow_halfwidth(font, 600) == 1
     assert font.getBestCmap()[0x20A9] == "won"        # untouched
     assert font.getBestCmap()[0xFFA1] != "jamo"       # the jamo got its copy
@@ -1227,7 +1227,7 @@ def test_narrow_halfwidth_condenses_a_shared_glyph_into_the_cell():
     assert cmap[0x3131] == "jamo" and hmtx["jamo"][0] == 920      # untouched
     copy = cmap[0xFFA1]
     assert copy != "jamo" and hmtx[copy][0] == 600
-    assert copy not in font._appended            # keeps its own FontDict
+    assert copy not in build.state_of(font).appended            # keeps its own FontDict
     pen = BoundsPen(font.getGlyphSet())
     font.getGlyphSet()[copy].draw(pen)
     assert pen.bounds[2] - pen.bounds[0] == pytest.approx(100 * 600 / 920, abs=1)
@@ -1243,7 +1243,7 @@ def test_narrow_halfwidth_copies_are_out_of_reach_of_the_reference_steps():
     font["cmap"].tables[0].cmap = {0x3131: "jamo", 0xFFA1: "jamo"}
     assert build.narrow_halfwidth(font, 600) == 1
     copy = font.getBestCmap()[0xFFA1]
-    assert copy in font._built and copy not in font._appended
+    assert copy in build.state_of(font).built and copy not in build.state_of(font).appended
     # a reference that claims this very name is a full width
     assert build.fit_to_grid(font, 600, steps={copy: 1000, "jamo": 1000}) == 1
     assert font["hmtx"].metrics[copy][0] == 600        # still one cell
@@ -1372,7 +1372,7 @@ def test_widen_fullwidth_redraws_a_charstring_shift_declines(monkeypatch):
     monkeypatch.setattr(build, "shift_charstring", lambda *a, **k: False)
     build.widen_fullwidth(font, 600)
     assert font["hmtx"].metrics["full"][0] == 1200
-    assert font._redrawn == {"full"}
+    assert build.state_of(font).redrawn == {"full"}
     pen = BoundsPen(font.getGlyphSet())
     font.getGlyphSet()["full"].draw(pen)
     assert pen.bounds[0] == 120                      # centred in the new advance
@@ -2296,7 +2296,7 @@ def test_fullwidth_marks_reads_where_the_ink_is_centred_not_the_cell_edges():
     got = build.fullwidth_marks(font)
     assert got == {names[0x302A], names[0x3099], names[0x20DD]}
     # ... and ours, drawn one CELL left, are told apart by _built alone
-    font._built = frozenset({names[0x20DD]})
+    build.state_of(font).built = {names[0x20DD]}
     assert build.fullwidth_marks(font) == {names[0x302A], names[0x3099]}
 
 

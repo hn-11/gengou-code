@@ -66,6 +66,7 @@ Env (optional):
 import concurrent.futures
 import contextlib
 import copy
+import dataclasses
 import functools
 import json
 import logging
@@ -585,24 +586,59 @@ def pen_width(private, advance):
     return None if advance == default else advance - nominal
 
 
+@dataclasses.dataclass
+class BuildState:
+    """What the passes of one build tell each other about the glyphs it
+    made, kept on the font as `font.state` (state_of).
+
+    `built` is every glyph this build made, and nothing ever leaves it:
+    their names come from Source Han Sans's own CID space, so a pass
+    that looks a glyph up by name in a reference font (fit_to_grid)
+    must know not to. `appended` is the subset add_latin_fd re-homes
+    into the Latin FontDict, which an appender can opt out of
+    (narrow_halfwidth does); once add_latin_fd has run, `latin_fd` is
+    that FontDict's index and nothing may be appended after it.
+    `redrawn` is every glyph whose charstring WE generated -- a
+    T2CharStringPen's output carries no hints, so autohint_face
+    re-hints these after the face is saved and Source Han Sans's own
+    untouched glyphs keep theirs. `pinned_cell` is what
+    narrow_halfwidth and the Latin graft put on one cell for
+    fit_to_grid to leave alone. `vorigin` caches vmtx_origin; the CID
+    allocator keeps its cursor in `used_cids` / `next_cid`."""
+    built: set = dataclasses.field(default_factory=set)
+    appended: set = dataclasses.field(default_factory=set)
+    redrawn: set = dataclasses.field(default_factory=set)
+    pinned_cell: set = dataclasses.field(default_factory=set)
+    vorigin: dict = dataclasses.field(default_factory=dict)
+    used_cids: set | None = None
+    next_cid: int = CID_ALLOC_START
+    latin_fd: int | None = None
+
+
+def state_of(font):
+    """The BuildState of `font`, made on first use."""
+    state = getattr(font, "state", None)
+    if state is None:
+        state = font.state = BuildState()
+    return state
+
+
 def alloc_glyph_name(font):
     """Allocate an unused CID. Subset OTFs have sparse CIDs (SHS JP tops
     out at 65497 with only ~18k glyphs), so len(order) collides with real
     names and max+1 overflows 65534 — walk the gaps instead, starting
     above the Adobe-Japan1-7 defined range (see CID_ALLOC_START)."""
-    used = getattr(font, "_used_cids", None)
-    if used is None:
-        used = {int(g[3:]) for g in font.getGlyphOrder()
-                if g.startswith("cid") and g[3:].isdigit()}
-        font._used_cids = used
-        font._next_cid = CID_ALLOC_START
-    n = font._next_cid
-    while n in used:
+    state = state_of(font)
+    if state.used_cids is None:
+        state.used_cids = {int(g[3:]) for g in font.getGlyphOrder()
+                           if g.startswith("cid") and g[3:].isdigit()}
+    n = state.next_cid
+    while n in state.used_cids:
         n += 1
     if n > CID_MAX:
         raise RuntimeError("CID space exhausted")
-    used.add(n)
-    font._next_cid = n + 1
+    state.used_cids.add(n)
+    state.next_cid = n + 1
     return f"cid{n:05d}"
 
 
@@ -627,9 +663,7 @@ def vmtx_origin(font, glyph):
     """The vertical origin of a glyph already in `font` — its own yMax
     plus its top side bearing, which is what CFF's VORG states directly.
     Cached, because it needs the glyph set."""
-    cache = getattr(font, "_vorigin", None)
-    if cache is None:
-        cache = font._vorigin = {}
+    cache = state_of(font).vorigin
     if glyph not in cache:
         box = _bounds(font.getGlyphSet(), glyph)
         cache[glyph] = font["vmtx"].metrics[glyph][1] + (box[3] if box else 0)
@@ -655,10 +689,7 @@ def note_redrawn(font, names):
     carries no hints, so every glyph that passes through it — grafted,
     fitted, shifted, widened — is re-hinted by autohint_face() after the
     face is saved. Source Han Sans's own untouched glyphs keep theirs."""
-    redrawn = getattr(font, "_redrawn", None)
-    if redrawn is None:
-        redrawn = font._redrawn = set()
-    redrawn.update(names)
+    state_of(font).redrawn.update(names)
 
 
 def append_glyph(font, td, name, cs, fd_index, width, lsb=None, vdonor=None):
@@ -699,18 +730,13 @@ def append_glyph(font, td, name, cs, fd_index, width, lsb=None, vdonor=None):
             0 if width == 0 else font["vmtx"].metrics[vdonor][0],
             otRound(vmtx_origin(font, vdonor) - (box[3] if box else 0)))
     note_redrawn(font, [name])
-    # two sets, because they answer two questions. _built is every glyph
-    # this build made, and nothing ever leaves it: their names come from
-    # Source Han Sans's own CID space, so a pass that looks a glyph up by
-    # name in a reference font (fit_to_grid) must know not to. _appended
-    # is the subset add_latin_fd re-homes into the Latin FontDict, which
-    # an appender can opt out of (narrow_halfwidth does).
-    for attr in ("_built", "_appended"):
-        have = getattr(font, attr, None)
-        if have is None:
-            have = set()
-            setattr(font, attr, have)
-        have.add(name)
+    state = state_of(font)
+    if state.latin_fd is not None:
+        raise RuntimeError(f"{name} appended after add_latin_fd: it would keep "
+                           "the FontDict of whatever it was drawn against")
+    # two sets, because they answer two questions (BuildState says which)
+    state.built.add(name)
+    state.appended.add(name)
     font.setGlyphOrder(order)
     if hasattr(font, "_reverseGlyphOrderDict"):
         del font._reverseGlyphOrderDict
@@ -2842,12 +2868,12 @@ def fit_to_grid(font, cell, steps=None):
     moved = 0
     # a glyph this build made carries a name alloc_glyph_name took from
     # Source Han Sans's own CID space, so it can collide with a reference
-    # name that means something else entirely — and _built, not
-    # _appended, is the whole of them: narrow_halfwidth's condensed
+    # name that means something else entirely — and `built`, not
+    # `appended`, is the whole of them: narrow_halfwidth's condensed
     # copies opt out of the Latin FontDict but are just as much ours.
     # Ours are on the grid by construction and take the fallback path
-    built = getattr(font, "_built", frozenset())
-    pinned = getattr(font, "_pinned_cell", frozenset())
+    built = state_of(font).built
+    pinned = state_of(font).pinned_cell
     for name in font.getGlyphOrder():
         adv, lsb = hmtx.metrics[name]
         if adv <= 0:
@@ -3358,7 +3384,7 @@ def fullwidth_marks(font):
     Source Han Sans draws them one FULL WIDTH left of the origin, the
     way graft_halfwidth draws ours one CELL left, so widening the cell
     to 1200 has to take them 100 units further left — not right. Told
-    from the grafted Latin marks by `_built`: those are ours, the Latin
+    from the grafted Latin marks by `built`: those are ours, the Latin
     cell is 600 in both families, and they stay put.
 
     What says "drawn in the full-width cell" is where the ink's CENTRE
@@ -3376,7 +3402,7 @@ def fullwidth_marks(font):
     apart at any weight."""
     hmtx = font["hmtx"]
     gs = font.getGlyphSet()
-    built = getattr(font, "_built", frozenset())
+    built = state_of(font).built
     slack = FULLWIDTH // 20
     out = set()
     for cp, name in font.getBestCmap().items():
@@ -4407,11 +4433,9 @@ def notdef_to_cell(base, latin, cell):
         box = charstring_box(cs)
         base["vmtx"].metrics[name] = (base["vmtx"].metrics[name][0],
                                       otRound(origin - (box[3] if box else 0)))
-        base._vorigin.pop(name, None)
+        state_of(base).vorigin.pop(name, None)
     note_redrawn(base, {name: cs})
-    pinned = getattr(base, "_pinned_cell", None)
-    if pinned is None:
-        pinned = base._pinned_cell = set()
+    pinned = state_of(base).pinned_cell
     pinned.add(name)
     return True
 
@@ -4446,7 +4470,7 @@ def narrow_letters(font, cell, blocks=LETTER_BLOCKS):
     cff = font["CFF "].cff
     td = cff[cff.fontNames[0]]
     wanted = {cp for lo, hi in blocks for cp in range(lo, hi + 1)}
-    built = getattr(font, "_built", frozenset())
+    built = state_of(font).built
     room = cell - 2 * LETTER_BEARING
     reached = {}
     for cp, name in cmap.items():
@@ -4478,9 +4502,7 @@ def narrow_letters(font, cell, blocks=LETTER_BLOCKS):
         td.CharStrings[name] = cs
         hmtx.metrics[name] = (cell, charstring_lsb(cs))
     note_redrawn(font, drawn)
-    pinned = getattr(font, "_pinned_cell", None)
-    if pinned is None:
-        pinned = font._pinned_cell = set()
+    pinned = state_of(font).pinned_cell
     pinned.update(drawn)
     return len(drawn)
 
@@ -4515,7 +4537,7 @@ def narrow_halfwidth(font, cell):
     cff = font["CFF "].cff
     td = cff[cff.fontNames[0]]
     vdon = vmtx_donor(font, fullwidth=False)
-    built = getattr(font, "_built", frozenset())
+    built = state_of(font).built
     made, new = {}, {}
     for cp, name in sorted(cmap.items()):
         adv = hmtx[name][0]
@@ -4555,9 +4577,9 @@ def narrow_halfwidth(font, cell):
                          fd, cell, None, vdon)
             # append_glyph records it in both sets; take it out of the
             # Latin-FontDict one only, so add_latin_fd leaves this copy
-            # in the FontDict it came from. It stays in _built, which is
+            # in the FontDict it came from. It stays in `built`, which is
             # what fit_to_grid reads to know a name is ours
-            font._appended.discard(made[name])
+            state_of(font).appended.discard(made[name])
         new[cp] = made[name]
     set_cmap(font, new)
     return len(new)
@@ -5042,10 +5064,11 @@ def add_latin_fd(font):
     private.StemSnapV = [std_vw]
     td.FDArray.append(fd)
     index = len(td.FDArray) - 1
+    state_of(font).latin_fd = index
     # only glyphs append_glyph() created: Source Han Sans's own glyphs also
     # live above CID_ALLOC_START (its CID space is sparse) and call THEIR
     # FD's subroutines, so a CID-range test would corrupt them
-    for name in getattr(font, "_appended", ()):
+    for name in state_of(font).appended:
         td.FDSelect.gidArray[font.getGlyphID(name)] = index
     print(f"  Latin FD {index}: blues {blues} other {other} "
           f"StdHW {std_hw} StdVW {std_vw}")
@@ -5437,7 +5460,7 @@ def build_face(job):
     prune_orphan_names(base)
     update_bbox(base)
     out = Path(out_dir) / f"{ps}.otf"
-    write_face(base, out, getattr(base, "_redrawn", set()))
+    write_face(base, out, state_of(base).redrawn)
     return (f"{face_label}{f' [{suffix}]' if suffix else ''}: "
             f"latin={n_scp} fwid={len(fullwidth)} vert={n_vert} "
             f"fitted={n_fit} half={n_half} letters={n_letters} "
