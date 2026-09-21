@@ -1564,8 +1564,8 @@ def pair_mark_lookups(base, donor):
         mine = _mark_codepoints(base, subs)
         ranked = sorted(((len(mine & cps), j) for j, cps in donor_marks.items()),
                         reverse=True)
-        if not ranked or ranked[0][0] == 0:
-            continue                       # nothing of ours is in theirs
+        if ranked[0][0] == 0:          # nothing of ours is in theirs
+            continue
         if len(ranked) > 1 and ranked[0][0] == ranked[1][0]:
             return {}                      # a tie is not a match, it is a guess
         pairs[i] = ranked[0][1]
@@ -3960,11 +3960,14 @@ def cell_fit(box, cell=CELL, bearing=LETTER_BEARING):
     the letters that need it are the only ones that get it. A glyph with
     no ink is centred trivially.
 
-    Two callers share this rule: narrow_letters, condensing Source Han
-    Sans's proportional Greek and Cyrillic on the JP side, and
-    build_latin.add_missing_from_sans, seating Source Sans's proportional
-    Greek and Cyrillic in the italic Latin faces. They are the same two
-    scripts for the same reason, and the rule must not drift apart."""
+    Two callers share this rule for the same two scripts, and it must
+    not drift apart between them: build_latin.add_missing_from_sans,
+    seating Source Sans's proportional Greek and Cyrillic in the italic
+    Latin faces, and narrow_letters, which would condense Source Han
+    Sans's on the JP side. narrow_letters finds nothing to do today --
+    both Latin donors now cover the whole block, so every codepoint in
+    it is grafted before that pass runs -- and stands by for an upstream
+    that stops covering it."""
     if not box:
         return 1.0, 0
     ink = box[2] - box[0]
@@ -4712,8 +4715,7 @@ def autohint_face(path, glyph_names):
     own hints on untouched glyphs are kept as shipped, so the run is
     seconds rather than the minutes hinting 19,000 glyphs takes. That is
     the grafted Latin, the ligatures, and whatever fit_to_grid and
-    widen_fullwidth moved — a few hundred more in the italic faces,
-    where Source Han Sans's Greek and Cyrillic survive.
+    widen_fullwidth moved.
     The Latin faces pass every glyph — the instancer drops SCP's hints.
     GENGOU_SKIP_AUTOHINT=1 skips it for quick local iterations."""
     if os.environ.get("GENGOU_SKIP_AUTOHINT"):
@@ -4917,9 +4919,11 @@ def build_face(job):
     # condensed from Source Han Sans's own advance and not from the one
     # the grid pass would give it
     n_half = narrow_halfwidth(base, CELL)
-    # and the Greek and Cyrillic the italic faces keep from Source Han
-    # Sans, for the same reason: on the donor's own advance, before the
-    # grid pass rounds the widest of them up to two columns
+    # and any Greek or Cyrillic still standing on Source Han Sans's own
+    # glyph, for the same reason: on the donor's own advance, before the
+    # grid pass rounds the widest of them up to two columns. Both Latin
+    # donors cover the whole block now, so this reports 0 on every face;
+    # it stands by for an upstream that stops covering it
     n_letters = narrow_letters(base, CELL)
     # then Source Han Sans's proportional leftovers onto the grid — every
     # glyph, so hwid's own 500-advance alternates and the locl forms no
