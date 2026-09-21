@@ -493,9 +493,13 @@ def check_private(tf, check):
                        f"{bad_int[:3]})")
 
 
-# how far an accent's ink centre may sit from its letter's: half
-# a cell, where the regression this catches is a whole one
-_LEAN = build.CELL // 2
+# how far past the LETTER'S OWN INK an accent may reach. Measured
+# from the ink, not as a fixed distance from its centre: an italic
+# ascender leans right, so at Light Italic the dot over d sits 299
+# units right of d's centre against a half-cell allowance of 300 --
+# one unit from failing on a face that is drawn exactly as its donor
+# drew it. What this catches is a whole cell, 600.
+_LEAN = build.CELL // 4
 # one base per script and per shape the face carries, not seven Latin
 # letters the donor happens to anchor natively. Every one of b d f h k l
 # t is in Source Code Pro's own mark coverage, so this pass could not
@@ -537,24 +541,34 @@ def check_accents_clear(shape, gs, order, cmap, check, label=""):
                 continue        # composed into one glyph: nothing to clear
             boxes, across = [], []
             pen_x = 0
+            spans = []
             for info, pos in zip(infos, positions):
                 pen = BoundsPen(gs)
                 gs[order[info.codepoint]].draw(pen)
                 boxes.append(None if pen.bounds is None else
                              (pen.bounds[1] + pos.y_offset,
                               pen.bounds[3] + pos.y_offset))
-                across.append(None if pen.bounds is None else
-                              ((pen.bounds[0] + pen.bounds[2]) / 2
-                               + pen_x + pos.x_offset))
+                spans.append(None if pen.bounds is None else
+                             (pen.bounds[0] + pen_x + pos.x_offset,
+                              pen.bounds[2] + pen_x + pos.x_offset))
+                across.append(None if spans[-1] is None else
+                              sum(spans[-1]) / 2)
                 pen_x += pos.x_advance
             pairs += 1
             # sideways as well as up: an accent parked a whole cell
             # right sits above nothing and cleared the letter by this
             # test alone (+600 on every base anchor passed both Latin
-            # verifiers, with b's acute drawing in the next column)
-            off = None if None in across else across[1] - across[0]
+            # verifiers, with b's acute drawing in the next column).
+            # The allowance is measured from the LETTER'S ink, not from
+            # its centre: the accent goes over whatever part of the
+            # letter it belongs over, which on a leaning italic
+            # ascender is nowhere near the middle
+            lean = None
+            if None not in spans:
+                lean = max(spans[0][0] - across[1], across[1] - spans[0][1], 0)
             if (None in boxes or boxes[1][0] < boxes[0][1]
-                    or off is None or abs(off) > _LEAN):
+                    or lean is None or lean > _LEAN):
+                off = None if None in across else across[1] - across[0]
                 through[base + mark] = (None if None in boxes else
                                         (round(boxes[0][1]), round(boxes[1][0]),
                                          None if off is None else round(off)))
@@ -735,12 +749,19 @@ def check_stray_marks(shape, gs, order, cmap, check, italic):
             infos, positions = shape(base + chr(cp), {})
             if len(infos) != 2:
                 continue             # composed: nothing loose to place
+            base_pen = BoundsPen(gs)
+            gs[order[infos[0].codepoint]].draw(base_pen)
             pen = BoundsPen(gs)
             gs[order[infos[1].codepoint]].draw(pen)
             if pen.bounds is None:
                 continue
             left = pen.bounds[0] + build.CELL + positions[1].x_offset
-            if left > build.CELL * 0.9:
+            # past the LETTER'S own ink, not past nine tenths of the
+            # cell: a mark that starts at 549 over Light Italic d, whose
+            # ink runs to 591, is on the letter. One that starts at 959
+            # is in the next character.
+            edge = base_pen.bounds[2] if base_pen.bounds else build.CELL
+            if left > edge:
                 stray.append(f"U+{cp:04X}")
                 break
     want = STRAY_MARKS_ITALIC if italic else STRAY_MARKS
