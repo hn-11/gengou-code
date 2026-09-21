@@ -10,12 +10,14 @@ Usage: python scripts/verify_latin_vf.py [FONT]
   FONT defaults to dist/latin/Gengou[wght].otf.
 """
 
+import io
 import os
 import sys
 from pathlib import Path
 
 from fontTools.pens.boundsPen import BoundsPen
 from fontTools.ttLib import TTFont
+from fontTools.varLib.instancer import instantiateVariableFont
 from fontTools.varLib.models import piecewiseLinearMap
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -24,7 +26,7 @@ import build  # noqa: E402
 import build_latin_vf  # noqa: E402
 from verifylib import (  # noqa: E402
     Checker,
-    check_accents_clear,
+    check_anchor_coverage,
     check_anchor_placement,
     check_coverage_order,
     check_features_work,
@@ -33,11 +35,12 @@ from verifylib import (  # noqa: E402
     check_heights,
     check_mark_class_closure,
     check_mark_features,
+    check_marks_attach,
     check_private,
-    check_stray_marks,
     check_style_bits,
     check_tables,
     check_zones,
+    ink_spill,
     make_shaper,
     static_faces,
 )
@@ -283,39 +286,35 @@ def main():
     check(inked >= 700, f"{inked} mapped glyphs draw at the default weight")
     ligs = []
     shape_default = make_shaper(FONT, {"wght": axis.defaultValue})
-    check_accents_clear(shape_default, default_gs, tf.getGlyphOrder(),
-                        vf_cmap, check, " at the default weight")
-    check_anchor_placement(tf, check, default_gs, " at the default weight")
     check_heights(tf, check, default_gs, vf_cmap)
     check_zones(tf, check, vf_cmap)
-    check_mark_features(tf, check, shape_default, default_gs,
-                        tf.getGlyphOrder(), vf_cmap)
-    check_stray_marks(shape_default, default_gs, tf.getGlyphOrder(), vf_cmap,
-                      check, is_italic)
-    # ... and at the axis extremes and every named instance, not the
-    # default alone. A variable font's anchors are merged from the
-    # masters, so a value that is wrong only away from the default is
-    # exactly what this file is here to see -- and these three are the
-    # checks here that read a position at all. The Light Italic
-    # instance is where the statics' own weight extreme first showed a
-    # leaning ascender, so it is the one a default-only gate misses.
-    seen = {round(axis.defaultValue)}
-    for loc in sorted({round(axis.minValue), round(axis.maxValue)}
-                      | {round(i.coordinates["wght"])
-                         for i in tf["fvar"].instances
-                         if "wght" in i.coordinates}):
-        if loc in seen:
-            continue
-        seen.add(loc)
-        gs_at = tf.getGlyphSet(location={"wght": loc})
-        shape_at = make_shaper(FONT, {"wght": loc})
-        check_accents_clear(shape_at, gs_at, tf.getGlyphOrder(), vf_cmap,
-                            check, f" at wght {loc}")
-        check_stray_marks(shape_at, gs_at, tf.getGlyphOrder(), vf_cmap,
-                          check, is_italic, f" at wght {loc}")
-        check_mark_features(tf, check, shape_at, gs_at, tf.getGlyphOrder(),
-                            vf_cmap, f" at wght {loc}")
-        check_anchor_placement(tf, check, gs_at, f" at wght {loc}")
+    # The mark gates run on an INSTANCE at every location: the default,
+    # both axis extremes and every named instance. A variable font's
+    # anchors are merged from the masters into variable anchors, so a
+    # value wrong only away from the default is exactly what this file
+    # is here to see, and reading the VF's own tables shows only the
+    # default value -- instantiating resolves every delta into a plain
+    # font the same four checks the statics get can read. The Light
+    # Italic instance is where the statics' own weight extreme first
+    # showed a leaning ascender; it is the one a default-only gate
+    # misses, and it is a named instance here.
+    locations = sorted({round(axis.defaultValue), round(axis.minValue),
+                        round(axis.maxValue)}
+                       | {round(i.coordinates["wght"])
+                          for i in tf["fvar"].instances
+                          if "wght" in i.coordinates})
+    for loc in locations:
+        inst = instantiateVariableFont(TTFont(FONT), {"wght": loc}, inplace=False)
+        buf = io.BytesIO()
+        inst.save(buf)
+        inst = TTFont(io.BytesIO(buf.getvalue()))
+        shape_at, gs_at = make_shaper(buf.getvalue()), inst.getGlyphSet()
+        at = f" at wght {loc}"
+        check_anchor_placement(inst, check, gs_at, at)
+        check_anchor_coverage(inst, check, gs_at, at)
+        check_marks_attach(inst, shape_at, check, at)
+        check_mark_features(inst, check, shape_at, gs_at, inst.getGlyphOrder(),
+                            inst.getBestCmap(), at)
     check_features_work(shape_default, check, vf_cmap)
     # the nameIDs verify_latin.py requires of the statics; 13 and 14 are
     # the licence and its URL, and dropping all seven passed this file
@@ -380,8 +379,8 @@ def main():
     # corrupted masters and hold it, and the SCP exactness check probes
     # SCP's own glyphs — a build that moved every Monaspace ligature
     # 600u right above Regular passed this file and the whole suite,
-    # rendering `!=` into the next column at Bold
-    lean = build.CELL // 2
+    # rendering `!=` into the next column at Bold. The bound is
+    # verifylib.ink_spill's, one location at a time
     spill, centres, default_boxes = {}, {}, {}
     probes = sorted({axis.minValue, axis.defaultValue, axis.maxValue}
                     | set(master_locations(tf, axis))
@@ -405,17 +404,13 @@ def main():
             right = metrics[g][0] - pen.bounds[2]
             rsb = right if rsb is None else min(rsb, right)
             adv = metrics[g][0]
-            # rounded, as the static faces store it: the blend here is
-            # unrounded, and U+035F's ink reaches exactly -CELL//2 —
-            # -300.135 at Bold, which is the same outline
-            left, right_ink = round(pen.bounds[0]), round(pen.bounds[2])
-            if adv > 0 and (left < -lean or right_ink > adv + lean):
-                spill.setdefault(round(w), []).append((g, adv, left, right_ink))
+            for hit in ink_spill({g: pen.bounds}, lambda _: adv, vf_cmap, build.CELL):
+                spill.setdefault(round(w), []).append(hit)
             if g in letters:
                 offs.append((pen.bounds[0] + pen.bounds[2]) / 2 - adv / 2)
         centres[round(w)] = sum(offs) / len(offs) if offs else None
     check(not spill, f"every glyph's ink is inside its advance at every "
-                     f"location, give or take {lean}u of lean "
+                     f"location, give or take the lean "
                      f"({ {k: (len(v), v[:2]) for k, v in spill.items()} })")
     off_centre = {w: round(m, 1) for w, m in centres.items()
                   if m is None or abs(m) > 25}

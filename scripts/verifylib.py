@@ -493,100 +493,6 @@ def check_private(tf, check):
                        f"{bad_int[:3]})")
 
 
-# how far past the LETTER'S OWN INK an accent may reach. Measured
-# from the ink, not as a fixed distance from its centre: an italic
-# ascender leans right, so at Light Italic the dot over d sits 299
-# units right of d's centre against a half-cell allowance of 300 --
-# one unit from failing on a face that is drawn exactly as its donor
-# drew it. What this catches is a whole cell, 600.
-_LEAN = build.CELL // 4
-# ... but only on the right. Measuring from the ink alone gives a wide
-# letter a wide window on BOTH sides, and every false positive that
-# rule was loosened for was a rightward one. Leftward it kept a
-# half-cell bound: with every base anchor's X zeroed -- the exact shape
-# of bug a fitted dx can produce -- nine of the ten statics passed the
-# ink-only rule with every accent sitting 226 to 318 units left of its
-# letter, over the side bearing. Measured across all ten shipped faces
-# the accent never sits further left than 216 units from its letter's
-# centre, so half a cell keeps 84 units of headroom and catches that.
-_LEAN_LEFT = build.CELL // 2
-# one base per script and per shape the face carries, not seven Latin
-# letters the donor happens to anchor natively. Every one of b d f h k l
-# t is in Source Code Pro's own mark coverage, so this pass could not
-# see a letter with NO anchor at all -- which is the state the two
-# variable fonts shipped in, about 550 letters each putting the accent
-# in the next cell, while both Latin verifiers said all checks passed.
-# Ascender, x-height, capital, Greek lower and upper, Cyrillic lower and
-# upper, and Latin letters that already carry a diacritic or a dot.
-ACCENT_BASES = "bdfhkltoOaAzZαωβΑΩвжшВЖШçñı"
-ACCENTS = "̀́̂̃̄̆̇̈̌̊"
-
-
-def check_accents_clear(shape, gs, order, cmap, check, label=""):
-    """An accent sits ON the letter, not through it.
-
-    Source Code Pro places its combining marks entirely in GPOS — an
-    ascender's top anchor is 229 units above an x-height letter's — so
-    every one of these pairs depends on a mark anchor being where the
-    donor put it. verify.py has asked this of the JP faces, which only
-    IMPORT that GPOS, since the graft first drew 58 of 84 pairs through
-    the stem. The Latin faces and the variable fonts, where the donor's
-    mark positioning lives natively and the two variable fonts are the
-    whole of Gengou.zip, asked nothing: zeroing all 502 base anchors
-    dropped every accent into the letter and both said "all checks
-    passed".
-
-    The bases are one per script and per shape (see ACCENT_BASES). With
-    only the seven Latin ones this pass was still blind to a letter the
-    donors never anchored AT ALL: deleting every base anchor above
-    U+0250 -- the state the two variable fonts actually shipped in --
-    left both Latin verifiers reporting nothing."""
-    through, pairs = {}, 0
-    for base in ACCENT_BASES:
-        for mark in ACCENTS:
-            if ord(base) not in cmap or ord(mark) not in cmap:
-                continue
-            infos, positions = shape(base + mark, {})
-            if len(infos) != 2:
-                continue        # composed into one glyph: nothing to clear
-            boxes, across = [], []
-            pen_x = 0
-            spans = []
-            for info, pos in zip(infos, positions):
-                pen = BoundsPen(gs)
-                gs[order[info.codepoint]].draw(pen)
-                boxes.append(None if pen.bounds is None else
-                             (pen.bounds[1] + pos.y_offset,
-                              pen.bounds[3] + pos.y_offset))
-                spans.append(None if pen.bounds is None else
-                             (pen.bounds[0] + pen_x + pos.x_offset,
-                              pen.bounds[2] + pen_x + pos.x_offset))
-                across.append(None if spans[-1] is None else
-                              sum(spans[-1]) / 2)
-                pen_x += pos.x_advance
-            pairs += 1
-            # sideways as well as up: an accent parked a whole cell
-            # right sits above nothing and cleared the letter by this
-            # test alone (+600 on every base anchor passed both Latin
-            # verifiers, with b's acute drawing in the next column).
-            # The allowance is measured from the LETTER'S ink, not from
-            # its centre: the accent goes over whatever part of the
-            # letter it belongs over, which on a leaning italic
-            # ascender is nowhere near the middle
-            lean = None
-            if None not in spans:
-                lean = max(spans[0][0] - across[1], across[1] - spans[0][1], 0)
-            off = None if None in across else across[1] - across[0]
-            if (None in boxes or boxes[1][0] < boxes[0][1]
-                    or lean is None or lean > _LEAN
-                    or off is None or off < -_LEAN_LEFT):
-                through[base + mark] = (None if None in boxes else
-                                        (round(boxes[0][1]), round(boxes[1][0]),
-                                         None if off is None else round(off)))
-    check(not through, f"an accent clears the letter it sits on{label} "
-                       f"({pairs} pairs; through: {through})")
-
-
 def check_heights(tf, check, gs, cmap):
     """OS/2's sxHeight, sCapHeight and xAvgCharWidth against the
     outlines.
@@ -688,6 +594,10 @@ def check_mark_class_closure(tf, check):
                       f"({len(adrift)} are not, e.g. {sorted(set(adrift))[:3]})")
 
 
+# the above-marks the mkmk probe stacks two at a time
+STACK_MARKS = "\u0300\u0301\u0302\u0303\u0304\u0306\u0307\u0308\u030c\u030a"
+
+
 def check_mark_features(tf, check, shape, gs, order, cmap, label=""):
     """The three GPOS features that put a mark where it belongs, the
     GDEF classes their lookups filter on, and that a second accent is
@@ -715,7 +625,7 @@ def check_mark_features(tf, check, shape, gs, order, cmap, label=""):
           f"({sorted(filtered)}; GDEF has {sorted(named)})")
     lifted = probes = 0
     for base in "xz":
-        for first, second in zip(ACCENTS, ACCENTS[1:] + ACCENTS[:1]):
+        for first, second in zip(STACK_MARKS, STACK_MARKS[1:] + STACK_MARKS[:1]):
             text = base + first + second
             if any(ord(c) not in cmap for c in text):
                 continue
@@ -726,19 +636,6 @@ def check_mark_features(tf, check, shape, gs, order, cmap, label=""):
             lifted += positions[2].y_offset > 0
     check(probes and lifted, f"a second accent is lifted off the first"
                              f"{label} ({lifted} of {probes} probes; 'mkmk')")
-
-
-# the combining marks Source Code Pro anchors only to the letters they
-# belong on (U+25CC, and L l for the overlay, O U o for the horn), so
-# over any other base the shaper leaves them at the pen — and SCP draws
-# its marks to the RIGHT of the origin, which puts them in the next
-# character's cell. The JP faces do not have this: graft_halfwidth
-# draws every mark one cell left, so an unanchored one lands over the
-# base instead. The donor's own faces measure identically, so this is
-# Source Code Pro's design and not the graft's — what the check below
-# holds is that the set does not GROW
-STRAY_MARKS = {"U+031A", "U+031B", "U+0334", "U+0344"}
-STRAY_MARKS_ITALIC = STRAY_MARKS | {"U+0310"}
 
 
 # Bounds for check_anchor_placement, from the anchors the ten statics
@@ -764,6 +661,167 @@ _BOPOMOFO = frozenset(range(0x3100, 0x3130)) | frozenset(range(0x31A0, 0x31C0))
 
 
 
+# the combining double diacritics (U+035C-0362) tie two characters:
+# their ink spans two cells by design, centred on the join
+DOUBLE_SPAN = frozenset(range(0x035C, 0x0363))
+
+
+def ink_spill(bounds, advance, cmap, cell):
+    """The glyphs whose ink reaches past their advance by more than the
+    lean allowed: [(name, advance, xMin, xMax)]. `bounds` maps a drawn
+    glyph to its box, `advance` a glyph to its advance width.
+
+    WHERE the ink lands, not just how wide it is: every width check
+    holds on a face whose glyphs are all drawn one cell to the right,
+    so 'e' would sit wholly in its neighbour's column. The bound is
+    half a cell either side, of which the widest italic lean uses 224;
+    a double diacritic gets a whole cell, since half of it is meant
+    to hang over the character before -- U+035F draws from -300 at
+    Bold Italic (-300.135 before the static rounds it), and a half-cell
+    bound held it with no margin at all."""
+    double = {cmap[cp] for cp in DOUBLE_SPAN if cp in cmap}
+    spill = []
+    for name, box in bounds.items():
+        adv = advance(name)
+        lean = cell if name in double else cell // 2
+        if adv > 0 and (round(box[0]) < -lean or round(box[2]) > adv + lean):
+            spill.append((name, adv, round(box[0]), round(box[2])))
+    return spill
+
+
+# the scripts the Latin layer draws and anchors: Latin through IPA,
+# Greek and Cyrillic, Latin Extended Additional, Greek Extended. What
+# check_anchor_coverage asks of every letter in them
+LETTER_RANGES = ((0x0041, 0x024F), (0x0370, 0x04FF), (0x1E00, 0x1EFF),
+                 (0x1F00, 0x1FFF))
+
+
+def _mark_base_subtables(tf):
+    """[(lookup index, subtable)] for the mark-to-base subtables that
+    place a mark ON the letter -- Source Han Sans's Bopomofo tone marks,
+    which go beside the syllable, are left out by name."""
+    rev = {g: cp for cp, g in tf.getBestCmap().items()}
+    out = []
+    for i, subs in build._mark_base_lookups(tf):
+        for sub in subs:
+            if any(rev.get(g) in _BOPOMOFO for g in sub.BaseCoverage.glyphs):
+                continue
+            out.append((i, sub))
+    return out
+
+
+def check_anchor_coverage(tf, check, gs, label=""):
+    """Every letter the Latin layer draws is a base in every mark lookup
+    that follows a rule.
+
+    This is build.anchor_loose_letters' own invariant, read back: that
+    pass gives a base anchor to every letter a rule-following lookup
+    did not cover, so afterwards none is missing. A letter that IS
+    missing means the pass did not reach this face, or reached it and
+    lost letters -- which is the state the two variable fonts shipped
+    in for a round, 502 anchors against the statics' 3,313, while every
+    check then in place sampled 27 letters and saw none of it. No
+    sample here: the coverage is compared against the cmap.
+    """
+    cmap = tf.getBestCmap()
+    letters = {g for cp, g in cmap.items()
+               if any(lo <= cp <= hi for lo, hi in LETTER_RANGES)
+               and unicodedata.category(chr(cp)).startswith("L")
+               and build._bounds(gs, g)}
+    missing = {}
+    for i, sub in _mark_base_subtables(tf):
+        if build._anchor_rule(gs, sub) is None:
+            continue           # too few bases to follow a rule: the donor's own
+        gap = letters - set(sub.BaseCoverage.glyphs)
+        if gap:
+            missing[i] = (len(gap), sorted(gap)[:3])
+    check(not missing, f"every letter is a base in every rule-following mark "
+                       f"lookup{label} ({len(letters)} letters; missing, by "
+                       f"lookup: {missing})")
+
+
+def check_marks_attach(tf, shape, check, label=""):
+    """The shaper puts each mark exactly where its anchors say.
+
+    check_anchor_placement asks whether the anchors are right; this
+    asks whether they are USED. A right anchor is applied only if the
+    mark is a mark in GDEF, the lookup is reached from the feature, its
+    flag does not filter the mark out, and nothing earlier in the run
+    composed or substituted the pair away. When it is applied the
+    mark's position is fully determined -- the mark anchor is laid on
+    the base anchor -- so the check is an equality, not a threshold:
+    x_offset == base.x - mark.x - the base's advance (the pen has moved
+    on), y_offset == base.y - mark.y, and x_advance == 0. The advance
+    is part of it because the shaper positions a glyph it finds in
+    MarkCoverage whether or not GDEF calls it a mark; what GDEF decides
+    is whether its spacing advance is zeroed, and a mark that keeps one
+    pushes the next character along by a cell. The probe-set checks
+    this replaces re-derived the geometry from ink with allowances
+    instead, and every allowance was either a false positive on the
+    next weight or a hole.
+
+    Coverage-driven: every base in each subtable's coverage against one
+    of its marks, and every mark against one of its bases -- every
+    anchor in the face is exercised, not 215 pairs. A pair the shaper
+    composes into one glyph, or substitutes a variant into, is skipped
+    and counted, so a face where nothing at all attaches still fails.
+    """
+    cmap = tf.getBestCmap()
+    rev = {g: cp for cp, g in cmap.items()}
+    order = tf.getGlyphOrder()
+    hmtx = tf["hmtx"].metrics
+    subtables = _mark_base_subtables(tf)
+
+    def expected(base_g, mark_g):
+        """What the FIRST subtable covering both puts the mark at."""
+        for _, sub in subtables:
+            if base_g not in sub.BaseCoverage.glyphs:
+                continue
+            if mark_g not in sub.MarkCoverage.glyphs:
+                continue
+            rec = sub.MarkArray.MarkRecord[sub.MarkCoverage.glyphs.index(mark_g)]
+            base = sub.BaseArray.BaseRecord[sub.BaseCoverage.glyphs.index(base_g)]
+            ba, ma = base.BaseAnchor[rec.Class], rec.MarkAnchor
+            if ba is None or ma is None:
+                return None
+            return (ba.XCoordinate - ma.XCoordinate - hmtx[base_g][0],
+                    ba.YCoordinate - ma.YCoordinate, 0)
+        return None
+
+    def encoded(glyphs):
+        return [g for g in glyphs if g in rev]
+
+    exact = skipped = 0
+    wrong = {}
+    seen = set()
+    for i, sub in subtables:
+        marks = encoded(sub.MarkCoverage.glyphs)
+        bases = encoded(sub.BaseCoverage.glyphs)
+        if not marks or not bases:
+            continue
+        pairs = [(b, marks[0]) for b in bases] + [(bases[0], m) for m in marks]
+        for base_g, mark_g in pairs:
+            if (base_g, mark_g) in seen:
+                continue
+            seen.add((base_g, mark_g))
+            want = expected(base_g, mark_g)
+            infos, positions = shape(chr(rev[base_g]) + chr(rev[mark_g]), {})
+            got = [order[info.codepoint] for info in infos]
+            if want is None or got != [base_g, mark_g]:
+                skipped += 1          # composed, substituted, or unanchored
+                continue
+            pos = (positions[1].x_offset, positions[1].y_offset,
+                   positions[1].x_advance)
+            if pos == want:
+                exact += 1
+            else:
+                wrong.setdefault(i, []).append((base_g, mark_g, pos, want))
+    worst = {i: (len(v), v[:2]) for i, v in wrong.items()}
+    check(exact and not wrong,
+          f"the shaper lays every mark on its anchor{label} "
+          f"({exact} pairs exact, {skipped} skipped; off, by lookup: {worst})")
+
+
 def check_anchor_placement(tf, check, gs, label=""):
     """Every base anchor sits on the glyph it belongs to.
 
@@ -787,83 +845,33 @@ def check_anchor_placement(tf, check, gs, label=""):
     """
     off = {}
     hmtx = tf["hmtx"].metrics
-    rev = {g: cp for cp, g in tf.getBestCmap().items()}
-    for i, subs in build._mark_base_lookups(tf):
-        for sub in subs:
-            if any(rev.get(g) in _BOPOMOFO for g in sub.BaseCoverage.glyphs):
-                # Source Han Sans's own tone-mark lookups: a Bopomofo tone
-                # mark goes BESIDE the syllable, not over or under it --
-                # anchor x 960 or 0 on a 1000 cell -- so "the mark sits on
-                # the letter" is not the rule they follow. 47 of 48 and 42
-                # of 43 bases; no lookup this build fills has a single one
+    for i, sub in _mark_base_subtables(tf):
+        rule = build._anchor_rule(gs, sub)
+        top = rule[0] if rule else None
+        for gn, rec in zip(sub.BaseCoverage.glyphs, sub.BaseArray.BaseRecord):
+            anchor = rec.BaseAnchor[0] if rec.BaseAnchor else None
+            box = build._bounds(gs, gn)
+            if anchor is None or not box:
                 continue
-            rule = build._anchor_rule(gs, sub)
-            top = rule[0] if rule else None
-            for gn, rec in zip(sub.BaseCoverage.glyphs, sub.BaseArray.BaseRecord):
-                anchor = rec.BaseAnchor[0] if rec.BaseAnchor else None
-                box = build._bounds(gs, gn)
-                if anchor is None or not box:
-                    continue
-                x, y = anchor.XCoordinate, anchor.YCoordinate
-                centre = (box[0] + box[2]) / 2
-                cell = max(hmtx[gn][0], build.CELL)
-                spread = _ANCHOR_X_FROM_CENTRE * cell
-                slack = _ANCHOR_X_SLACK * cell
-                if top is True:
-                    lo, hi = box[3] - _ANCHOR_Y_INTO_INK, box[3] + _ANCHOR_Y_PAST_EDGE
-                elif top is False:
-                    lo, hi = box[1] - _ANCHOR_Y_PAST_EDGE, box[1] + _ANCHOR_Y_INTO_INK
-                else:
-                    lo, hi = box[1] - _ANCHOR_Y_INTO_INK, box[3] + _ANCHOR_Y_INTO_INK
-                if (not box[0] - slack <= x <= box[2] + slack
-                        or abs(x - centre) > spread
-                        or not lo <= y <= hi):
-                    off.setdefault(i, []).append(
-                        (gn, x, y, tuple(round(v) for v in box)))
+            x, y = anchor.XCoordinate, anchor.YCoordinate
+            centre = (box[0] + box[2]) / 2
+            cell = max(hmtx[gn][0], build.CELL)
+            spread = _ANCHOR_X_FROM_CENTRE * cell
+            slack = _ANCHOR_X_SLACK * cell
+            if top is True:
+                lo, hi = box[3] - _ANCHOR_Y_INTO_INK, box[3] + _ANCHOR_Y_PAST_EDGE
+            elif top is False:
+                lo, hi = box[1] - _ANCHOR_Y_PAST_EDGE, box[1] + _ANCHOR_Y_INTO_INK
+            else:
+                lo, hi = box[1] - _ANCHOR_Y_INTO_INK, box[3] + _ANCHOR_Y_INTO_INK
+            if (not box[0] - slack <= x <= box[2] + slack
+                    or abs(x - centre) > spread
+                    or not lo <= y <= hi):
+                off.setdefault(i, []).append(
+                    (gn, x, y, tuple(round(v) for v in box)))
     worst = {i: (len(v), v[:2]) for i, v in off.items()}
     check(not off, f"every base anchor sits on its own glyph{label} "
                    f"(off, by lookup: {worst})")
-
-
-def check_stray_marks(shape, gs, order, cmap, check, italic, label=""):
-    """The combining marks that land in the next character's cell.
-
-    Over ACCENT_BASES, not over "E" alone. These marks are drawn as
-    spacing glyphs and the shaper zeroes their advance, so a mark the
-    face cannot place lands a whole cell right -- and with one base,
-    one the donor happens to anchor, this pass could not see a LETTER
-    the donors never anchored. That is the state the two variable fonts
-    shipped in, about 550 letters each, while every verifier passed."""
-    stray = []
-    for cp in sorted(cmap):
-        if unicodedata.category(chr(cp)) not in ("Mn", "Me", "Mc"):
-            continue
-        for base in ACCENT_BASES:
-            if ord(base) not in cmap:
-                continue
-            infos, positions = shape(base + chr(cp), {})
-            if len(infos) != 2:
-                continue             # composed: nothing loose to place
-            base_pen = BoundsPen(gs)
-            gs[order[infos[0].codepoint]].draw(base_pen)
-            pen = BoundsPen(gs)
-            gs[order[infos[1].codepoint]].draw(pen)
-            if pen.bounds is None:
-                continue
-            left = pen.bounds[0] + build.CELL + positions[1].x_offset
-            # past the LETTER'S own ink, not past nine tenths of the
-            # cell: a mark that starts at 549 over Light Italic d, whose
-            # ink runs to 591, is on the letter. One that starts at 959
-            # is in the next character.
-            edge = base_pen.bounds[2] if base_pen.bounds else build.CELL
-            if left > edge:
-                stray.append(f"U+{cp:04X}")
-                break
-    want = STRAY_MARKS_ITALIC if italic else STRAY_MARKS
-    check(set(stray) <= want,
-          f"no combining mark falls into the next cell but the ones "
-          f"Source Code Pro anchors only to their own letters{label} "
-          f"({stray}; known {sorted(want)})")
 
 
 # one ligature from each stylistic-set group (build.LIGATURES' `group`),

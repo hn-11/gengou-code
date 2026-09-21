@@ -267,16 +267,18 @@ def test_check_gdi_family_name_bounds_nameid_1():
         assert (not check.failed) is want, family
 
 
-# --- check_anchor_placement ---------------------------------------------------
+# --- the mark gates: placement, coverage, attachment ------------------------
 
-def _anchor_font(anchors, heights=None, advance=600, cmap_extra=(), width=100):
-    """A CFF font whose glyphs are boxes of the given width and heights,
-    carrying one MarkBasePos with the given {glyph: (x, y)} anchors."""
+def _mark_font(anchors, heights=None, advance=600, cmap_extra=(), width=100,
+               mark_anchor=(50, 0), classify_mark=True):
+    """A CFF font whose letters are boxes of the given width and heights,
+    with a 'mark' feature compiled by feaLib from {glyph: (x, y)} base
+    anchors -- a real GDEF and GPOS, so the shaper can apply it."""
+    from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
     from fontTools.fontBuilder import FontBuilder
     from fontTools.pens.t2CharStringPen import T2CharStringPen
-    from fontTools.ttLib.tables import otTables
     heights = heights or {}
-    order = [".notdef", "mark", *anchors]
+    order = [".notdef", "acute", *dict.fromkeys([*anchors, *heights])]
     charstrings = {}
     for g in order:
         pen = T2CharStringPen(0, None)
@@ -287,7 +289,7 @@ def _anchor_font(anchors, heights=None, advance=600, cmap_extra=(), width=100):
         charstrings[g] = pen.getCharString()
     fb = FontBuilder(1000, isTTF=False)
     fb.setupGlyphOrder(order)
-    fb.setupCharacterMap({0x0301: "mark",
+    fb.setupCharacterMap({0x0301: "acute",
                           **{0x41 + i: g for i, g in enumerate(anchors)},
                           **dict(cmap_extra)})
     fb.setupCFF("T", {}, charstrings, {})
@@ -298,56 +300,47 @@ def _anchor_font(anchors, heights=None, advance=600, cmap_extra=(), width=100):
     fb.setupOS2()
     fb.setupPost()
     font = fb.font
-
-    from test_build import (
-        FakeFeature,
-        FakeFeatureList,
-        FakeFeatureRecord,
-        _FakeLookupList,
-    )
-    sub = otTables.MarkBasePos()
-    sub.Format, sub.ClassCount = 1, 1
-    sub.MarkCoverage = otTables.MarkCoverage()
-    sub.MarkCoverage.glyphs = ["mark"]
-    rec = otTables.MarkRecord()
-    rec.Class = 0
-    rec.MarkAnchor = otTables.Anchor()
-    rec.MarkAnchor.Format = 1
-    rec.MarkAnchor.XCoordinate = rec.MarkAnchor.YCoordinate = 0
-    sub.MarkArray = otTables.MarkArray()
-    sub.MarkArray.MarkRecord = [rec]
-    sub.MarkArray.MarkCount = 1
-    sub.BaseCoverage = otTables.BaseCoverage()
-    sub.BaseCoverage.glyphs = list(anchors)
-    sub.BaseArray = otTables.BaseArray()
-    sub.BaseArray.BaseRecord = []
-    for g, (x, y) in anchors.items():
-        a = otTables.Anchor()
-        a.Format, a.XCoordinate, a.YCoordinate = 1, x, y
-        br = otTables.BaseRecord()
-        br.BaseAnchor = [a]
-        sub.BaseArray.BaseRecord.append(br)
-    sub.BaseArray.BaseCount = len(anchors)
-    lk = otTables.Lookup()
-    lk.LookupType, lk.LookupFlag = 4, 0
-    lk.SubTable, lk.SubTableCount = [sub], 1
-
-    table = otTables.GPOS()
-    table.LookupList = _FakeLookupList([lk])
-    table.FeatureList = FakeFeatureList(
-        [FakeFeatureRecord("mark", FakeFeature([0]))])
-
-    class _Wrap:
-        def __init__(self, tb): self.table = tb
-    font["GPOS"] = _Wrap(table)
+    mx, my = mark_anchor
+    bases = "\n".join(f"    pos base {g} <anchor {x} {y}> mark @TOP;"
+                       for g, (x, y) in anchors.items())
+    fea = (f"markClass acute <anchor {mx} {my}> @TOP;\n"
+           f"feature mark {{\n{bases}\n}} mark;\n")
+    addOpenTypeFeaturesFromString(font, fea)
+    if not classify_mark:
+        # feaLib derives GDEF from the markClass, so the "not a mark" case
+        # is made afterwards: the accent filed as a base outright, which
+        # is what a variant left unclassified becomes once a
+        # GlyphClassDef exists (check_mark_class_closure says why)
+        font["GDEF"].table.GlyphClassDef.classDefs["acute"] = 1
     return font
 
 
-def _placement(font):
+def _gate(fn, font, *args):
     out = []
-    verifylib.check_anchor_placement(
-        font, lambda ok, msg: None if ok else out.append(msg), font.getGlyphSet())
+    fn(font, *args, lambda ok, msg: None if ok else out.append(msg))
     return out
+
+
+def _shaper_for(font):
+    import io
+    buf = io.BytesIO()
+    font.save(buf)
+    return verifylib.make_shaper(buf.getvalue())
+
+
+def _placement(font):
+    return _gate(lambda f, chk: verifylib.check_anchor_placement(f, chk, f.getGlyphSet()),
+                 font)
+
+
+def _coverage(font):
+    return _gate(lambda f, chk: verifylib.check_anchor_coverage(f, chk, f.getGlyphSet()),
+                 font)
+
+
+def _attach(font):
+    return _gate(lambda f, chk: verifylib.check_marks_attach(f, _shaper_for(f), chk),
+                 font)
 
 
 def _ruled(n=20, **over):
@@ -359,19 +352,21 @@ def _ruled(n=20, **over):
     return anchors, heights
 
 
+# placement ------------------------------------------------------------------
+
 def test_check_anchor_placement_passes_anchors_on_their_glyph():
     anchors, heights = _ruled()
-    assert _placement(_anchor_font(anchors, heights)) == []
+    assert _placement(_mark_font(anchors, heights)) == []
 
 
 def test_check_anchor_placement_catches_a_whole_cell_left():
     """The escape this exists for: every below-mark anchor moved one
     cell, so a cedilla draws inside the PREVIOUS character's cell. The
-    probe-set checks shape 27 letters by ten ABOVE-accents and reach one
-    of seven lookups, so they saw none of it."""
+    probe-set checks it replaced shaped 27 letters by ten ABOVE-accents
+    and reached one of seven lookups, so they saw none of it."""
     anchors, heights = _ruled()
     anchors = {g: (x - 600, y) for g, (x, y) in anchors.items()}
-    assert _placement(_anchor_font(anchors, heights))
+    assert _placement(_mark_font(anchors, heights))
 
 
 def test_check_anchor_placement_catches_a_mark_lifted_off_the_letter():
@@ -379,14 +374,12 @@ def test_check_anchor_placement_catches_a_mark_lifted_off_the_letter():
     the accent three cells above its letter and every gate passed."""
     anchors, heights = _ruled()
     anchors = {g: (x, y + 2000) for g, (x, y) in anchors.items()}
-    assert _placement(_anchor_font(anchors, heights))
+    assert _placement(_mark_font(anchors, heights))
 
 
 def test_check_anchor_placement_catches_one_glyph_among_many():
-    """Not an aggregate: one letter's anchor off its own glyph fails,
-    though the other nineteen are right where they belong."""
     anchors, heights = _ruled(b7=(-900, 520))
-    assert _placement(_anchor_font(anchors, heights))
+    assert _placement(_mark_font(anchors, heights))
 
 
 def test_check_anchor_placement_leaves_bopomofo_alone():
@@ -394,11 +387,10 @@ def test_check_anchor_placement_leaves_bopomofo_alone():
     960 on a 1000 cell -- which is a different attachment, and its own."""
     anchors = {f"b{i}": (960, 0) for i in range(20)}
     heights = {g: 800 for g in anchors}
-    font = _anchor_font(anchors, heights, advance=1000,
-                        cmap_extra={0x3105 + i: g for i, g in enumerate(anchors)})
-    # the same anchors on Latin bases are a failure
-    assert _placement(_anchor_font(anchors, heights, advance=1000))
-    assert _placement(font) == []
+    assert _placement(_mark_font(anchors, heights, advance=1000))
+    bopo = _mark_font(anchors, heights, advance=1000,
+                      cmap_extra={0x3105 + i: g for i, g in enumerate(anchors)})
+    assert _placement(bopo) == []
 
 
 def test_check_anchor_placement_catches_an_anchor_just_off_the_ink():
@@ -407,15 +399,152 @@ def test_check_anchor_placement_catches_an_anchor_just_off_the_ink():
     from-the-centre bound, so only the first clause can see it."""
     anchors, heights = _ruled()
     anchors = {g: (250, y) for g, (_x, y) in anchors.items()}
-    assert _placement(_anchor_font(anchors, heights))
+    assert _placement(_mark_font(anchors, heights))
 
 
 def test_check_anchor_placement_catches_an_anchor_far_from_a_wide_glyph():
-    """The from-the-centre bound alone. A full-width glyph's slack is
-    wide enough to hold an anchor 610 units from its ink centre, which
-    is most of a cell away from where the mark belongs."""
+    """The from-the-centre bound alone, on a full-width glyph whose
+    slack is wide enough to hold an anchor 610 from its ink centre."""
     heights = {f"b{i}": 700 + 10 * i for i in range(20)}
     ok = {g: (450, h + 20) for g, h in heights.items()}
-    assert _placement(_anchor_font(ok, heights, advance=1000, width=900)) == []
+    assert _placement(_mark_font(ok, heights, advance=1000, width=900)) == []
     far = {g: (1060, h + 20) for g, h in heights.items()}
-    assert _placement(_anchor_font(far, heights, advance=1000, width=900))
+    assert _placement(_mark_font(far, heights, advance=1000, width=900))
+
+
+# coverage -------------------------------------------------------------------
+
+def test_check_anchor_coverage_passes_when_every_letter_is_a_base():
+    anchors, heights = _ruled()
+    assert _coverage(_mark_font(anchors, heights)) == []
+
+
+def test_check_anchor_coverage_catches_a_letter_no_lookup_covers():
+    """anchor_loose_letters' invariant read back: the state the variable
+    fonts shipped in for a round -- 502 anchors against the statics'
+    3,313 -- while a 27-letter sample saw nothing. Here one letter of
+    twenty-one has no anchor, and it is the one the sample would miss."""
+    anchors, heights = _ruled()
+    heights["loose"] = 500                 # drawn, cmapped, not a base
+    font = _mark_font(anchors, heights, cmap_extra={0x5A: "loose"})
+    assert _coverage(font)
+
+
+def test_check_anchor_coverage_ignores_a_lookup_that_follows_no_rule():
+    """Too few bases to fit one: the donor's own few-letter marks (the
+    horn on O and U) are not asked to cover the alphabet."""
+    font = _mark_font({"b0": (50, 420)}, {"b0": 400, "loose": 500},
+                      cmap_extra={0x5A: "loose"})
+    assert _coverage(font) == []
+
+
+# attachment -----------------------------------------------------------------
+
+def test_check_marks_attach_passes_when_the_shaper_lays_each_mark_on_its_anchor():
+    anchors, heights = _ruled()
+    assert _attach(_mark_font(anchors, heights)) == []
+
+
+def test_check_marks_attach_is_an_equality_not_a_threshold():
+    """Every position is fully determined by the two anchors, so the
+    check compares the shaped output against the tables exactly. A
+    shaper whose font disagrees with the tables by ONE unit fails."""
+    import io
+    anchors, heights = _ruled()
+    font = _mark_font(anchors, heights)
+    nudged = _mark_font(anchors, heights)
+    sub = nudged["GPOS"].table.LookupList.Lookup[0].SubTable[0]
+    sub.BaseArray.BaseRecord[3].BaseAnchor[0].XCoordinate += 1
+    buf = io.BytesIO()
+    nudged.save(buf)
+    out = []
+    verifylib.check_marks_attach(font, verifylib.make_shaper(buf.getvalue()),
+                                 lambda ok, msg: None if ok else out.append(msg))
+    assert out and "b3" in out[0]
+
+
+def test_check_marks_attach_catches_a_mark_gdef_does_not_call_a_mark():
+    """A right anchor that is never applied. Without the GDEF class the
+    shaper treats the accent as a base, so it advances a full cell
+    instead of attaching -- the anchors are all in place and every
+    structural check passes; only shaping shows it."""
+    anchors, heights = _ruled()
+    font = _mark_font(anchors, heights, classify_mark=False)
+    assert _placement(font) == []
+    assert _attach(font)
+
+
+def test_check_marks_attach_fails_when_nothing_attaches_at_all():
+    """A face where every pair is skipped is not a pass."""
+    anchors, heights = _ruled()
+    font = _mark_font(anchors, heights)
+    # drop the feature: the lookup exists, nothing reaches it
+    font["GPOS"].table.FeatureList.FeatureRecord = []
+    font["GPOS"].table.FeatureList.FeatureCount = 0
+    assert _attach(font)
+
+
+def test_check_marks_attach_catches_a_vertical_disagreement_alone():
+    """Each coordinate of the equality on its own: here x and the
+    advance agree and only y is off, by one unit."""
+    import io
+    anchors, heights = _ruled()
+    font = _mark_font(anchors, heights)
+    nudged = _mark_font(anchors, heights)
+    sub = nudged["GPOS"].table.LookupList.Lookup[0].SubTable[0]
+    sub.BaseArray.BaseRecord[5].BaseAnchor[0].YCoordinate += 1
+    buf = io.BytesIO()
+    nudged.save(buf)
+    out = []
+    verifylib.check_marks_attach(font, verifylib.make_shaper(buf.getvalue()),
+                                 lambda ok, msg: None if ok else out.append(msg))
+    assert out and "b5" in out[0]
+
+
+def test_check_anchor_coverage_asks_only_of_letters():
+    """A drawn, cmapped glyph that is not a letter takes no accent and
+    is not a base; its absence is not a gap. The middle dot (U+00B7)
+    sits inside the Latin-1 letter range, so it is the category test,
+    not the range test, that has to excuse it."""
+    anchors, heights = _ruled()
+    heights["periodcentered"] = 500
+    font = _mark_font(anchors, heights, cmap_extra={0xB7: "periodcentered"})
+    assert _coverage(font) == []
+
+
+def test_ink_spill_allows_half_a_cell_and_not_a_unit_more():
+    """The bound is half a cell of lean either side of the advance."""
+    cmap = {0x61: "a"}
+    ok = {"a": (-300, 0, 900, 700)}
+    assert verifylib.ink_spill(ok, lambda g: 600, cmap, 600) == []
+    assert verifylib.ink_spill({"a": (-301, 0, 500, 700)}, lambda g: 600, cmap, 600) \
+        == [("a", 600, -301, 500)]
+    assert verifylib.ink_spill({"a": (0, 0, 901, 700)}, lambda g: 600, cmap, 600) \
+        == [("a", 600, 0, 901)]
+
+
+def test_ink_spill_gives_a_double_diacritic_a_whole_cell_and_only_it():
+    """U+035F ties two characters: its ink hangs a cell over the one
+    before by design (measured from -300 at Bold Italic, right on the
+    half-cell bound). A letter drawn the same way is still a spill."""
+    cmap = {0x35F: "dblmacronbelow", 0x61: "a"}
+    box = {"dblmacronbelow": (-600, -200, 720, -100)}
+    assert verifylib.ink_spill(box, lambda g: 600, cmap, 600) == []
+    box = {"dblmacronbelow": (-601, -200, 720, -100)}
+    assert verifylib.ink_spill(box, lambda g: 600, cmap, 600) \
+        == [("dblmacronbelow", 600, -601, 720)]
+    assert verifylib.ink_spill({"a": (-600, 0, 500, 700)}, lambda g: 600, cmap, 600) \
+        == [("a", 600, -600, 500)]
+
+
+def test_ink_spill_rounds_as_the_static_faces_store_the_outline():
+    """A variable font blends to -300.135 where the static rounds to
+    -300: the same outline, judged the same way."""
+    assert verifylib.ink_spill({"a": (-300.135, 0, 500, 700)},
+                               lambda g: 600, {0x61: "a"}, 600) == []
+
+
+def test_ink_spill_skips_a_zero_advance_glyph():
+    """A combining mark has no advance to be inside of."""
+    assert verifylib.ink_spill({"acute": (-400, 500, -100, 700)},
+                               lambda g: 0, {0x301: "acute"}, 600) == []

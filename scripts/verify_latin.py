@@ -17,7 +17,7 @@ import build_latin  # noqa: E402
 from verify import CASES  # noqa: E402
 from verifylib import (  # noqa: E402
     Checker,
-    check_accents_clear,
+    check_anchor_coverage,
     check_anchor_placement,
     check_coverage_order,
     check_features_work,
@@ -26,14 +26,15 @@ from verifylib import (  # noqa: E402
     check_heights,
     check_mark_class_closure,
     check_mark_features,
+    check_marks_attach,
     check_private,
     check_stat,
-    check_stray_marks,
     check_style_bits,
     check_tables,
     check_zones,
     glyph_has_hint,
     hmtx_mismatches,
+    ink_spill,
     make_shaper,
     weight_name,
 )
@@ -109,17 +110,15 @@ def main():
                         f"e.g. {bearings[:3]})")
 
     # WHERE the ink lands, not just how wide it is (verify.py has the same
-    # two): every check above holds on a face whose glyphs are all blank,
-    # or all drawn one cell to the right, so 'e' would sit wholly in its
-    # neighbour's column and the release would ship it. `bounds` holds
-    # only the glyphs that draw — hmtx_mismatches skips a blank one — so
-    # the count below is ink, not cmap entries
-    lean = CELL // 2
-    spill = [(g, hmtx[g][0], round(box[0]), round(box[2]))
-             for g, box in bounds.items()
-             if hmtx[g][0] > 0 and (box[0] < -lean or box[2] > hmtx[g][0] + lean)]
+    # two; ink_spill says what the bound is): every check above holds on
+    # a face whose glyphs are all blank, or all drawn one cell to the
+    # right, so 'e' would sit wholly in its neighbour's column and the
+    # release would ship it. `bounds` holds only the glyphs that draw —
+    # hmtx_mismatches skips a blank one — so the count below is ink, not
+    # cmap entries
+    spill = ink_spill(bounds, lambda g: hmtx[g][0], cmap, CELL)
     check(not spill, f"every glyph's ink is inside its advance, give or take "
-                     f"{lean}u of lean ({len(spill)} are not, e.g. {spill[:3]})")
+                     f"the lean ({len(spill)} are not, e.g. {spill[:3]})")
     inked = sum(1 for g in cmap.values() if g in bounds)
     check(inked >= 700, f"{inked} of {len(cmap)} mapped codepoints draw ink")
     # and where inside the advance: half a cell of lean lets a quarter-
@@ -181,12 +180,15 @@ def main():
 
     shape = make_shaper(FONT)
     gs, order = tf.getGlyphSet(), tf.getGlyphOrder()
-    check_accents_clear(shape, gs, order, cmap, check)
+    # the three mark gates: every anchor is on its glyph, every letter
+    # has one in every rule-following lookup, and the shaper lays each
+    # mark exactly on its anchor (verifylib says why there are three)
     check_anchor_placement(tf, check, gs)
+    check_anchor_coverage(tf, check, gs)
+    check_marks_attach(tf, shape, check)
     check_heights(tf, check, gs, cmap)
     check_zones(tf, check, cmap)
     check_mark_features(tf, check, shape, gs, order, cmap)
-    check_stray_marks(shape, gs, order, cmap, check, italic)
     check_features_work(shape, check, cmap)
     on = {"calt": True, "liga": True}
     for text, want in CASES:

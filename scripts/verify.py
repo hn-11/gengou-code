@@ -15,17 +15,20 @@ import build  # noqa: E402
 from build import FULLWIDTH, _unwrap, _unwrap_pos  # noqa: E402
 from verifylib import (  # noqa: E402
     Checker,
+    check_anchor_coverage,
     check_anchor_placement,
     check_coverage_order,
     check_features_work,
     check_gdi_family_name,
     check_mark_class_closure,
+    check_marks_attach,
     check_private,
     check_stat,
     check_style_bits,
     check_tables,
     glyph_has_hint,
     hmtx_mismatches,
+    ink_spill,
     make_shaper,
     weight_name,
 )
@@ -296,8 +299,11 @@ def main():
     check_coverage_order(tf, check)
     # the Latin layer's anchors survive the graft into this face, so
     # they are worth asserting here as well as on the face they came
-    # from: import_scp_marks moves every one of them by a cell
+    # from: import_scp_marks moves every one of them by a cell, and the
+    # exact-attachment check is what says the moved anchor and the moved
+    # mark still meet
     check_anchor_placement(tf, check, tf.getGlyphSet())
+    check_anchor_coverage(tf, check, tf.getGlyphSet())
     check_mark_class_closure(tf, check)
     check_private(tf, check)
 
@@ -370,15 +376,11 @@ def main():
     # the pass above's, not a second one
     # WHERE the ink lands, not just how wide it is: a width test says
     # nothing about position, and translating every kanji a whole column
-    # to the right left it reporting a clean face. The bound is half a
-    # cell either side, which the widest italic lean uses 224 of
-    lean = exp_half // 2
-    spill = [(name, hmtx[name][0], round(box[0]), round(box[2]))
-             for name, box in bounds.items()
-             if hmtx[name][0] > 0
-             and (box[0] < -lean or box[2] > hmtx[name][0] + lean)]
+    # to the right left it reporting a clean face (ink_spill says what
+    # the bound is)
+    spill = ink_spill(bounds, lambda name: hmtx[name][0], cmap, exp_half)
     check(not spill, f"every glyph's ink is inside its advance, give or "
-                     f"take {lean}u of lean ({len(spill)} are not, "
+                     f"take the lean ({len(spill)} are not, "
                      f"e.g. {spill[:3]})")
 
     # and, for the glyphs that fill their advance, WHERE inside it: the
@@ -449,6 +451,10 @@ def main():
     check_gdi_family_name(tf, check)
 
     shape_infos = make_shaper(FONT)
+    # the exact-attachment half of the mark gates (the anchor half runs
+    # above, before a shaper exists): the moved anchor and the moved
+    # mark still meet
+    check_marks_attach(tf, shape_infos, check)
 
     # the hinting the build spends a minute a face on: nothing here read
     # it, and a face whose autohint pass silently did nothing — which is
