@@ -1,30 +1,19 @@
 # Gengou JP
 
-英語圏のターミナルフォントの流儀で組んだ、日本語入りのプログラミング
-フォント。欧文は [Source Code Pro](https://github.com/adobe-fonts/source-code-pro)
-（原寸・原太、名前付きインスタンスそのまま）に
-[Monaspace](https://github.com/githubnext/monaspace) の記号と合字 61 種を
-載せた **Gengou**、和文は [Source Han Sans](https://github.com/adobe-fonts/source-han-sans)
-JP を、Gengou の太さに合う面から取る。基準は欧文側で、セル幅（600）、
-ウェイト（Light / Regular / Medium / SemiBold / Bold）、行間
-（984 / −273 = 1.257 em）はすべて Source Code Pro のもの。和文がそれに
-従う。CI で合成し、上流の新リリースにも追従する。
+英語圏プログラミングフォントの設計流儀に基づき、日本語環境向けに再構築したフォント。欧文は [Source Code Pro](https://github.com/adobe-fonts/source-code-pro)（原寸・原太、名前付きインスタンスそのまま）に [Monaspace](https://github.com/githubnext/monaspace) の記号および合字 61 種を融合させた **Gengou**、和文は [Source Han Sans](https://github.com/adobe-fonts/source-han-sans) JP を Gengou の太さに適した面から選択して合成している。基準は欧文側に置かれており、セル幅（600）、ウェイト（Light / Regular / Medium / SemiBold / Bold）、行間（984 / −273 = 1.257 em）はすべて Source Code Pro の仕様に準拠している。CI で自動合成し、上流の最新リリースにも自動追従する。
 
 ## ファミリー構成
 
 | ファミリー | 半角:全角 | 用途 |
 |-----------|-----------|------|
-| Gengou JP | 600:1000 (3:5) | エディタ。和文は Source Han Sans の送りのまま |
-| Gengou JP Term | 600:1200 (1:2) | ターミナルのグリッドに乗せたい非グリッドのアプリ向け。全角の送りを 2 セルに広げてグリフを中央配置 |
+| Gengou JP | 600:1000 (3:5) | エディタ用。和文は Source Han Sans の送り幅を保持 |
+| Gengou JP Term | 600:1200 (1:2) | ターミナルのグリッド表示に合わせたいアプリ向け。全角の送り幅を 2 セルに広げてグリフを中央配置 |
 | Gengou | 600 | 欧文のみ（可変フォント） |
 
-ターミナルの中では JP と Term は同じに描かれる（全角は 2 セルに置かれる）。
-違うのは全角の送り幅だけで、Latin・記号・幅の方針は共通。
+ターミナル環境内では JP と Term は同様に描画される（全角文字は 2 セルに配置）。
+異なる点は全角の送り幅のみであり、Latin・記号・幅の方針は共通である。
 
-各ファミリー 5 ウェイト × 2 スタイル（Upright / Italic。Italic は Source
-Code Pro の本物のイタリック、和文は直立のまま）。ウェイトは Source Code
-Pro の名前付きインスタンスで、和文は `=` のバー厚が合う Source Han Sans
-の面を実測で選ぶ:
+各ファミリーは 5 ウェイト × 2 スタイル（Upright / Italic — Italic は Source Code Pro 本来のイタリック、和文は直立のまま）で構成される。ウェイトは Source Code Pro の名前付きインスタンスを採用し、和文は `=` のバー厚が合う Source Han Sans の面を実測して割り当てている:
 
 | ウェイト | usWeightClass | Source Code Pro の `=` バー | Source Han Sans の面（`＝` バー） |
 |---------|---------------|-----------------------------|-----------------------------------|
@@ -34,136 +23,47 @@ Pro の名前付きインスタンスで、和文は `=` のバー厚が合う S
 | SemiBold | 600 | 83u | Medium（83u） |
 | Bold | 700 | 104u | Bold（101u） |
 
-Source Han Sans の Light（49u）と Heavy（120u）、Source Code Pro の
-ExtraLight（28u）と Black（120u）は相手がいないので作らない。
+Source Han Sans の Light（49u）と Heavy（120u）、および Source Code Pro の ExtraLight（28u）と Black（120u）はペアとなるウェイトが存在しないため提供していない。
 
-行の高さは `hhea` = `typo`（984 / −273、1.257 em）で、`USE_TYPO_METRICS`
-を立ててある。`usWinAscent` / `usWinDescent` は 1160 / 454: これは
-クリッピング境界でもあり、Source Han Sans のインクは 984 を超えるので
-typo に合わせると GDI 系で欠ける。上は Source Han Sans の宣言値 1160 の
-まま、下は欧文レイヤーの罫線素片（−400）とブロック要素（−454）を
-覆うために 288 から下げてある（欧文ファミリーが同じインクに対して
-declare している値と同じ）。代わりに GDI 系（旧 conhost、メモ帳、
-Office の GDI 経路）だけは行が 1614u になる。この面のインクは
-1808 / −1048 まであり、bbox を全部覆うと GDI の行が 2856u（typo の
-2.3 倍）になるので覆っていない。cmap 上で 454 の外に残るのは
-U+3031 / U+3032（縦書きの繰り返し記号、−549）の 2 字だけで、
-Source Han Sans 自身も 288 のまま同じ字形を出荷している。
+行の高さは `hhea` = `typo`（984 / −273、1.257 em）で、`USE_TYPO_METRICS` を有効化している。`usWinAscent` / `usWinDescent` は 1160 / 454 に設定されている。これはクリッピング境界の役割も兼ねており、Source Han Sans のインクは 984 を超えるため typo に合わせると GDI 環境で下端が欠ける原因となる。そのため、上端は Source Han Sans の宣言値 1160 を維持し、下端は欧文レイヤーの罫線素片（−400）とブロック要素（−454）を覆うため 288 から引き下げている（欧文ファミリーが同じインクに対して宣言している値と同一）。代わりに GDI 環境（旧 conhost、メモ帳、Office の GDI 描画経路等）では行高が 1614u となる。なお、この面のインクは 1808 / −1048 まで存在するが、バウンディングボックス全体を覆うと GDI の行高が 2856u（typo の 2.3 倍）まで肥大化するため、全体は覆っていない。cmap 上で 454 の外側に残るのは U+3031 / U+3032（縦書きの繰り返し記号、−549）の 2 文字のみであり、Source Han Sans 自体も 288 のまま同一の字形を出荷している。
 
 ## 幅の方針
 
-**Gengou が持つ文字はすべて 1 セル**。Latin、ギリシャ、キリル、
-アクセント付き文字、罫線素片、`←` `→` `↑` `↓` `⇐` `⇒` `⇔` `≠` `≤` `≥` `…`
-も 1 セルで、英語のターミナルフォントと同じ。Source Han Sans にしかない
-文字（漢字・かな・`①` `※` など）は Source Han Sans の全角のまま。
-Unicode の半角ブロック（`ﾡ` など）はターミナルが 1 桁しか空けないので、
-Source Han Sans が全角の互換字母と同じグリフを割り当てていても 1 セル版を
-作って差し替える。Source Han Sans が比例幅で持つ半角カナ（500）などは、
-その送り幅がいちばん近いグリッド（セルか全角の倍数）に中央配置する。
-ギリシャ・キリルは直立・斜体とも 234 字を欧文レイヤーが持つ。直立は
-Source Code Pro の字形そのまま（元から 1 セル）。**斜体は
-[Source Sans 3](https://github.com/adobe-fonts/source-sans) Italic から
-取る**——Source Code Pro Italic はキリルを 1 字も持たず、ギリシャも `π`
-だけだからで、Adobe が手で描き起こしたイタリックの意図的な線引き。
-Source Code Pro は Source Sans から起こされた書体なので、実測で
-italicAngle（−11.0）と cap height が一致し、x-height も 1 ユニット差
-（wght 400 / 700 の両方）。ただし比例幅なので、送り幅を 1 セルにして
-中央に置き、インクがセルに収まらない字（基準ウェイトで 43 字）だけ、
-セルから左右 8u ずつ空けたところまで詰める（`build.cell_fit`）。8u は
-Source Code Pro が `w` `W` に与えているサイドベアリングで、詰めると線が
-細くなるぶん、詰める字は必要な字だけにしてある。アクセントの位置指定も
-Source Sans のベースアンカーを取り込んでいるので、`а́` `И́` `ε̈` のような
-分解済みの組み合わせも字の上に乗る（それまでは斜体面だけ位置指定が無く、
-アクセントが隣のセルに落ちていた）。等幅フォントが幅広の字に
-するのと同じ扱いで、Source Code Pro 自身の `M` も 600。
+**Gengou が含む文字はすべて 1 セル**。Latin、ギリシャ、キリル、アクセント付き文字、罫線素片、`←` `→` `↑` `↓` `⇐` `⇒` `⇔` `≠` `≤` `≥` `…` もすべて 1 セルであり、標準的な欧文ターミナルフォントの仕様と同一である。Source Han Sans にしか存在しない文字（漢字・かな・`①` `※` など）は Source Han Sans の全角のまま保持する。
+Unicode の半角ブロック（`ﾡ` など）はターミナルが 1 桁分しか割り当てないため、Source Han Sans が全角の互換字母と同じグリフを割り当てている場合でも 1 セル版を生成して置換している。Source Han Sans がプロポーショナル幅で保持している半角カナ（500）などは、その送り幅に最も近いグリッド（セル幅または全角の倍数）内に中央配置する。
+ギリシャ・キリル文字は直立・斜体ともに 234 文字を欧文レイヤー側で保持している。直立は Source Code Pro の字形をそのまま採用（元から 1 セル幅）。**斜体は [Source Sans 3](https://github.com/adobe-fonts/source-sans) Italic から流用している**（Source Code Pro Italic はキリル文字を一切持たず、ギリシャ文字も `π` のみという Adobe の意図的な設計によるため）。Source Code Pro は Source Sans をベースに制作された書体であるため、実測値として italicAngle（−11.0）と cap height が一致し、x-height も 1 ユニット差（wght 400 / 700 の両方）に収まる。ただしプロポーショナル幅であるため、送り幅を 1 セルに設定して中央配置し、インクがセル内に収まらない文字（基準ウェイトで 43 文字）のみセル左右に 8u ずつの余白を残して収めている（`build.cell_fit`）。8u は Source Code Pro が `w` `W` に与えているサイドベアリングであり、過度な凝縮を防ぐため必要な文字にのみ適用している。アクセントの位置指定に関しても Source Sans のベースアンカーを取り込んでいるため、`а́` `И́` `ε̈` のような分解済みの組み合わせでも文字の上に適切に配置される（従来は斜体面のみ位置指定が存在せず、アクセントが隣のセルにはみ出ていた）。等幅フォントが幅広の文字を収める際と同様の処理であり、Source Code Pro 自身の `M` も 600 セル幅に収められている。
 
-この 2 文字体系はどちらも東アジア文字幅が曖昧（A）でターミナルは 1 桁
-しか空けないので、欧文レイヤーが両スタイルとも 1 セルで持つことが要件。
-Source Han Sans にも 115 字あるが、それは Source Code Pro の 234 字に
-完全に含まれるため、JP 面でも 1 字も使われない（`narrow_letters` は
-上流が変わったときのための保険として残してあり、今はビルド出力の
-`letters=0` がそれを示す）。
+この 2 つの文字体系は双方とも東アジア文字幅（EAW）が曖昧（Ambiguous）であり、ターミナルでは 1 桁として扱われるため、欧文レイヤー側で両スタイルとも 1 セルとして保持することが必須要件となる。Source Han Sans 側にも 115 文字が存在するが、それらは Source Code Pro の 234 文字に完全に含まれるため、JP 面においても一切使用されない（`narrow_letters` は上流変更時の安全策として保持しており、現在のビルド出力における `letters=0` がそれを示している）。
 
-例外は、Unicode の東アジア文字幅が Wide なのに 1 セルで出る 13 字
-（`☕` `🎵` `🎶` `💩` `🔒` `🤖` と Hangul 声調記号 2 字、注音の入声 5 字）。
-どれも片方のドナーにしか無く（前 6 字は Source Code Pro の 600、注音 5 字は
-Source Han Sans の 600、声調記号 2 字は Source Han Sans の 250 を
-`fit_to_grid` が 1 セルに置く）、ターミナルは 2 桁分を空けるので
-左寄りに見える。
-Source Code Pro / Source Han Sans にこれより広い字形が無いため、
-`fwid` の代替も用意していない。
+例外として、Unicode の東アジア文字幅が Wide でありながら 1 セルで表示される文字が 13 文字存在する（`☕` `🎵` `🎶` `💩` `🔒` `🤖` および Hangul 声調記号 2 文字、注音の入声 5 文字）。これらいずれも片方のフォント（供給元）にしか存在せず（前者の 6 文字は Source Code Pro の 600、注音 5 文字は Source Han Sans の 600、声調記号 2 文字は Source Han Sans の 250 を `fit_to_grid` で 1 セル配置）、ターミナル側が 2 セル分を確保するため左寄りに表示される。Source Code Pro / Source Han Sans 共にこれ以上幅広の字形が存在しないため、`fwid` による代替形式も提供していない。
 
-JIS 流の全角字形は `fwid` で戻せる。矢印 7 種は合字グリフ（`->` `=>`
-`<=>` の鏡像・回転）から Source Han Sans のインク長に合わせて切り出した
-全角版、`≠` `≤` `≥` `…` や罫線は Source Han Sans 自身の全角グリフ、`A`
-など Source Han Sans が `fwid` の形を持つ文字はその形（`Ａ`）。
+JIS 慣例の全角字形は `fwid` で復元できる。矢印 7 種は合字グリフ（`->` `=>` `<=>` の鏡像・回転）から Source Han Sans のインク長に合わせて抽出した全角版、`≠` `≤` `≥` `…` や罫線は Source Han Sans 自身の全角グリフ、`A` など Source Han Sans が `fwid` 形を持つ文字はその形状（`Ａ`）が適用される。
 
 ```jsonc
-// VS Code で矢印や罫線を全角に
+// VS Code で矢印や罫線を全角表示にする場合
 "editor.fontLigatures": "'fwid'"
 ```
 
-横方向の送りを動かす機能は入れていない。Source Han Sans の `kern`
-（横組みでは既定 ON。`あ`+`て` をセルより 20u 詰める）と、代替メトリクスの
-`halt` / `palt` / `pwid` はビルド時に落としてある。縦組みの機能
-（`vert` `vrt2` `vkrn` `vhal` `vpal`）は残してあり、縦書きは従来どおり。
+横方向の送り幅を動かす機能は組み込んでいない。Source Han Sans の `kern`（標準で有効化。`あ`+`て` をセルより 20u 詰める処理）や、代替メトリクスの `halt` / `palt` / `pwid` はビルド時に除去している。縦組み機能（`vert` `vrt2` `vkrn` `vhal` `vpal`）は維持されており、縦書き表示は従来通り動作する。
 
-曖昧幅（EAW=A）を 2 セルとして数えるターミナルでは `①` が右隣に食み出す。
-これは HackGen と同じ挙動で、Windows Terminal なら
-`"compatibility.ambiguousWidth": "wide"`、iTerm2 / WezTerm なら相当の設定で
-2 セル取らせる。
+曖昧幅（EAW=A）の文字を 2 セルとしてカウントするターミナル環境では `①` が右隣のセルにはみ出る。これは HackGen 等と同様の挙動であり、Windows Terminal では `"compatibility.ambiguousWidth": "wide"`、iTerm2 / WezTerm では同等の設定で 2 セル割り当てることで正常に表示できる。
 
 ## 合字一覧
 
-**Monaspace 由来の61種**を収録（[githubnext/monaspace](https://github.com/githubnext/monaspace) v1.400、OFL）。
-主要どころ: `!=` `==` `===` `!==` `<=` `>=` `->` `<-` `=>` `~>` `:=` `::`
+**Monaspace 由来の 61 種**を収録（[githubnext/monaspace](https://github.com/githubnext/monaspace) v1.400、OFL）。
+代表例: `!=` `==` `===` `!==` `<=` `>=` `->` `<-` `=>` `~>` `:=` `::`
 `<<=` `>>=` `=<<` `|>` `<|` `<>` `</>` `//` `#[` `...` `&=` `||` `!~` `=~`
-`~~>` `<!--` `&&=` ほか（全61種）。全リストは `data/mona_ligs.json` を参照。
+`~~>` `<!--` `&&=` など（全 61 種）。全リストは `data/mona_ligs.json` を参照。
 
-移植するのは合字グリフと、単独の ASCII 記号 32字全部
-（`` !"#$%&'()*+,-./:;<=>?@[\]^_`{|}~ ``）。英数字やそれ以外の文字は
-Source Code Pro のまま。
+移植対象は合字グリフおよび単独の ASCII 記号全 32 文字（`` !"#$%&'()*+,-./:;<=>?@[\]^_`{|}~ ``）。英数字やその他の文字は Source Code Pro のまま保持している。
 
-記号を丸ごと Monaspace に揃えたのは、合字自体が Monaspace 製である以上、
-同じ記号が単独字と合字とで違う骨格を持つと隣り合わせたときに継ぎ目が
-見えてしまうため（`#` と `#[`、`-` と `->`、`/` と `//` など）。最初に
-移した `=` `<` `>` `|` `~` は形そのものが合字と違っていた（`=` と `==` で
-バーの間隔が SCP 152u / Monaspace 197u、`<` と `<=` で大きさと角度、`|` と
-`||` で上下の伸び、`~` と `~>` で振幅）。残りの記号はおおむね縦のサイズ
-違いで、Monaspace の cap 高・x-height が SCP より高いぶん `!` `&` `?` `:`
-`;` は 16〜67u 持ち上がり、括弧類や `#` `@` `$` は 60〜150u 高く最大 96u
-幅も広い — いずれもセル内に収まり、ターミナルサイズでは2ピクセル未満の
-差。`-` は `=` より 110u 短いが、これは Monaspace 自身がそういう字形の
-ため。SCP の `cv14`/`cv15`/`cv16`（タイポグラフィックなハイフン・
-アスタリスク・スラッシュ付きドル記号）を有効にすると、`-` `*` `$` は
-SCP の字形に戻る。なお欧文単独ファミリー（Gengou）でハイフンを
-差し替える `cv14`（および `salt` `ss11`）を有効にすると、`->` `<-`
-`-->` `<--` `<->` `<-->` `<!--` `-~` `~-` の 9 つの合字は出なくなる
-——ドナー自身の異体字ルックアップが合字の連鎖より前に並ぶため。
-和文ファミリー（Gengou JP / JP Term）では
-`import_scp_variants` が後ろに足すので合字が残り、両者の挙動は
-ここだけ食い違う。
+記号類をすべて Monaspace 側に統一した理由は、合字自体が Monaspace 製であるため、単独文字と合字とで記号の骨格が異なると文字が隣接した際に不自然な継ぎ目が生じるためである（`#` と `#[`、`-` と `->`、`/` と `//` など）。最初に移植した `=` `<` `>` `|` `~` は単独文字と合字で形状自体に食い違いが存在していた（`=` と `==` のバー間隔が SCP 152u / Monaspace 197u、`<` と `<=` のサイズおよび角度、`|` と `||` の高さ、`~` と `~>` の振幅の違い）。残りの記号はおおむね垂直方向のサイズ差であり、Monaspace の cap 高・x-height が SCP より高いため `!` `&` `?` `:` `;` は 16〜67u 上昇し、括弧類や `#` `@` `$` は 60〜150u 高く最大 96u 幅も広くなるが、いずれもセル内に収まりターミナル表示サイズでは 2 ピクセル未満の微差に留まる。`-` は `=` より 110u 短いが、これは Monaspace 本来のデザイン仕様によるものである。SCP の `cv14`/`cv15`/`cv16`（タイポグラフィックなハイフン・アスタリスク・スラッシュ付きドル記号）を有効化すると、`-` `*` `$` は SCP の字形に復元される。なお、欧文単独ファミリー（Gengou）においてハイフンを置換する `cv14`（および `salt` `ss11`）を有効化した場合、`->` `<-` `-->` `<--` `<->` `<-->` `<!--` `-~` `~-` の 9 つの合字は無効化される。これは供給元フォント自身の異体字ルックアップが合字の連鎖処理より前段に配置されているためである。和文ファミリー（Gengou JP / JP Term）では `import_scp_variants` が後段に追加されるため合字が保持され、両ファミリー間で挙動が異なる。
 
-結合記号のうち `U+031A` `U+031B` `U+0334` `U+0344`（イタリックでは
-`U+0310` も）は、Source Code Pro が本来付く字（`U+25CC`、オーバーレイ
-なら `L` `l`、ホーンなら `O` `U` `o`）にしかアンカーを持たない。
-欧文ファミリーはドナーの字形をそのまま使うので、それ以外の字の上では
-シェーパーが動かさず、記号は次のセルに描かれる（ドナー自身と同じ挙動）。
-和文ファミリーは接ぎ木が結合記号を 1 セル左に描くため、同じ組み合わせ
-でも土台の上に乗る。
+結合記号のうち `U+031A` `U+031B` `U+0334` `U+0344`（イタリックでは `U+0310` も含む）は、Source Code Pro が本来付与される文字（`U+25CC`、オーバーレイは `L` `l`、ホーンは `O` `U` `o`）にのみアンカーを保持している。欧文ファミリーは供給元の字形をそのまま利用するため、それ以外の文字の上ではシェーパーが位置調整を行わず、記号は隣のセルに描画される（供給元フォントと同様の挙動）。和文ファミリーでは移植処理時に結合記号を 1 セル左側に描画するため、同一の組み合わせであっても文字の上に適切に配置される。
 
-線の太さは**面ごとに** Source Code Pro のインスタンスの `=` のバー厚を
-実測し、Monaspace VF の wght を二分探索で一致させたインスタンスから
-取り込む。Italic 面には slnt 軸で傾斜も追随させ（SCP Italic は −11°
-——`post.italicAngle` も実測のステム角 11.38° もそう——で、Monaspace の
-slnt の下限と一致するため、シアーは掛からない。コード中の −12° は角度を
-申告しないドナーへのフォールバック）、ベースラインは両フォントの `=` の
-縦中心を揃える。
-Monaspace VF の wght 下限（200）は `=` バー厚 53u で SCP Light の 37u に
-届かないため、Light では Monaspace 由来のアウトラインを片側 8u 内側に
-削って（pathops でストローク幅 2d を差し引く）太さを合わせている。
-GSUB は `calt` / `liga` 両登録（全合字が既定で有効）。加えて Monaspace 流の
-**グループ別 stylistic set** を備え、`calt` を切って必要な群だけ有効化できる:
+線の太さは**フォント面ごとに** Source Code Pro インスタンスの `=` バー厚を実測し、Monaspace VF の wght を二分探索で一致させたインスタンスから取り込んでいる。Italic 面では slnt 軸により傾斜を連動させ（SCP Italic は −11° であり Monaspace の slnt 下限と一致するためシアー処理は発生しない。コード内の −12° は角度非宣言フォント用のフォールバック）、ベースラインは両フォントの `=` 縦中心に揃えている。
+Monaspace VF の wght 軸下限（200）は `=` バー厚 53u であり SCP Light の 37u に届かないため、Light では Monaspace 由来のアウトラインを片側 8u 内側に削って（pathops でストローク幅 2d を差し引く）太さを合わせている。
+GSUB テーブルには `calt` と `liga` の両方を登録し（すべての合字が標準で有効）、加えて Monaspace 由来の**グループ別 stylistic set** を備えているため、`calt` を無効化して必要なグループのみを個別で有効化できる:
 
 | feature | 内容 | 例 |
 |---------|------|----|
@@ -177,152 +77,57 @@ GSUB は `calt` / `liga` 両登録（全合字が既定で有効）。加えて 
 | ss08 | 反復・論理・その他 | `\|\|` `<<` `>>` `#[` `#(` `&=` `&&` `&&=` `++` |
 | cv99 | 演算子の代替デザイン（Monaspace の .alt） | |
 
-さらに **Source Code Pro 自身の字形バリアントを貫通**させている:
-`zero`（スラッシュゼロ切替）、`cv01`〜`cv17`（`a` の一階建て、`g` の形など
-SCP 純正の文字変異）、`salt`、SCP の stylistic set は ss11〜ss17 に +10 で
-マウント（ss01〜ss08 は合字グループが使用）。
+さらに **Source Code Pro 自身の字形バリアントもそのまま利用できる**:
+`zero`（スラッシュゼロ切替）、`cv01`〜`cv17`（`a` の一階建て、`g` の形状など SCP 純正の異体字）、`salt`、および SCP の stylistic set を 10 ずらして割り当て（ss11〜ss17。ss01〜ss08 は合字グループが使用）。
 
 ```jsonc
-// 例: !== の一体化が読みにくい場合、比較系だけ切って矢印は残す
+// 例: !== の一体化が読みにくい場合、比較系だけ無効化して矢印は残す
 "editor.fontLigatures": "'calt' off, 'ss02', 'ss03', 'ss05', 'ss06', 'ss07', 'ss08'"
 ```
-ss01〜08 はグループごとに別のルックアップなので、`calt` を切ったまま複数
-グループを同時に有効にすると、片方の短い列（ss01 の `>=`）がもう片方の
-長い列（ss02 の `>>=`）の頭を食ってしまうことがある。Monaspace 本家の
-stylistic set も同じ挙動なので許容している。グループを跨いだ安全性が
-欲しい場合は `calt` を使うこと。
+ss01〜08 はグループごとに独立したルックアップのため、`calt` を無効化したまま複数のグループを同時に有効化すると、短めのパターン（ss01 の `>=`）が長めのパターン（ss02 の `>>=`）の前半部に干渉する場合がある。これは Monaspace 本家と同様の仕様である。複数のグループを組み合わせる際、安全性を重視する場合は `calt` の使用を推奨する。
 
-`:=` と `::` は Monaspace 内でも文脈変異（`colon.case`）で実現されているため、
-同グリフの合成として取り込んでいる（実レンダリングと誤差1ユニット未満で一致）。
-同じ手法で `&&` `++`（`&` `+` の init/fina 変異）、`..<` `.=`（ピリオドを
-上げた変異）、`:>` `<:`（コロンを上げた変異）も合成して取り込んでいる。
+`:=` と `::` は Monaspace 内でも文脈依存の字形切替（`colon.case`）で実現されているため、同様のグリフ合成処理を行っている（実レンダリング結果と誤差 1 ユニット未満で一致）。同一手法により `&&` `++`（`&` `+` の init/fina 変種）、`..<` `.=`（ピリオドの位置を引き上げた変種）、`:>` `<:`（コロンの位置を引き上げた変種）も合成して導入している。
 
 ## Nerd Fonts 版
 
-全面に Nerd Fonts のアイコングリフを追加した変種も生成する。アイコンは
-1 セルに収めるので、Nerd Fonts 本家の命名では **Mono** に当たり、
-ファミリー名は `Gengou JP Nerd Font Mono` / `Gengou JP Term Nerd
-Font Mono` / `Gengou Nerd Font Mono`（PostScript 名 `GengouJPNFM-*`
-など。`JetBrainsMono Nerd Font Mono` と同じ流儀）。
+すべての面において Nerd Fonts のアイコングリフを追加したバリエーションを生成する。アイコンを 1 セル内に収めるため、Nerd Fonts 本家の命名規則では **Mono** に該当し、ファミリー名は `Gengou JP Nerd Font Mono` / `Gengou JP Term Nerd Font Mono` / `Gengou Nerd Font Mono`（PostScript 名: `GengouJPNFM-*` 等。`JetBrainsMono Nerd Font Mono` と同様の形式）となる。
 
-ただし綴ったままだと Windows GDI の `LOGFONT.lfFaceName`（31 文字）に
-入らない面が出る（非 RIBBI は名前にウェイト名が付くので
-`Gengou JP Term Nerd Font Mono SemiBold` で 38 文字）。そこで
-**nameID 1 だけ `NFM` に略してある**——`Gengou JP NFM` /
-`Gengou JP Term NFM` / `Gengou NFM`（最長 `Gengou JP Term NFM
-SemiBold` で 27 文字）。nameID 16 / 4 は綴ったままなので、
-Windows Terminal・VS Code・macOS・Linux のピッカーには
-`Gengou JP Term Nerd Font Mono` が出て、**旧 conhost・メモ帳・Office の
-GDI 経路にだけ略称 `Gengou JP Term NFM` が出る**。指定するときは
-その環境のピッカーに出ているほうの名前を使う。本家 font-patcher の
-`--windows` と同じ手。
+ただし、そのままの名称では Windows GDI の `LOGFONT.lfFaceName` 制限（31 文字）を超過する面が発生する（非 RIBBI 面は名前にウェイト名が付加されるため `Gengou JP Term Nerd Font Mono SemiBold` で 38 文字となる）。そのため、**nameID 1 に限り `NFM` と短縮表記している**（`Gengou JP NFM` / `Gengou JP Term NFM` / `Gengou NFM`。最長の `Gengou JP Term NFM SemiBold` で 27 文字）。nameID 16 / 4 は正式名称を維持しているため、Windows Terminal・VS Code・macOS・Linux のフォント選択一覧には `Gengou JP Term Nerd Font Mono` が表示され、**旧 conhost・メモ帳・Office 等の GDI 描画経路にのみ短縮名 `Gengou JP Term NFM` が表示される**。設定の際は使用環境のピッカーに表示されている名称を指定する。これは本家 font-patcher の `--windows` オプションと同様の手法である。
 
-アイコンは font-patcher で掛けるのではなく、Nerd Fonts が配っている記号
-だけのフォント `Symbols Nerd Font Mono`（各リリースの
-NerdFontsSymbolsOnly.zip。font-patcher の全記号集合と群ごとの寸法を空の
-フォントに適用したもの）から fontTools で接ぎ木する。`--complete --mono`
-でパッチしたのと同じ記号集合・同じ 1 セル送りになり、FontForge の往復
-（CID 構造の平坦化、STAT の消失、メタデータの復元）が要らず、1 面 10 秒
-程度。寸法だけは本家と差があり、`docs/gengou-plan.md` に測定値がある
-（本家は縦長の箱 600 × 856 に収めるが、こちらは記号フォント自身の正方
-セルのまま 600 × 600）。
-寸法は font-patcher 自身の群ごとの規則に合わせる（`icon_transform`）。
+アイコンの追加は font-patcher を介さず、Nerd Fonts が配布している記号専用フォント `Symbols Nerd Font Mono`（`NerdFontsSymbolsOnly.zip`）から fontTools を用いて直接移植している。これにより `--complete --mono` でパッチを適用した場合と同一の記号集合・同一の 1 セル送り幅を実現し、FontForge による変換処理（CID 構造の平坦化、STAT 情報の消失、メタデータの再構築）を回避して 1 面あたり 10 秒程度で処理を完了できる。寸法は本家と一部異なり、`docs/gengou-plan.md` に測定値を記載している（本家は縦長の領域 600 × 856 に収めるが、本フォントでは記号フォント自体の正方セルサイズのまま 600 × 600 としている）。
+寸法は font-patcher 自身のグループ別規則に準拠している（`icon_transform`）。
 
-| 群 | font-patcher の指定 | 寸法 |
+| グループ | font-patcher の指定 | 寸法 |
 | --- | --- | --- |
-| 通常のアイコン | `pa` | セル幅 / 記号フォントの em（600 / 2048）で一律。行ボックスの中央に置く。この縮尺でセルや行の外に出てしまうものだけ、セルと行に収めて中央へ |
-| 引き伸ばす群（`SEPARATORS` と `PROGRESS`。Powerline の区切り 32 字と進捗バー 6 字） | `^xy` | インクをセル幅と行の全高いっぱいに引き伸ばす。記号フォントが付けている食み出し（font-patcher の `overlap`）は比率のまま残す。両端が食み出しているもの（進捗バーの中間）は両側とも残す |
-| 行ボックスに対して描くその他（U+E0A0〜E0A3 のブランチ・鍵など、U+E0CE〜E0D1 の行番号・桁番号） | `^pa` | 縦横比を保ったまま、セル幅と行の全高のうち先に当たるほうに収める（桁番号 U+E0CE は幅で決まって行の 45%、ブランチ U+E0A0 は行いっぱい） |
+| 通常のアイコン | `pa` | セル幅 / 記号フォントの em（600 / 2048）で一律設定。行ボックスの中央に配置。この縮尺でセルや行の外にはみ出るもののみ、セルと行に収まるよう調整して中央配置 |
+| 拡張グループ（`SEPARATORS` および `PROGRESS`。Powerline 区切り 32 文字と進捗バー 6 文字） | `^xy` | インク領域をセル幅と行高全体いっぱいに拡大。記号フォントに設定された食み出し量（font-patcher の `overlap`）は比率を維持。両端が食み出しているもの（進捗バーの中間要素）は両端とも保持 |
+| 行ボックス基準で描画されるその他（U+E0A0〜E0A3 のブランチ・鍵アイコン等、U+E0CE〜E0D1 の行番号・桁番号） | `^pa` | 縦横比を維持したまま、セル幅と行高のうち先に境界に達する側に収める（桁番号 U+E0CE は幅基準で行高の 45%、ブランチ U+E0A0 は行高全体にフィット） |
 
-記号フォント自体は正方形のセル（2048 × 2048）向けなので、区切りは
-font-patcher の `xy-ratio`（0.7 など）で頭打ちになった幅（2048 中 1447）
-しか持たない。こちらのセルは 600 × 1257 と縦長で頭打ちに掛からないため、
-インクはセルいっぱいに広がる。Source Code Pro 自身が持つ Powerline
-（U+E0A0〜E0A2、E0B0〜E0B3）は記号フォントのもので置き換える。
-アイコンはヒント無し（font-patcher の出力も同じ）。Nerd Fonts 自身のライセンス（MIT）は NF の zip に `LICENSE-NerdFonts`
-として同梱する。各アイコンセットのライセンスは Nerd Fonts のリポジトリに
-あり、zip には入らない。
+記号フォント自体は正方形セル（2048 × 2048）用に設計されているため、区切り記号は font-patcher の `xy-ratio`（0.7 等）で上限が設定された幅（2048 中 1447）のみを保持する。本フォントのセルは 600 × 1257 と縦長で上限値に達しないため、インクはセル全体に拡大される。Source Code Pro 自身が保持する Powerline 記号（U+E0A0〜E0A3、E0B0〜E0B3）は記号フォント側のグリフで置換している。
+アイコンにはヒント情報を付与していない（font-patcher の出力仕様と同様）。Nerd Fonts 自身のライセンス（MIT）は NF 版 zip 内に `LICENSE-NerdFonts` として同梱している。
 
-## Gengou（欧文のみ）
+## Gengou（欧文単体版）
 
-Gengou JP が使う欧文レイヤーを、VF から直接組み上げた和文なしの
-単独フォント。JP 側（`build.py`）はこのフォントを Source Han Sans に
-そのまま接ぎ木するだけになっており、欧文の設計判断は 1 か所に集まっている。
+Gengou JP で使用される欧文レイヤーを、可変フォント（VF）から直接ビルドした和文なしの単体フォント。JP 側（`build.py`）はこのフォントを Source Han Sans に合成する構成をとっており、欧文に関する設計構成が一元化されている。
 
-ベースは Source Code Pro VF の名前付きインスタンス（wght 300 / 400 / 500 /
-600 / 700）を、fontTools の CFF2ToCFF で静的な CID-keyed CFF に変換した
-もの——SCP 自身のアウトライン・アライメントゾーン・GSUB（`cv01`〜`cv17`
-`zero` `salt`、SCP の stylistic set は `ss11`〜`ss17` に移動）・GPOS
-（マーク位置決め）はそのまま生きている。インスタンス化でヒントは失われる
-ため、SCP 自身のゾーンに対して otfautohint で全体を再ヒント。その上に
-Monaspace 由来の合字61種・ASCII 記号32字・1セル矢印（SCP に無い `⇔` も
-追加）を、太さとベースラインを揃えて接ぎ木し、cffsubr でサブルーチン化
-する。結合文字は SCP が出荷する形（スペーシング、GPOS mark で位置決め）
-のまま——ただし**位置決めは全文字に行き渡らせてある**。SCP と Source Sans
-はどちらもギリシャ・キリルの 3 分の 1 程度にしかベースアンカーを持たず、
-アンカーの無い文字ではスペーシング設計の結合文字が送りをゼロにされた結果
-**まるごと 1 セル右、次の文字の上**に落ちていた。各 mark ルックアップが
-自分のアンカーから従っている規則を当てはめて、覆われていない文字に同じ
-規則でアンカーを与えている（`build.anchor_loose_letters`）。
+ベースは Source Code Pro VF の名前付きインスタンス（wght 300 / 400 / 500 / 600 / 700）を、fontTools の CFF2ToCFF で静的 CID-keyed CFF に変換したものを使用している。SCP 自身のアウトライン・アライメントゾーン・GSUB（`cv01`〜`cv17` `zero` `salt`、SCP の stylistic set は `ss11`〜`ss17` に移動）・GPOS（マーク位置決め）はそのまま保持される。インスタンス化の際にヒント情報が失われるため、SCP 自身のゾーンに対して otfautohint で全体を再ヒント処理している。その上に Monaspace 由来の合字 61 種・ASCII 記号 32 文字・1 セル矢印（SCP 未収録の `⇔` も追加）を太さおよびベースラインを揃えて合成し、cffsubr でサブルーチン化している。結合文字は SCP の標準仕様（スペーシング設計、GPOS mark による位置決め）を維持しているが、**位置決めはすべての文字に行き渡るよう補正されている**。SCP と Source Sans はどちらもギリシャ・キリル文字の 3 分の 1 程度にしかベースアンカーを含んでおらず、アンカーの存在しない文字ではスペーシング設計の結合文字が送り幅を 0 に調整された結果、**次の文字の上にずれて表示される**問題が存在していた。そのため、各 mark ルックアップが保持するアンカーの規則を適用し、カバーされていない文字に対しても同様の規則でアンカーを自動付与している（`build.anchor_loose_letters`）。
 
-Regular は1,632グリフ、Italic は1,585グリフ（cmap はどちらも1,335で同一。
-SCP Italic VF のグリフ数が少ないぶんの差で、ギリシャ・キリルとギリシャ
-拡張は Source Sans 3 Italic から補っているので符号位置の網羅は直立と
-揃っている）。縦メトリクスは SCP 自身の hhea（984 / -273）を
-基準に、OS/2 の typo を hhea と同値にして `USE_TYPO_METRICS` を立て、win
-はファミリー全面のバウンディングボックスを覆う値（1060 / 454）。
+Regular は 1,632 グリフ、Italic は 1,585 グリフで構成される（cmap 収録数はどちらも 1,335 で同一。SCP Italic VF のグリフ数が少ないことによる差異であり、ギリシャ・キリル文字および拡張領域は Source Sans 3 Italic から補完しているため符号位置の網羅性は直立と一致する）。垂直メトリクスは SCP 自身の hhea（984 / -273）を基準とし、OS/2 typo を hhea と同値に設定して `USE_TYPO_METRICS` を有効化し、win メトリクスはファミリー全体のバウンディングボックスを覆う値（1060 / 454）に調整している。
 
-**可変フォント**: 配布する Gengou は `scripts/build_latin_vf.py` が
-同じレシピを CFF2 可変フォントとして組んだ `Gengou[wght].otf`
-（Upright）と `Gengou-Italic[wght].otf`（Italic）。wght 軸は
-usWeightClass の値で、名前付きインスタンスは静的面と同じ 300 / 400 /
-500 / 600 / 700、既定値 400 = Regular。ユーザー wght は SCP の wght
-そのもの（SCP のユーザー wght が usWeightClass）で、その間は SCP 自身の
-avar の折れ点を通して補間する——SCP の VF はユーザー wght に対して線形
-ではないので、これを引き継がないと中間ウェイトが SCP と一致しない。
-マスターは SCP VF 自身のマスター位置（wght 200 / 400——CFF2 の VarStore
-から実測）に Bold の位置（軸の上限。SCP の 900 マスターは上限の外なので
-使わず、SCP が 400〜900 で線形なことを利用して Bold 位置でインスタンス化
-する）と Monaspace の下限位置（Monaspace の wght 200 のバーが SCP の
-バーと一致する SCP wght、およそ 365。これより細い側では Monaspace が
-下限でクランプされる）を加えた 4 つ。SCP 側のマスターは fontTools の
-instancer の整数丸めを切ってインスタンス化する。重なり除去とヒント付け・
-サブルーチン化はしない（マスター間で点の対応が壊れるため。ヒントは
-静的面の側で付ける）。軽量側では Monaspace 側の記号・合字が下限の太さで
-止まる。その差は小さくない: 可変フォントの Light インスタンス（wght 300）
-では `=` のバーが 53u——静的 Light の 37u に対して直立 +43%・斜体 +56%——
-で、ASCII の記号 32 字・矢印・不等号と合字 63 字の計 106 グリフが墨面積で
-43〜56% 太い。同じインスタンスの中で、文字は Regular の 56% まで軽くなる
-のに記号は 86〜92% に留まるので、**Light では文字と記号の濃さが揃わない**。
-静的 Light は erosion で両方を揃えている。静的面は JP 面のドナーと
-Nerd Fonts 版の入力で、単体では配布しない。
+**可変フォント**: 配布用 Gengou は `scripts/build_latin_vf.py` により同一レシピを CFF2 可変フォントとしてビルドした `Gengou[wght].otf`（Upright）および `Gengou-Italic[wght].otf`（Italic）である。wght 軸は usWeightClass の値であり、名前付きインスタンスは静的面と同様に 300 / 400 / 500 / 600 / 700（既定値 400 = Regular）となる。ユーザー wght は SCP の wght そのものであり、その中間値は SCP 自身の avar 折れ線を通して補間される。SCP の VF はユーザー wght に対して非線形であるため、この補間を引き継ぐことで中間ウェイトにおける SCP との整合性を維持している。マスターは SCP VF 自身のマスター位置（wght 200 / 400 — CFF2 VarStore より実測）に Bold の位置（軸上限）および Monaspace の下限位置（Monaspace の wght 200 バー厚が SCP バー厚と一致する SCP wght。約 365）を加えた 4 つで構成される。SCP 側のマスターは fontTools instancer の整数丸めを無効化して生成している。重なり除去およびヒント付与・サブルーチン化はマスター間のポイント対応崩壊を防ぐため行わない（ヒント付けは静的面側で実施）。軽量側では Monaspace 由来の記号・合字が下限の太さで停止するため、可変フォントの Light インスタンス（wght 300）では `=` バー厚が 53u（静的 Light の 37u に対し直立 +43%・斜体 +56%）となり、ASCII 記号 32 文字・矢印・不等号および合字 63 文字の計 106 グリフの黒み面積が 43〜56% 太くなる。同一インスタンス内で文字領域が Regular の 56% まで軽くなる一方で記号領域は 86〜92% に留まるため、**Light においては文字と記号の黒み濃度が完全には一致しない**。静的 Light では erosion 処理によって双方の太さを適合させている。なお、静的面は JP 面の合成ドナーおよび Nerd Fonts 版の入力用であり、単体での配布は行わない。
 
-**源合**（げんごう）は、源ノ角ゴシックと Source Code Pro が共有する
-`Source` の訳字「源」と、合字の「合」——4 つの上流を合わせる「合成」の
-合でもある——を合わせた名前。OFL の Reserved Font Name が英語の `Source`
-を塞いでいるので、漢字で言い換えている。詳しい由来・衝突調査・欧文層を
-切り出した経緯は [docs/gengou-plan.md](docs/gengou-plan.md) を参照。
+名称の**源合**（げんごう）は、源ノ角ゴシックおよび Source Code Pro が共有する `Source` の訳字「源」と、合字の「合」（および 4 つの上流フォントを組み合わせる「合成」の合）を組み合わせたものである。OFL の Reserved Font Name 規定により英語の `Source` が制限されているため、漢字表現に置き換えている。詳細な由来・衝突調査・欧文層分離の経緯については [docs/gengou-plan.md](docs/gengou-plan.md) を参照。
 
 ## インストール
 
-[Releases](../../releases) から用途に応じてアセットを選ぶ。いずれの zip にも
-OFL のライセンス全文（LICENSE）を同梱している。
+[Releases](../../releases) より用途に合わせてアセットを選択する。すべての zip に OFL ライセンス全文（LICENSE）を同梱している。
 
-- **`GengouJP.zip` / `GengouJPTerm.zip`**: ファミリーごとの zip
-  （5 ウェイト × 2 スタイルの 10 面、面ごとの OTF）。使うファミリーだけ
-  落として、必要な面だけ入れる（TTC は配らない: リリースの単位は
-  インストールするファイルの単位）。
-- **`GengouJP-NerdFont.zip` / `GengouJPTerm-NerdFont.zip`**: 同じ
-  ファミリー分けの Nerd Fonts 版（ファミリー名 `Gengou JP Nerd Font
-  Mono` など）。ターミナルのプロンプト装飾（アイコン表示）に使う場合は
-  こちら。
-- **`Gengou.zip`**: 和文を含まない欧文のみの Gengou。可変フォント
-  2面（`Gengou[wght].otf` / `Gengou-Italic[wght].otf`）。
-- **`Gengou-NerdFont.zip`**: Gengou の Nerd Fonts 版（`Gengou Nerd
-  Font Mono`）。可変フォントには接ぎ木しないので、こちらは 5 ウェイト ×
-  2 スタイルの静的 10 面。
+- **`GengouJP.zip` / `GengouJPTerm.zip`**: 各ファミリーの zip ファイル（5 ウェイト × 2 スタイルの 10 面、個別 OTF）。必要なファミリーおよびウェイトを選択してインストール可能。
+- **`GengouJP-NerdFont.zip` / `GengouJPTerm-NerdFont.zip`**: 同一構成の Nerd Fonts 対応版（ファミリー名: `Gengou JP Nerd Font Mono` 等）。ターミナルのプロンプト装飾（アイコン表示）に使用する場合はこちらを選択する。
+- **`Gengou.zip`**: 和文を含まない欧文単体版 Gengou。可変フォント 2 面（`Gengou[wght].otf` / `Gengou-Italic[wght].otf`）。
+- **`Gengou-NerdFont.zip`**: Gengou の Nerd Fonts 対応版（`Gengou Nerd Font Mono`）。可変フォントへの合成は行わないため、こちらは 5 ウェイト × 2 スタイルの静的 10 面構成となる。
 
-ダウンロードしてインストールし、
+ダウンロード後、システムにインストールしエディタ等で設定する:
 
 ```jsonc
 {
@@ -331,27 +136,17 @@ OFL のライセンス全文（LICENSE）を同梱している。
 }
 ```
 
-v5.0.0 までの `Sumi Moji JP`（v4.0.0 までは 2:3 の基本ファミリーと
-35 / Term）や v3.2.0 までの `Shoyu Code Pro JP` とはファミリー名が
-違うので共存する。置き換えるなら旧版をアンインストールする。
+旧版（`Sumi Moji JP` や `Shoyu Code Pro JP`）とはファミリー名が異なるため共存可能である。置き換える場合は旧版をアンインストールする。
 
-- **macOS**: OTF をダブルクリックして「フォントブック」でインストール、または
-  `~/Library/Fonts/` にコピー。
-- **Windows**: OTF を右クリックして「インストール」を選択（全ユーザー適用は
-  「すべてのユーザー用にインストール」）。
-- **Linux**: `~/.local/share/fonts/`（ユーザー単位）または
-  `/usr/local/share/fonts/`（全ユーザー）にコピーし、`fc-cache -f` を実行。
+- **macOS**: OTF をダブルクリックして「Font Book」でインストール、または `~/Library/Fonts/` にコピー。
+- **Windows**: OTF を右クリックして「インストール」を選択（全ユーザー適用は「すべてのユーザー用にインストール」）。
+- **Linux**: `~/.local/share/fonts/`（ユーザー単位）または `/usr/local/share/fonts/`（全ユーザー）にコピーし、`fc-cache -f` を実行。
 
-ビルドやリガチャの追加・改造に興味がある場合は [CONTRIBUTING.md](CONTRIBUTING.md) を参照。
+ビルドや合字の追加・改造については [CONTRIBUTING.md](CONTRIBUTING.md) を参照。
 
 ## ビルド
 
-4つの上流（Source Han Sans JP / Source Code Pro VF / Source Sans 3 VF /
-Monaspace VF）と、Nerd Fonts 版のための `Symbols Nerd Font Mono` を
-取得して環境変数で場所を渡す。ビルドは2段階: まず `scripts/build_latin.py`
-が VF から Gengou（`dist/latin`）を組み、その完成品を `scripts/build.py`
-が Source Han Sans に接ぎ木する。具体的なコマンドは
-`.github/workflows/ci.yml` の手順がそのまま実行可能なリファレンス。
+4 つの上流フォント（Source Han Sans JP / Source Code Pro VF / Source Sans 3 VF / Monaspace VF）および Nerd Fonts 版用の `Symbols Nerd Font Mono` を取得し、環境変数でパスを指定する。ビルドは 2 段階で進行し、まず `scripts/build_latin.py` が VF から Gengou（`dist/latin`）を生成し、その生成物を `scripts/build.py` が Source Han Sans に合成する。具体的なビルドコマンドは `.github/workflows/ci.yml` を参照。
 
 ```sh
 pip install -r requirements.txt
@@ -367,71 +162,23 @@ python scripts/golden.py <前の dist> dist                  # 2つのビルド�
 NF_SYMBOLS=... python scripts/nerdpatch.py                 # Nerd Fonts 版
 ```
 
-`SCP_VF_U` / `SCP_VF_I` / `SS_VF_I` / `MONA_VF` は欧文を組む 2 つの
-スクリプト（`build_latin.py` と `build_latin_vf.py`）が使い、それぞれ
-Source Code Pro VF / Source Sans 3 VF / Monaspace VF の Releases から
-取得する。`SS_VF_I` は斜体のギリシャ・キリルにしか使わないが、直立だけを
-組む場合も必須（欠けたまま斜体を組むと 2 文字体系が黙って抜けるため）。
-`build.py` は Source Code Pro / Monaspace の VF に直接触らず、代わりに
-`SHS_DIR`（Source Han Sans JP）と `LATIN_DIR`（既定 `dist/latin`、
-`build_latin.py` の出力先）を見る。`verify.py` と `verify_latin_vf.py` は
-`SCP_VF_U` / `SCP_VF_I` があれば `=` のバーを Source Code Pro の
-インスタンスと突き合わせる。
-`GENGOU_VERSION`（例 `6.0.0`）を立てると name テーブルにその版番号を刻む
-（リリースワークフローがタグから渡す。未設定なら上流のリビジョンをそのまま
-残す）。
+`SCP_VF_U` / `SCP_VF_I` / `SS_VF_I` / `MONA_VF` は欧文ビルド用の 2 つのスクリプト（`build_latin.py` および `build_latin_vf.py`）で使用し、それぞれ Source Code Pro VF / Source Sans 3 VF / Monaspace VF の Releases から取得する。`SS_VF_I` は斜体のギリシャ・キリル文字にのみ使用されるが、直立のみをビルドする場合でも指定が必須となる（未指定の場合、斜体ビルド時に文字が欠落するため）。`build.py` は Source Code Pro / Monaspace の VF に直接アクセスせず、代わりに `SHS_DIR`（Source Han Sans JP）および `LATIN_DIR`（標準: `dist/latin`、`build_latin.py` の出力先）を参照する。`verify.py` および `verify_latin_vf.py` は `SCP_VF_U` / `SCP_VF_I` が存在する場合に `=` バー厚を Source Code Pro インスタンスと照合する。
+`GENGOU_VERSION`（例: `6.0.0`）を指定すると name テーブルに版番号が記録される（リリースワークフローがタグから指定。未指定時は上流のリビジョン番号を維持）。
 
-`requirements.txt` には AFDKO（`otfautohint` で描き直したグリフにヒントを
-付ける）も含まれる。ローカルでの試しビルドで時間を節約したい場合は
-`GENGOU_SKIP_AUTOHINT=1` を立てるとスキップできる。Term の全角グリフ約1.7万個
-は描き直さず charstring の中で 100 ユニット右へ動かす（`shift_charstring`）
-ので、Source Han Sans 自身のヒントがそのまま残り、ヒント付けは各面で
-描き直したおよそ 2,250〜2,650 グリフ（欧文レイヤー、`fwid` の全角形、グリッドに
-乗せ直した比例幅の残り、Term で伸ばした罫線など）だけで済む。ヒント付与後は cffsubr（AFDKO の
-`tx`、`requirements.txt` に同梱）で CFF をサブルーチン化している。
+`requirements.txt` には AFDKO（`otfautohint` による再描画グリフへのヒント付与用）が含まれる。ローカルでのテストビルド時間を短縮したい場合は `GENGOU_SKIP_AUTOHINT=1` を指定することでヒント付けをスキップできる。Term の全角グリフ約 1.7 万個は再描画を行わず charstring 内で 100 ユニット右移動（`shift_charstring`）させるため、Source Han Sans 自身のヒントが維持され、ヒント再付与処理は各面で再描画された約 2,250〜2,650 グリフ（欧文レイヤー、`fwid` 全角形、再配置されたプロポーショナル文字、Term 拡張罫線等）のみで完了する。ヒント付与後は cffsubr（AFDKO の `tx`）を用いて CFF をサブルーチン化している。
 
 ## 仕組み
 
-- 欧文レイヤーは Gengou（`scripts/build_latin.py`、VF から先に組んで
-  `dist/latin` に出力）から来る。Source Han Sans JP（CID-keyed CFF）を
-  土台に、Gengou が持つ全コードポイント（Regular で 1,335）へその
-  グリフを 1 セルで接ぎ木し cmap を差し替える。Source Han Sans が持って
-  いた全角グリフは `fwid` の代替として残す。追加 CID は疎な空間の空きを
-  昇順割当（サブセット OTF の CID は不連続なため）
-- 太さの一致は Gengou 側（`build_latin.py`）で完結している——各面は
-  SCP の名前付きインスタンスそのもので、その `=` バー厚に Monaspace VF の
-  wght を二分探索で合わせ、Italic は SCP Italic VF + slnt 追随。`build.py`
-  は Gengou を無変換で載せ、和文はバーの合う Source Han Sans の面を
-  使う（`build.FACES`）
-- 合字は LigatureSubst。`calt`/`liga` は結合ルックアップ1つ＋文脈ガード
-  （各合字の入力列全体をカバーするトリガールールを最長一致順に並べる。
-  一致範囲を1文字だけにしてネストした LigatureSubst に残りを委ねる形は
-  一致範囲外の消費が OpenType 未定義動作で DirectWrite が非対応だった
-  ため）、ss01〜08 はグループ別ルックアップ、cv99 が .alt 切替
-- 欧文ドナーの `locl` も移す（`import_scp_locl`）。ギリシャ文字は
-  ギリシャのアクセント（トノス）を取り、気息記号が合成される。登録は
-  ドナーと同じスクリプト・言語の組にだけ行う
-- 欧文ドナーの GPOS（`mark` / `mkmk` / `ccmp`）も移す（`import_scp_marks`）。
-  Source Code Pro は結合記号の位置を GPOS に置いているので、これが無いと
-  アクセントが `b d f h k l` の上伸部を突き抜ける
-- 欧文ドナーの `ccmp`（既定オン）は JP 面にも丸ごと移す（`import_scp_ccmp`
-  がグリフ名と入れ子ルックアップ番号を書き換えて写し、機能が描くのに
-  接ぎ木に無いグリフを足す——正体 62 字・斜体 46 字。フィーチャに載せる
-  のはドナーのフィーチャが挙げていたルックアップだけで、連鎖文脈が呼ぶ
-  側は文脈ごしにしか走らない）。`i` + U+0307 は点のない `ı` に替わり、
-  `g̃` `ê̆` `ї́` は合成される
-- 行間は Source Code Pro の値（hhea = typo = 984 / −273 / 0、
-  `USE_TYPO_METRICS`）。win は 1160 / 454（上は Source Han Sans の
-  宣言値、下は欧文の罫線・ブロック要素を覆う値）。
-  等幅メタデータ（`post.isFixedPitch` / PANOSE bProportion=9 /
-  xAvgCharWidth）は各面で独自に設定・実測し、Windows Terminal 等の
-  フォント選択に出るようにする
-- 欧文・合字・（Term では）拡幅した全角グリフなど T2CharStringPen で
-  描いたグリフは、最終アウトラインで測ったアライメントゾーン付きの
-  専用 CID FontDict を割り当てたうえで AFDKO の otfautohint によりヒント
-  を付与（Source Han Sans 由来のグリフは元のヒントのまま）
+- 欧文レイヤーは Gengou（`scripts/build_latin.py` により VF から生成され `dist/latin` に出力）から供給される。Source Han Sans JP（CID-keyed CFF）を土台とし、Gengou が保持する全コードポイント（Regular で 1,335）に対しそのグリフを 1 セル幅で合成して cmap を差し替える。Source Han Sans が保持していた全角グリフは `fwid` 代替として残す。追加 CID は空き領域へ昇順で割り当てている（サブセット OTF の CID が不連続なため）。
+- 太さの整合性は Gengou 側（`build_latin.py`）で完結している。各面は SCP の名前付きインスタンスそのものであり、その `=` バー厚に Monaspace VF の wght を二分探索で適合させ、Italic 面は SCP Italic VF に合わせ slnt 軸を連動させている。`build.py` は Gengou を無変換で適用し、和文側はバー厚の適合する Source Han Sans の面を使用している（`build.FACES`）。
+- 合字機能は LigatureSubst を使用。`calt`/`liga` は結合ルックアップ 1 つおよび文脈ガード（各合字の入力列全体をカバーするトリガールールを最長一致順に配置）で構成され、ss01〜08 はグループ別ルックアップ、cv99 は .alt 切り替えを担当する。
+- 欧文供給元の `locl` 機能も移植している（`import_scp_locl`）。ギリシャ文字ではアクセント（トノス）を除去して気息記号が合成される。登録は供給元と同一のスクリプト・言語ペアに対してのみ実行する。
+- 欧文供給元の GPOS（`mark` / `mkmk` / `ccmp`）も移植している（`import_scp_marks`）。Source Code Pro は結合記号の位置調整を GPOS で定義しているため、これがない場合アクセントが `b d f h k l` 等の上伸部を貫通する現象が発生する。
+- 欧文供給元の `ccmp`（標準で有効）も JP 面へ移植している（`import_scp_ccmp` がグリフ名と入れ子ルックアップ番号を書き換えて適用し、機能上必要でありながら移植データに含まれないグリフを追加 — 正体 62 文字・斜体 46 文字）。`i` + U+0307 は点なしの `ı` に置き換わり、`g̃` `ê̆` `ї́` 等は合成される。
+- 行間は Source Code Pro の設定値（hhea = typo = 984 / −273 / 0、`USE_TYPO_METRICS`）を採用。win メトリクスは 1160 / 454（上端は Source Han Sans 宣言値、下端は欧文の罫線・ブロック要素を覆う値）。等幅メタデータ（`post.isFixedPitch` / PANOSE bProportion=9 / xAvgCharWidth）は各面ごとに独自に計算・実測し、Windows Terminal 等の選択一覧に正しく表示されるよう設定している。
+- 欧文・合字・（Term における）拡張全角グリフ等、T2CharStringPen で描画されたグリフは、最終アウトラインに基づくアライメントゾーン付き専用 CID FontDict を割り当てた上で AFDKO otfautohint によりヒントを付与している（Source Han Sans 由来のグリフは元のヒントを維持）。
 
 ## ライセンス
 
 フォント本体は上流と同じ [SIL OFL 1.1](https://github.com/adobe-fonts/source-han-sans/blob/master/LICENSE.txt)。
-OFL の Reserved Font Name 規定に基づき、ファミリー名は `Source` も `Monaspace` も含まない `Gengou JP` / `Gengou`（v5.0.0 までは `Sumi Moji JP` / `Sumi Moji`、v3.2.0 までは `Shoyu Code Pro JP`）。
+OFL の Reserved Font Name 規定に基づき、ファミリー名は `Source` および `Monaspace` を含まない `Gengou JP` / `Gengou` としている。
