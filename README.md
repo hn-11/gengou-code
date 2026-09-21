@@ -26,13 +26,13 @@ Code Pro の本物のイタリック、和文は直立のまま）。ウェイ�
 Pro の名前付きインスタンスで、和文は `=` のバー厚が合う Source Han Sans
 の面を実測で選ぶ:
 
-| ウェイト | usWeightClass | Source Code Pro の `=` バー | Source Han Sans の面（`＝` バー） |
+| ウェイト | usWeightClass | Source Code Pro の `=` バー（直立 / 斜体） | Source Han Sans の面（`＝` バー） |
 |---------|---------------|-----------------------------|-----------------------------------|
-| Light | 300 | 37u | ExtraLight（36u） |
-| Regular | 400 | 62u | Normal（63u） |
-| Medium | 500 | 73u | Regular（69u） |
-| SemiBold | 600 | 83u | Medium（83u） |
-| Bold | 700 | 104u | Bold（101u） |
+| Light | 300 | 37u / 34u | ExtraLight（36u） |
+| Regular | 400 | 62u / 58u | Normal（63u） |
+| Medium | 500 | 73u / 67u | Regular（69u） |
+| SemiBold | 600 | 83u / 78u | Medium（83u） |
+| Bold | 700 | 104u / 97u | Bold（101u） |
 
 Source Han Sans の Light（49u）と Heavy（120u）、Source Code Pro の
 ExtraLight（28u）と Black（120u）は相手がいないので作らない。
@@ -68,7 +68,7 @@ Source Code Pro の字形そのまま（元から 1 セル）。**斜体は
 Source Code Pro は Source Sans から起こされた書体なので、実測で
 italicAngle（−11.0）と cap height が一致し、x-height も 1 ユニット差
 （wght 400 / 700 の両方）。ただし比例幅なので、送り幅を 1 セルにして
-中央に置き、インクがセルに収まらない字（基準ウェイトで 43 字）だけ、
+中央に置き、インクがセルに収まらない字（Regular Italic で 42 字）だけ、
 セルから左右 8u ずつ空けたところまで詰める（`build.cell_fit`）。8u は
 Source Code Pro が `w` `W` に与えているサイドベアリングで、詰めると線が
 細くなるぶん、詰める字は必要な字だけにしてある。アクセントの位置指定も
@@ -105,8 +105,10 @@ JIS 流の全角字形は `fwid` で戻せる。矢印 7 種は合字グリフ�
 
 横方向の送りを動かす機能は入れていない。Source Han Sans の `kern`
 （横組みでは既定 ON。`あ`+`て` をセルより 20u 詰める）と、代替メトリクスの
-`halt` / `palt` / `pwid` はビルド時に落としてある。縦組みの機能
-（`vert` `vrt2` `vkrn` `vhal` `vpal`）は残してあり、縦書きは従来どおり。
+`halt` / `palt` / `pwid` はビルド時に落としてある（Source Han Sans 自身の
+`hwid` は残る）。縦組みの機能（`vert` `vrt2` `vkrn` `vhal` `vpal`）は
+残してあり、縦書きは従来どおり。Term 面は、全角化で動いた字に付く
+結合マークの位置を横組み専用の `dist` で補正する。
 
 曖昧幅（EAW=A）を 2 セルとして数えるターミナルでは `①` が右隣に食み出す。
 これは HackGen と同じ挙動で、Windows Terminal なら
@@ -179,7 +181,8 @@ GSUB は `calt` / `liga` 両登録（全合字が既定で有効）。加えて 
 
 さらに **Source Code Pro 自身の字形バリアントを貫通**させている:
 `zero`（スラッシュゼロ切替）、`cv01`〜`cv17`（`a` の一階建て、`g` の形など
-SCP 純正の文字変異）、`salt`、SCP の stylistic set は ss11〜ss17 に +10 で
+SCP 純正の文字変異。cv03 / cv05 / cv13 は SCP 自身に無く、斜体は SCP
+Italic が出荷しない cv04・cv07〜cv11 も欠く）、`salt`、SCP の stylistic set は ss11〜ss17 に +10 で
 マウント（ss01〜ss08 は合字グループが使用）。
 
 ```jsonc
@@ -291,8 +294,8 @@ instancer の整数丸めを切ってインスタンス化する。重なり除�
 静的面の側で付ける）。軽量側では Monaspace 側の記号・合字が下限の太さで
 止まる。その差は小さくない: 可変フォントの Light インスタンス（wght 300）
 では `=` のバーが 53u——静的 Light の 37u に対して直立 +43%・斜体 +56%——
-で、ASCII の記号 32 字・矢印・不等号と合字 63 字の計 106 グリフが墨面積で
-43〜56% 太い。同じインスタンスの中で、文字は Regular の 56% まで軽くなる
+で、ASCII の記号 32 字・矢印/不等号/省略記号 11 字・合字 61 字の計 104
+グリフが墨面積で 24〜71%（中央値 45%。斜体は 30〜84%、中央値 56%）太い。同じインスタンスの中で、文字は Regular の 56% まで軽くなる
 のに記号は 86〜92% に留まるので、**Light では文字と記号の濃さが揃わない**。
 静的 Light は erosion で両方を揃えている。静的面は JP 面のドナーと
 Nerd Fonts 版の入力で、単体では配布しない。

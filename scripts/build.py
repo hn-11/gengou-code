@@ -56,7 +56,7 @@ Env (SHS_DIR required, the rest default):
               first
 
 Env (optional):
-  GENGOU_VERSION = our own release version, e.g. "3.1.0" — stamps
+  GENGOU_VERSION = our own release version, e.g. "6.0.0" — stamps
                   head.fontRevision (MAJOR.MINOR), nameID 5 and the CFF
                   version. Unset keeps today's behaviour: the revision
                   stays whatever Source Han Sans shipped.

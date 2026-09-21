@@ -33,8 +33,8 @@ SHCJ は上流から外れた。
 - **幅の方針**: Gengou が持つ文字はすべて 1 セル（ギリシャ・キリル・
   罫線・矢印 7 種と `≠ ≤ ≥ …` も）。JIS 流の全角字形は `fwid` で戻す
   （矢印は合字から切り出した全角版、その他は Source Han Sans の全角
-  グリフか同フォントの `fwid` 形）。`hwid` / `ss09` の幅切り替えは不要に
-  なり廃止。Source Han Sans の比例幅の残り（半角カナ 500、Hangul 字母
+  グリフか同フォントの `fwid` 形）。自前の `hwid` / `ss09` の幅切り替えは
+  不要になり廃止（Source Han Sans 自身の `hwid` は残る）。Source Han Sans の比例幅の残り（半角カナ 500、Hangul 字母
   920、ﬀ、⸻）はセルか全角の倍数に中央配置（`fit_to_grid`）。
 - **東アジア文字幅が Wide の 13 字（`☕` `🎵` `🎶` `💩` `🔒` `🤖`、Hangul
   声調記号 2 字、注音の入声 5 字）は 1 セルのまま**。どれも片方のドナー
@@ -50,10 +50,10 @@ SHCJ は上流から外れた。
   ターミナルは 1 桁しか空けないので隣に食い込む。曖昧幅（A）と違い
   ターミナル側の設定では直せない。v4 では Source Han Code JP が 1 セルの
   `␣` を持っていたが、Source Code Pro には無い。**据え置き。** 実測すると
-  142 字のうち**インクが 1 セル（600）に収まるのは 17 字だけ**で、残り
-  125 字はインク自体が 600 より広い（最大は `⏊` の 1000 ちょうど）。
+  142 字のうち**インクが 1 セル（600）に収まるのは Regular で 16 字
+  （Light 19、Bold 15）だけ**で、残りはインク自体が 600 より広い（最大は `⏊` の 1000 ちょうど）。
   送り幅を 600 にして中央に置いても、インクは左右にはみ出したままで
-  重なりの総量は変わらない——**この 125 字は縮小しない限り直らない**のに、
+  重なりの総量は変わらない——**この 120 字余りは縮小しない限り直らない**のに、
   v5 はその縮小を廃止した。上流に従って全角のままにする。
 - ~~**NF 版のファミリー名が GDI の 31 文字に収まらない**~~ **解決**
   （nameID 1 だけ `NFM` に略す。`nerdpatch.NF_MARKER_GDI`）。綴ったままだと
@@ -102,7 +102,7 @@ SHCJ は上流から外れた。
   通る。`verify.py` の `check_tables` がアウトラインから再計算して
   突き合わせるので、誤りは CI で必ず落ちる。
 - **Nerd Fonts 版の命名は本家の流儀**: アイコンを 1 セルに収めるので
-  `<Family> Nerd Font Mono` / `<PSFamily>NFM`。v5.1 で font-patcher と
+  `<Family> Nerd Font Mono` / `<PSFamily>NFM`。v5.0.0 で font-patcher と
   FontForge を捨て、本家の `Symbols Nerd Font Mono` から fontTools で
   接ぎ木する（同じ記号集合・同じ 1 セル送り、1 面 10 秒、CID 構造もメタ
   データもそのまま。寸法の差は下の項）。本家の立場は「フォールバック ＞ パッチ／合成」で、
@@ -114,7 +114,7 @@ SHCJ は上流から外れた。
   `(656 x 2 + 1257) / 3 = 856`。接ぎ木元の `Symbols Nerd Font Mono` は
   2048 x 2048 の正方セルに収めて作られているので、セル / em の一様縮小
   （600 / 2048）では箱が 600 x 600 になり、縦長のアイコン 3,496 字
-  （引き伸ばす群——区切りと進捗バー——を除いた 10,363 字中）が本家パッチ
+  （引き伸ばす群——区切りと進捗バー——を除いた 10,372 字中）が本家パッチ
   より最大 1.43 倍小さい。font-patcher 独自の
   縦パディングが効く群（重い山括弧 U+276C〜2771 など）では最大 2.1 倍。アイコンごとに
   収め直すと、複数のアイコンを同じ倍率で束ねる font-patcher の
@@ -158,7 +158,7 @@ SHCJ は上流から外れた。
   Source Sans 3 Italic は Source Code Pro の起源にあたる書体で、実測で
   italicAngle（−11.0）と cap height が一致し x-height は 1 ユニット差
   （wght 400 / 700 とも）。比例幅なので `build.cell_fit` で 1 セルに
-  中央配置し、収まらない 43 字だけ左右 8u まで詰める。結果、直立・斜体
+  中央配置し、収まらない字（Regular Italic で 42 字）だけ左右 8u まで詰める。結果、直立・斜体
   とも 234 字で一致し、ファミリー全体の cmap の差は 249 字から 16 字に
   減った（残る 16 字はギリシャ拡張で、Source Code Pro Italic が元から
   持たないもの。この 16 字も後述のとおり同じブロック指定で埋めたので、
@@ -398,9 +398,12 @@ Gengou JP の二度の改名とも同じ箇所を触っている。リポジト�
   トリガールール、最長一致順）
 - `ss01`〜`ss08`: 合字グループ、`cv99`: .alt 字形（`ss09` の幅切り替えは
   v5 で廃止: 既定が 1 セル、全角は `fwid`）
-- SCP 由来: `zero` `salt` `cv01`〜`cv17` `ss11`〜`ss17`（+10 マウントは JP との
-  整合のため維持）
-- GPOS は SCP 自身のもの（結合文字の `mark` / `mkmk`、`frac`、`size`）を保持。`kern` は無い（等幅）
+- SCP 由来: `zero` `salt` `cv01`〜`cv17`（cv03 / cv05 / cv13 は SCP 自身に無い）
+  `ss11`〜`ss17`（+10 マウントは JP との整合のため維持）。SCP の `case`
+  `ccmp` `locl` `frac` `numr` `dnom` `onum` `ordn` `sinf` `subs` `sups` も
+  そのまま通す
+- GPOS は SCP 自身のもの（結合文字の `mark` / `mkmk`、`ccmp`、`frac`、`size`）を保持。`kern` は無い（等幅）。
+  Term 面では全角化で動いた字に付くマークの位置を横組み専用の `dist` で補正する
 
 > **注記（v5）**: 以下 3.3・3.4 と 5 節は v4 までの設計の記録で、
 > 数値は当時のもの（4 節は v5 の構成に書き直してある）。5 節が挙げる
@@ -476,14 +479,18 @@ scripts/golden.py          # 2つの dist ディレクトリを比較（cmap・�
 モジュールに残ったまま `build_latin.py` から import されて使われる形で、
 別モジュールへの複製はしていない。`build.py` 側は同じ関数群を、VF
 インスタンスではなく `dist/latin` の完成品 OTF（`graft_halfwidth`,
-`import_scp_variants`, `latin_ligatures`, `latin_onecell` 等が受け取る）
-に対して呼び出すだけになった。
+`import_scp_variants`, `latin_ligatures` 等が受け取る）に対して呼び出す
+だけになった。
 
-build.py に残る処理: SHS の読み込み、SHCJ からの半角カナ等の複写、行間の
-複写、Gengou からのグリフ・GSUB の取り込み（グリフ名を CID に付け替え、
-lookup と feature を SHS の GSUB にマージ）、10/9 拡大（JP）、`narrow_ambiguous`
-と `widen_fullwidth`（Term）、`stretch_arrows` と `add_width_alternates`、
-名前・STAT・メタデータ、NF パッチ。
+build.py に残る処理（`build_face` の順）: SHS の読み込み、Gengou からの
+グリフ・GSUB・GPOS の取り込み（`graft_halfwidth` / `latin_ligatures` /
+`import_scp_variants` / `import_scp_locl` / `import_scp_marks` /
+`import_scp_ccmp`。グリフ名を CID に付け替え、lookup と feature を SHS の
+テーブルにマージ）、`narrow_halfwidth` / `narrow_letters` と `fit_to_grid`、
+`widen_fullwidth`（Term）、`stretch_arrows` と `add_width_alternates`
+（`fwid`）、`notdef_to_cell`、名前・STAT・メタデータ、`drop_features` と
+`prune_orphan_lookups`、`add_latin_fd` とヒント付け。NF パッチは
+`nerdpatch.py` が完成面に対して別に行う。
 
 JP 側の出力は、書き換え前（VF を直接読んでいた頃）とグリフアウトライン・
 cmap・GSUB の shaping 結果が roundoff（±1〜2ユニット）を除いて一致する
@@ -580,12 +587,13 @@ cmap・GSUB の shaping 結果が roundoff（±1〜2ユニット）を除いて�
 - **Light の削り**: erosion は非線形なので VF では補間で再現できない
   ——見積り時点では「Light 相当をマスターに立てる」を想定していたが、
   実装では **erosion 自体をしない**（Monaspace が自身の wght 200 の
-  下限で単にクランプする）方針にした。SCP wght がおよそ 366 を下回ると
+  下限で単にクランプする）方針にした。SCP wght がおよそ 365（斜体 381）を下回ると
   Monaspace 側の記号・合字はその下限の太さで止まり、静的版が erosion
   で削っている太さより太くなる——Light（SCP wght ≈317）はこの範囲に
   入る。実測（wght 300 の VF 対 静的 Light）: `=` のバーが 53u 対 37u
   （直立 +43%、斜体 +56%）、`(` の墨面積 60,512 対 41,854（+45%）、
-  ASCII 記号・矢印・不等号・合字の 106 グリフが墨面積で 43〜56% 太い。
+  ASCII 記号 32・矢印/不等号/省略記号 11・合字 61 の計 104 グリフが
+  墨面積で直立 24〜71%（中央値 45%）、斜体 30〜84%（中央値 56%）太い。
   バーは wght 200 から 365（斜体 381）まで 53u で平らで、そこから
   400 で 62、700 で 104 と上がる。**同じインスタンスの中で**文字が
   Regular 比 56% まで軽くなるのに記号は 86〜92% に留まるのが、利用者に

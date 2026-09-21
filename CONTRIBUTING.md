@@ -26,7 +26,7 @@ Monaspace VF・Source Sans 3 VF Italic（斜体のギリシャ・キリル）か
 | `SHS_DIR` | `build.py` | `SourceHanSansJP-<Weight>.otf` が入ったディレクトリ | [Source Han Sans Releases](https://github.com/adobe-fonts/source-han-sans/releases) |
 | `NF_SYMBOLS` | `nerdpatch.py` | `SymbolsNerdFontMono-Regular.ttf` へのパス | [Nerd Fonts Releases](https://github.com/ryanoasis/nerd-fonts/releases) の `NerdFontsSymbolsOnly.zip` |
 | `LATIN_DIR` | `build.py`（任意、既定 `dist/latin`） | `build_latin.py` の出力先 | — |
-| `GENGOU_VERSION` | 3つとも（任意） | リリース版番号（例 `6.0.0`）。未設定なら上流のリビジョンを name に残す | — |
+| `GENGOU_VERSION` | ビルド 3 本と verify 3 本（任意） | リリース版番号（例 `6.0.0`）。未設定なら上流のリビジョンを name に残す | — |
 | `GENGOU_SKIP_AUTOHINT` | `build.py` / `build_latin.py`（任意） | `1` でヒント付けをスキップ（試しビルドの時短用） | — |
 
 取得元の URL パターンや正確なタグは `.github/actions/fetch-upstreams/action.yml`
@@ -80,7 +80,7 @@ python scripts/verify.py dist/GengouJP-Regular.otf
 サンプルではなく面全体を見ます（可変フォントは各ロケーションに
 instantiate して同じゲートを通します）。変更を提出する前に、少なくとも
 `Regular` 面で通ることを確認してください。CI（`.github/workflows/ci.yml`）でも push / PR 時に
-同じ検証が走ります（Regular Upright / Regular Italic / Light Italic を
+同じ検証が走ります（単体テストと lint を 1 ジョブ、Regular Upright / Regular Italic / Light Italic を
 ファミリー別に 1 ジョブずつ（Regular Upright の 2 ジョブは JP 面への Nerd
 Fonts の接ぎ木も検証）、可変フォントと Gengou への接ぎ木を 1 ジョブ、
 並列に組んで 1 分程度。リリース
