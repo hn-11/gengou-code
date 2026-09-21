@@ -346,6 +346,11 @@ def build_face(job):
                          version=env.get("GENGOU_VERSION"), credits=credits,
                          family_base=FAMILY, ps_base=PS_FAMILY, base_credit=None)
     build.classify_unicode_marks(base)
+    # after classify_unicode_marks, which is what makes the shaper treat
+    # these as marks (and so zero their spacing advance) in the first
+    # place; before the bbox, which the new anchors do not move
+    loose = build.anchor_loose_letters(base)
+    print(f"  letters given a fitted base anchor: {loose}")
     build.add_stat(base, weight, italic)
     build.prune_orphan_names(base)
     build.update_bbox(base)

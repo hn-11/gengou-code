@@ -2852,6 +2852,143 @@ def test_pair_mark_lookups_refuses_a_tie():
     assert build.pair_mark_lookups(ours, theirs) == {}
 
 
+def _cff_font_with_heights(heights):
+    """A CFF font whose glyphs are 100 units wide and as tall as given,
+    all one cell of advance. Varying heights are what tell a top-mark
+    lookup from a below-mark one: an anchor a fixed distance off one
+    edge is a varying distance off the other."""
+    glyph_order = [".notdef", *heights]
+    charstrings = {}
+    for g in glyph_order:
+        pen = T2CharStringPen(0, None)
+        pen.moveTo((0, 0))
+        pen.lineTo((100, 0))
+        pen.lineTo((100, heights.get(g, 100)))
+        pen.closePath()
+        charstrings[g] = pen.getCharString()
+    fb = FontBuilder(1000, isTTF=False)
+    fb.setupGlyphOrder(glyph_order)
+    fb.setupCharacterMap({0xE000 + i: g for i, g in enumerate(heights)})
+    fb.setupCFF("T", {}, charstrings, {})
+    fb.setupHorizontalMetrics({".notdef": (0, 0),
+                               **{g: (600, 0) for g in heights}})
+    fb.setupHorizontalHeader(ascent=800, descent=-200)
+    fb.setupNameTable({"familyName": "T", "styleName": "R"})
+    fb.setupOS2()
+    fb.setupPost()
+    return fb.font
+
+
+def _drawn_gpos_font(heights, cmap, lookups):
+    """A real CFF font (so _bounds can measure it) carrying a GPOS with
+    `mark` over the given lookups."""
+    font = _cff_font_with_heights(heights)
+    font["cmap"].tables[0].cmap = dict(cmap)
+    table = otTables.GPOS()
+    table.LookupList = _FakeLookupList(lookups)
+    table.FeatureList = FakeFeatureList(
+        [FakeFeatureRecord("mark", FakeFeature(list(range(len(lookups)))))])
+    font["GPOS"] = FakeTable(table)
+    return font
+
+
+def _edge_markbase(marks, heights, dy, top):
+    """A MarkBasePos whose base anchors sit `dy` off each base's ink top
+    (or bottom), centred on its 100-unit width."""
+    return _markbase(marks, {g: [_anchor(50, (h if top else 0) + dy)]
+                             for g, h in heights.items()})
+
+
+# heights that differ letter to letter: an anchor 20 above the ink top
+# is then a different distance above the ink bottom for each one, which
+# is what lets the fit tell the two edges apart
+_HEIGHTS = {f"b{i}": 400 + 20 * i for i in range(20)}
+
+
+def _letters_cmap(names, extra=()):
+    return {0x41 + i: g for i, g in enumerate(names)} | dict(extra)
+
+
+def test_anchor_loose_letters_gives_a_letter_the_rule_its_neighbours_follow():
+    """A mark these donors cannot place does not land approximately --
+    the shaper zeroes its spacing advance, so it lands a whole cell to
+    the right, on the next character. The rule comes from the anchors
+    the lookup already carries."""
+    heights = {**_HEIGHTS, "loose": 500, "acute": 100}
+    marks = {"acute": (0, _anchor(0, 0))}
+    font = _drawn_gpos_font(
+        heights,
+        _letters_cmap(_HEIGHTS, {0x0301: "acute", 0x5A: "loose"}),
+        [_edge_markbase(marks, _HEIGHTS, 20, top=True)])
+
+    assert build.anchor_loose_letters(font) == 1
+    sub = font["GPOS"].table.LookupList.Lookup[0].SubTable[0]
+    assert "loose" in sub.BaseCoverage.glyphs
+    assert sub.BaseCoverage.glyphs == sorted(sub.BaseCoverage.glyphs,
+                                             key=font.getGlyphID)
+    got = sub.BaseArray.BaseRecord[sub.BaseCoverage.glyphs.index("loose")]
+    # centred on the 100-unit width, 20 above this letter's own ink top
+    assert (got.BaseAnchor[0].XCoordinate,
+            got.BaseAnchor[0].YCoordinate) == (50, 520)
+    assert sub.BaseArray.BaseCount == len(sub.BaseCoverage.glyphs)
+
+
+def test_anchor_loose_letters_reads_a_below_mark_lookup_off_the_ink_bottom():
+    """Which edge the anchors track is the lookup's own statement of
+    what it is for. Read off the top instead, a cedilla would be placed
+    an ink-height above where it belongs -- and the height differs per
+    letter, which is exactly why the wrong edge does not fit."""
+    heights = {**_HEIGHTS, "loose": 500, "cedilla": 100}
+    marks = {"cedilla": (0, _anchor(0, 0))}
+    font = _drawn_gpos_font(
+        heights,
+        _letters_cmap(_HEIGHTS, {0x0327: "cedilla", 0x5A: "loose"}),
+        [_edge_markbase(marks, _HEIGHTS, -14, top=False)])
+
+    assert build.anchor_loose_letters(font) == 1
+    sub = font["GPOS"].table.LookupList.Lookup[0].SubTable[0]
+    got = sub.BaseArray.BaseRecord[sub.BaseCoverage.glyphs.index("loose")]
+    # the ink bottom is 0, so -14; read off the top it would be 486
+    assert got.BaseAnchor[0].YCoordinate == -14
+
+
+def test_anchor_loose_letters_leaves_a_lookup_that_follows_no_rule_alone():
+    """Anchors scattered against both edges are a lookup placing each
+    mark by hand. Predicting one would put it somewhere of this build's
+    own invention, which is worse than the donor's answer -- even when
+    that answer is nothing."""
+    marks = {"acute": (0, _anchor(0, 0))}
+    scattered = _markbase(marks, {g: [_anchor(50, 300 + 37 * i)]
+                                  for i, g in enumerate(_HEIGHTS)})
+    font = _drawn_gpos_font(
+        {**_HEIGHTS, "loose": 500, "acute": 100},
+        _letters_cmap(_HEIGHTS, {0x0301: "acute", 0x5A: "loose"}),
+        [scattered])
+    assert build.anchor_loose_letters(font) == 0
+    assert font["GPOS"].table.LookupList.Lookup[0].SubTable[0] \
+        .BaseCoverage.glyphs == list(_HEIGHTS)
+
+
+def test_anchor_loose_letters_leaves_a_lookup_with_too_few_bases_alone():
+    marks = {"acute": (0, _anchor(0, 0))}
+    font = _drawn_gpos_font(
+        {"b0": 400, "loose": 500, "acute": 100},
+        {0x0301: "acute", 0x41: "b0", 0x5A: "loose"},
+        [_markbase(marks, {"b0": [_anchor(50, 420)]})])
+    assert build.anchor_loose_letters(font) == 0
+    assert font["GPOS"].table.LookupList.Lookup[0].SubTable[0] \
+        .BaseCoverage.glyphs == ["b0"]
+
+
+def test_anchor_loose_letters_skips_what_is_not_a_letter():
+    marks = {"acute": (0, _anchor(0, 0))}
+    font = _drawn_gpos_font(
+        {**_HEIGHTS, "period": 100, "acute": 100},
+        _letters_cmap(_HEIGHTS, {0x0301: "acute", 0x2E: "period"}),
+        [_edge_markbase(marks, _HEIGHTS, 20, top=True)])
+    assert build.anchor_loose_letters(font) == 0
+
+
 def test_import_donor_base_anchors_moves_the_anchor_with_the_outline():
     marks = {"acute": (0, _anchor(0, 0))}
     ours = _GposFont([_markbase(marks, {"z": [_anchor(300, 700)]})],

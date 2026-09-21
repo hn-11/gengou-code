@@ -72,6 +72,7 @@ import logging
 import math
 import os
 import shutil
+import statistics
 import string
 import sys
 import tempfile
@@ -1588,6 +1589,106 @@ def _plain_anchor(anchor, sx, dx):
     out.XCoordinate = otRound(anchor.XCoordinate * sx + dx)
     out.YCoordinate = anchor.YCoordinate
     return out
+
+
+def _anchor_rule(gs, sub, floor=16, spread=24, wander=120):
+    """The rule a mark lookup's own base anchors follow, fitted from
+    them: (use_top, dx, dy) -- whether the anchor sits off the ink's top
+    edge or its bottom, and the median offset from the ink's centre and
+    from that edge. None when the lookup carries too few bases to fit,
+    when neither edge explains its anchors, or when the x does not
+    follow the ink's centre closely enough to be worth predicting.
+
+    Medians, not means, and the edge is chosen by which residual is the
+    tighter of the two: a top-mark lookup's anchors track the ink's top
+    (Source Code Pro's sit 20 units above it, to within 4) and a
+    below-mark lookup's track its bottom (-14, to within 6), while the
+    other edge varies with the letter's height and spreads by 60+.
+
+    Held out against the anchors the donors did draw, the rule puts y
+    within 4-6 units of theirs at the median and 10-22 at the 90th
+    centile; x within 11-15 at the median, with a tail to about 200 on
+    a letter whose designer moved the anchor off centre deliberately.
+    That is the accuracy this buys. What it replaces is not a smaller
+    error but a whole cell: 600 units, into the next character.
+    """
+    tops, bots, xs = [], [], []
+    for gn, rec in zip(sub.BaseCoverage.glyphs, sub.BaseArray.BaseRecord):
+        anchor = rec.BaseAnchor[0] if rec.BaseAnchor else None
+        box = _bounds(gs, gn)
+        if anchor is None or not box:
+            continue
+        tops.append(anchor.YCoordinate - box[3])
+        bots.append(anchor.YCoordinate - box[1])
+        xs.append(anchor.XCoordinate - (box[0] + box[2]) / 2)
+    if len(xs) < floor:
+        return None
+
+    def mad(values):
+        mid = statistics.median(values)
+        return statistics.median(abs(v - mid) for v in values)
+
+    use_top = mad(tops) <= mad(bots)
+    edge = tops if use_top else bots
+    dx = statistics.median(xs)
+    if mad(edge) > spread or statistics.median(abs(x - dx) for x in xs) > wander:
+        return None
+    return use_top, otRound(dx), otRound(statistics.median(edge))
+
+
+def anchor_loose_letters(font, tag="mark"):
+    """Give a letter no mark lookup covers a base anchor of its own,
+    fitted from the letters that lookup does cover. Returns the count.
+
+    A combining mark in these donors is drawn as a spacing glyph --
+    Source Code Pro's acute has an advance of a cell and its ink sits
+    inside it -- and the shaper zeroes that advance for a mark. So a
+    mark the lookup cannot place does not land somewhere approximate:
+    it lands one whole cell to the right, on top of the next character.
+    Source Code Pro anchors 64 of the 234 letters in Greek and Cyrillic
+    and Source Sans 82, neither a superset of the other, so about 160
+    letters per face put the accent in the following cell -- in the
+    upright and the italic alike. The JP faces never showed it, because
+    the graft redraws the marks a cell to the left and an unplaced one
+    then lands right by accident.
+
+    The fitted rule is the donor's own (see _anchor_rule), so a letter
+    that gets an anchor here gets the one its neighbours already have,
+    and a lookup whose anchors do not follow a rule is left alone.
+    """
+    gs = font.getGlyphSet()
+    cmap = font.getBestCmap()
+    letters = {gn for cp, gn in cmap.items()
+               if unicodedata.category(chr(cp)).startswith("L")}
+    gid = font.getGlyphID
+    added = 0
+    for _, subs in _mark_base_lookups(font, tag):
+        for sub in subs:
+            if sub.ClassCount != 1:
+                continue      # one class here; more would need the class too
+            rule = _anchor_rule(gs, sub)
+            if rule is None:
+                continue
+            use_top, dx, dy = rule
+            rows = list(zip(sub.BaseCoverage.glyphs, sub.BaseArray.BaseRecord))
+            have = set(sub.BaseCoverage.glyphs)
+            for name in sorted(letters - have, key=gid):
+                box = _bounds(gs, name)
+                if not box:
+                    continue
+                anchor = otTables.Anchor()
+                anchor.Format = 1
+                anchor.XCoordinate = otRound((box[0] + box[2]) / 2) + dx
+                anchor.YCoordinate = otRound(box[3] if use_top else box[1]) + dy
+                rec = otTables.BaseRecord()
+                rec.BaseAnchor = [anchor]
+                rows.append((name, rec))
+                added += 1
+            rows.sort(key=lambda pair: gid(pair[0]))
+            sub.BaseCoverage.glyphs = [g for g, _ in rows]
+            sub.BaseArray.BaseRecord = [r for _, r in rows]
+            sub.BaseArray.BaseCount = len(rows)
+    return added
 
 
 def import_donor_base_anchors(base, donor, glyph_map, placements):
