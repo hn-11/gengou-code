@@ -24,15 +24,15 @@ from fontTools.misc.roundTools import otRound
 from fontTools.ttLib.tables import otTables
 
 
-def _mark_base_lookups(font, tag="mark"):
-    """[(lookup index, [MarkBasePos subtables])] under `tag`, Extension
+def _mark_base_lookups(font):
+    """[(lookup index, [MarkBasePos subtables])] under 'mark', Extension
     unwrapped, in LookupList order."""
     if "GPOS" not in font:
         return []
     table = font["GPOS"].table
     want = set()
     for fr in table.FeatureList.FeatureRecord:
-        if fr.FeatureTag == tag:
+        if fr.FeatureTag == "mark":
             want |= set(fr.Feature.LookupListIndex)
     out = []
     for i in sorted(want):
@@ -178,7 +178,7 @@ def _canonical_bases(cmap):
     return out
 
 
-def fit_anchor_rules(font, tag="mark"):
+def fit_anchor_rules(font):
     """{(lookup index, subtable index): _anchor_rule} over the mark
     lookups of `font`, for anchor_loose_letters to be handed.
 
@@ -190,7 +190,7 @@ def fit_anchor_rules(font, tag="mark"):
     """
     gs = font.getGlyphSet()
     out = {}
-    for i, subs in _mark_base_lookups(font, tag):
+    for i, subs in _mark_base_lookups(font):
         for j, sub in enumerate(subs):
             if sub.ClassCount != 1:
                 continue
@@ -200,7 +200,7 @@ def fit_anchor_rules(font, tag="mark"):
     return out
 
 
-def anchor_loose_letters(font, tag="mark", rules=None):
+def anchor_loose_letters(font, rules=None):
     """Give a letter no mark lookup covers a base anchor of its own,
     fitted from the letters that lookup does cover. Returns the count.
 
@@ -223,7 +223,7 @@ def anchor_loose_letters(font, tag="mark", rules=None):
     is how a variable font's masters are kept in step.
     """
     if rules is None:
-        rules = fit_anchor_rules(font, tag)
+        rules = fit_anchor_rules(font)
     gs = font.getGlyphSet()
     cmap = font.getBestCmap()
     letters = {gn for cp, gn in cmap.items()
@@ -234,7 +234,7 @@ def anchor_loose_letters(font, tag="mark", rules=None):
     bases = _canonical_bases(cmap)
     gid = font.getGlyphID
     added = 0
-    for i, subs in _mark_base_lookups(font, tag):
+    for i, subs in _mark_base_lookups(font):
         for j, sub in enumerate(subs):
             if sub.ClassCount != 1:
                 continue      # one class here; more would need the class too
@@ -305,6 +305,10 @@ def _letter_variants(font, letters, features=VARIANT_FEATURES):
     for fr in gsub.FeatureList.FeatureRecord:
         if features is None or fr.FeatureTag in features:
             want |= set(fr.Feature.LookupListIndex)
+    if features is None:
+        # every lookup, the ones only a chain context calls included:
+        # the .cap forms of the marks come out of two such lookups
+        want = set(range(len(gsub.LookupList.Lookup)))
     pairs = []
     for i in sorted(want):
         kind, subs = _unwrap(gsub.LookupList.Lookup[i])
@@ -335,7 +339,8 @@ def anchor_loose_marks(font, floor=16, band=300, near=80):
     anchor to give it. The lookup is chosen the same way: the one,
     among those covering `floor` marks or more, whose marks' ink centre
     lies nearest, and within `band` -- an overlay has no such home and
-    is left alone. A mark is every GDEF mark in the combining blocks
+    is left alone, as is a mark with no covered mark drawn within
+    `near` of its own height. A mark is every GDEF mark in the combining blocks
     and every glyph GSUB makes of one (the .cap form ccmp swaps in
     after a capital, which the donor leaves out with it). Mark-to-base
     only: which marks may stack on which is the donor's to say. The
@@ -343,7 +348,8 @@ def anchor_loose_marks(font, floor=16, band=300, near=80):
     drawn with no ink has nothing to place.
     """
     cmap = font.getBestCmap()
-    classes = font["GDEF"].table.GlyphClassDef.classDefs if "GDEF" in font else {}
+    gdef = getattr(font.get("GDEF"), "table", None)
+    classes = getattr(getattr(gdef, "GlyphClassDef", None), "classDefs", None) or {}
     gs = font.getGlyphSet()
     gid = font.getGlyphID
     subs = [sub for _, parts in _mark_base_lookups(font) for sub in parts]
@@ -374,7 +380,9 @@ def anchor_loose_marks(font, floor=16, band=300, near=80):
         if not close:
             continue
         _, rows, sub = min(close, key=lambda h: abs(h[0] - mid))
-        alike = [a for c, a in rows if abs(c - mid) <= near] or [a for _, a in rows]
+        alike = [a for c, a in rows if abs(c - mid) <= near]
+        if not alike:
+            continue          # no mark drawn at its height to take the anchor from
         x = otRound(statistics.median(a.XCoordinate for a in alike))
         y = otRound(statistics.median(a.YCoordinate for a in alike))
         anchor = otTables.Anchor()
@@ -396,6 +404,26 @@ def anchor_loose_marks(font, floor=16, band=300, near=80):
         array.MarkCount = len(pairs)
         added += 1
     return added
+
+
+def gsub_outputs(font):
+    """Every glyph a GSUB substitution can produce, whatever feature or
+    context reaches the lookup: what a shaper can draw beyond the cmap."""
+    out = set()
+    if "GSUB" not in font:
+        return out
+    for lookup in font["GSUB"].table.LookupList.Lookup:
+        kind, subs = _unwrap(lookup)
+        for st in subs:
+            if kind == 1:
+                out |= set(st.mapping.values())
+            elif kind == 2:
+                out |= {g for seq in st.mapping.values() for g in seq}
+            elif kind == 3:
+                out |= {g for alts in st.alternates.values() for g in alts}
+            elif kind == 4:
+                out |= {lig.LigGlyph for ligs in st.ligatures.values() for lig in ligs}
+    return out
 
 
 def _mkmk_anchors(font):
@@ -452,6 +480,10 @@ def mirror_stack_lift(font, model):
             if cp not in rows:
                 continue
             model_y1, model_anchors = rows[cp]
+            if len(anchors) != len(model_anchors):
+                print(f"  skip stack lift for U+{cp:04X}: {len(anchors)} classes "
+                      f"here, {len(model_anchors)} in the model")
+                continue
             for anchor, model_anchor in zip(anchors, model_anchors):
                 if anchor is None or model_anchor is None:
                     continue

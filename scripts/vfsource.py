@@ -299,7 +299,7 @@ def replace_from_mona(font, mona, chars, dy, k):
         draw_clean([(mona_gs, src, mona_transform(mona, 0, dy, k))], pen,
                    simplify=not keeps_overlaps(mona))
         cs = pen.getCharString(private=private)
-        td.CharStrings.charStringsIndex[td.CharStrings.charStrings[name]] = cs
+        td.CharStrings[name] = cs
         font["hmtx"].metrics[name] = (adv, charstring_lsb(cs))
         note_redrawn(font, [name])
         replaced.append(ch)

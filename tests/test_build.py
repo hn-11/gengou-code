@@ -3479,3 +3479,39 @@ def test_anchor_loose_marks_keeps_every_other_marks_anchor_across_two_insertions
              for g, r in zip(sub.MarkCoverage.glyphs, sub.MarkArray.MarkRecord)}
     assert all(after[g] == a for g, a in before.items())
     assert after["candra"] == (50, 0) and after["candra.cap"] == (50, 180)
+
+
+def test_letter_variants_reach_a_lookup_only_a_chain_context_calls():
+    """The .cap forms of the marks come out of lookups no feature lists
+    (ccmp chains to them): with no feature filter every lookup is
+    walked; with the default filter, ccmp's are not letter variants."""
+    heights = {"a": 500, "a.cap": 500, "b": 500}
+    font = _cff_font_with_heights(heights)
+    font["cmap"].tables[0].cmap = {0x61: "a", 0x62: "b"}
+    _with_gsub(font, "lookup CAP { sub a by a.cap; } CAP;\n"
+                     "feature ccmp { sub b a' lookup CAP; } ccmp;\n")
+    assert anchors._letter_variants(font, {"a"}, features=None) == {"a.cap"}
+    assert anchors._letter_variants(font, {"a"}) == set()
+
+
+def test_anchor_loose_marks_leaves_a_mark_no_covered_mark_is_drawn_beside():
+    """Within the lookup's band but with no covered mark within `near`
+    of its own height, the mark has no anchor to take and is left."""
+    marks = _sixteen_marks()
+    heights = {**_HEIGHTS, **dict.fromkeys(marks, 100), "odd": 300}
+    cmap = _letters_cmap(_HEIGHTS, {0x0300 + i: g for i, g in enumerate(marks)})
+    cmap |= {0x0310: "odd"}
+    font = _drawn_gpos_font(heights, cmap,
+                            [_markbase(marks, {g: [_anchor(50, h + 20)]
+                                               for g, h in _HEIGHTS.items()})])
+    _gdef_marks(font, [*marks, "odd"])
+    assert anchors.anchor_loose_marks(font) == 0
+
+
+def test_mirror_stack_lift_skips_a_mark_whose_classes_differ_from_the_models():
+    ours = _mkmk_font({"grave": (500, 500)})
+    model = _mkmk_font({"grave": (500, 611)})
+    st = model["GPOS"].table.LookupList.Lookup[0].SubTable[0]
+    st.Mark2Array.Mark2Record[0].Mark2Anchor.append(_anchor(50, 700))
+    assert anchors.mirror_stack_lift(ours, model) == 0
+    assert _mark2_y(ours, "grave") == 500

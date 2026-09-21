@@ -445,7 +445,7 @@ def main():
 
     # the hinting the build spends a minute a face on: nothing here read
     # it, and a face whose autohint pass silently did nothing — which is
-    # what an empty _redrawn set produces — passed every check
+    # what an empty BuildState.redrawn produces — passed every check
     hint_td = tf["CFF "].cff[tf["CFF "].cff.fontNames[0]]
     unhinted = []
     for ch in "HAx=":

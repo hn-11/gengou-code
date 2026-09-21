@@ -862,7 +862,8 @@ def _letters(tf, gs):
 def _latin_marks(tf, gs):
     """{codepoint: glyph} for the combining marks the Latin layer
     encodes and GDEF files as marks, less the double diacritics."""
-    classes = tf["GDEF"].table.GlyphClassDef.classDefs if "GDEF" in tf else {}
+    gdef = getattr(tf.get("GDEF"), "table", None)
+    classes = getattr(getattr(gdef, "GlyphClassDef", None), "classDefs", None) or {}
     return {cp: g for cp, g in tf.getBestCmap().items()
             if any(lo <= cp <= hi for lo, hi in MARK_RANGES)
             and classes.get(g) == 3 and cp not in DOUBLE_SPAN and build._bounds(gs, g)}
@@ -906,6 +907,31 @@ def check_mark_reachability(tf, check, label=""):
            or (kind == 6 and not tags & MKMK_FEATURES)]
     check(not off, f"every mark lookup is reached from a mark feature{label} "
                    f"(off: {off})")
+    # and its flag lets it see its own marks: IgnoreMarks on a mark
+    # lookup, or a MarkAttachmentType class its marks are not in, is a
+    # lookup that never applies (the model mirrors the class filter for
+    # the marks it does admit; this is what says the rest is a defect)
+    gdef = getattr(tf.get("GDEF"), "table", None)
+    attach = getattr(getattr(gdef, "MarkAttachClassDef", None), "classDefs", None) or {}
+    silent = []
+    for i, kind, subs, _ in _pos_lookups(tf):
+        if kind not in (4, 6):
+            continue
+        flag = tf["GPOS"].table.LookupList.Lookup[i].LookupFlag
+        if flag & 0x8:
+            silent.append((i, "IgnoreMarks"))
+            continue
+        cls = flag >> 8
+        if not cls:
+            continue
+        marks = set()
+        for sub in subs:
+            marks |= set(sub.MarkCoverage.glyphs if kind == 4 else
+                         sub.Mark1Coverage.glyphs + sub.Mark2Coverage.glyphs)
+        out = sorted(g for g in marks if attach.get(g, 0) != cls)
+        if out:
+            silent.append((i, f"filters out {len(out)} of its own marks, e.g. {out[:3]}"))
+    check(not silent, f"every mark lookup admits its own marks{label} (off: {silent})")
 
 
 def check_langsys_parity(tf, check, label=""):
@@ -933,7 +959,7 @@ def check_langsys_parity(tf, check, label=""):
                 tags[i] for i in ls.FeatureIndex) & {"mark", "mkmk"}
     every = frozenset().union(*reach.values()) if reach else frozenset()
     short = {k: sorted(every - v) for k, v in reach.items() if v != every}
-    check(not short, f"every language system reaches the mark features{label} "
+    check(not short, f"every language system reaches the same mark features{label} "
                      f"({len(reach)} systems; short: {short})")
 
 
@@ -962,7 +988,6 @@ def check_anchor_placement(tf, check, gs, label=""):
     off = {}
     hmtx = tf["hmtx"].metrics
     cmap = tf.getBestCmap()
-    rev = {g: cp for cp, g in cmap.items()}
 
     def mark_off(gn, anchor, top=None):
         box = build._bounds(gs, gn)
@@ -1016,6 +1041,7 @@ def check_anchor_placement(tf, check, gs, label=""):
             if bad:
                 off.setdefault(i, []).append(bad)
     lift_due = tf["OS/2"].usWeightClass >= LIFT_FROM_WEIGHT if "OS/2" in tf else True
+    reachable = set(cmap.values()) | anchors.gsub_outputs(tf)
     for i, sub in _mark_mark_subtables(tf):
         ones = {}
         for gn, rec in zip(sub.Mark1Coverage.glyphs, sub.Mark1Array.MarkRecord):
@@ -1032,8 +1058,12 @@ def check_anchor_placement(tf, check, gs, label=""):
                     continue
                 y = anchor.YCoordinate
                 own = ones.get(gn)
-                collapsed = (lift_due and own is not None and y <= own.YCoordinate
-                             and rev.get(gn) is not None)
+                # at the height its own Mark1 attaches at: the second
+                # mark lands ON the first (the italic donor's grave,
+                # acute, breve and ring). A glyph no cmap or GSUB
+                # reaches cannot be shaped and is not asked
+                collapsed = (lift_due and own is not None
+                             and abs(y - own.YCoordinate) <= 2 and gn in reachable)
                 if (not box[1] - _MARK2_BELOW_INK <= y <= box[3]
                         or abs(anchor.XCoordinate - (box[0] + box[2]) / 2)
                         > _MARK_X_FROM_CENTRE * build.CELL or collapsed):
@@ -1083,62 +1113,119 @@ class _MarkModel:
     """What GPOS says a run of one base and its marks is positioned
     as, read off the tables so the shaper can be held to it exactly.
 
-    A mark attaches to the base through the first mark-to-base
-    subtable covering both (its anchor laid on the base's, the base's
-    advance already taken by the pen: x_offset = base.x - mark.x -
-    advance, y_offset = base.y - mark.y, x_advance = 0), unless a
-    mark-to-mark subtable covers the mark before it as Mark2 and this
-    one as Mark1, in which case it stacks: the previous mark's offset
-    plus (Mark2 anchor - Mark1 anchor). A NULL anchor places nothing,
-    and a mark nothing covers is placed nowhere -- both are None."""
+    A mark attaches to the base through the LAST lookup covering the
+    pair (a shaper applies the lookups in order and each attachment
+    overwrites the one before; within a lookup the first subtable that
+    covers the pair is the one applied): its anchor laid on the
+    base's, the base's advance already taken by the pen, so x_offset =
+    base.x - mark.x - advance, y_offset = base.y - mark.y, x_advance =
+    0. It stacks instead when a mark-to-mark lookup covers it as Mark1
+    and, as Mark2, the nearest mark before it that the lookup's flag
+    admits -- a MarkAttachmentType class or a mark filtering set skips
+    the marks of other classes when looking back, and never applies to
+    a Mark1 of another class -- at the previous mark's offset plus
+    (Mark2 anchor - Mark1 anchor). A NULL anchor places nothing, and a
+    mark nothing covers is placed nowhere: both are None.
+
+    IgnoreMarks on a mark lookup is not modelled: a mark lookup that
+    ignores marks never applies, which check_mark_reachability reports
+    as the defect it is rather than this predicting the mark's
+    absence."""
 
     def __init__(self, tf):
         self.hmtx = tf["hmtx"].metrics
+        table = tf["GPOS"].table if "GPOS" in tf else None
+        gdef = getattr(tf.get("GDEF"), "table", None)
+        self.attach_class = (getattr(getattr(gdef, "MarkAttachClassDef", None),
+                                     "classDefs", None) or {})
+        sets = getattr(getattr(gdef, "MarkGlyphSetsDef", None), "Coverage", None) or []
+        self.filter_sets = [set(c.glyphs) for c in sets]
         self.bases = _mark_base_subtables(tf)
         self.stacks = _mark_mark_subtables(tf)
+        self.flags = {i: (table.LookupList.Lookup[i].LookupFlag,
+                          getattr(table.LookupList.Lookup[i], "MarkFilteringSet", None))
+                      for i in {i for i, _ in self.bases} | {i for i, _ in self.stacks}}
+
+    @staticmethod
+    def _by_lookup(pairs):
+        """[(lookup index, [subtables])] in lookup order."""
+        out = []
+        for i, sub in pairs:
+            if out and out[-1][0] == i:
+                out[-1][1].append(sub)
+            else:
+                out.append((i, [sub]))
+        return out
+
+    def _admits(self, i, glyph):
+        """Whether lookup `i`'s flag lets it see `glyph` as a mark."""
+        flag, filter_set = self.flags[i]
+        cls = flag >> 8
+        if cls and self.attach_class.get(glyph, 0) != cls:
+            return False
+        if flag & 0x10 and filter_set is not None:
+            return glyph in self.filter_sets[filter_set]
+        return True
 
     def on_base(self, base_g, mark_g):
-        for _, sub in self.bases:
-            if base_g not in sub.BaseCoverage.glyphs or mark_g not in sub.MarkCoverage.glyphs:
+        for i, subs in reversed(self._by_lookup(self.bases)):
+            for sub in subs:
+                if base_g not in sub.BaseCoverage.glyphs or mark_g not in sub.MarkCoverage.glyphs:
+                    continue
+                rec = sub.MarkArray.MarkRecord[sub.MarkCoverage.glyphs.index(mark_g)]
+                base = sub.BaseArray.BaseRecord[sub.BaseCoverage.glyphs.index(base_g)]
+                ba, ma = base.BaseAnchor[rec.Class], rec.MarkAnchor
+                if ba is None or ma is None:
+                    return None
+                return (ba.XCoordinate - ma.XCoordinate - self.hmtx[base_g][0],
+                        ba.YCoordinate - ma.YCoordinate, 0)
+        return None
+
+    def stack(self, glyphs, j):
+        """(index of the mark glyphs[j] stacks on, (Mark2 anchor - Mark1
+        anchor)) through the last mark-to-mark lookup that applies, or
+        None if none does."""
+        mark_g = glyphs[j]
+        for i, subs in reversed(self._by_lookup(self.stacks)):
+            if not self._admits(i, mark_g):
                 continue
-            rec = sub.MarkArray.MarkRecord[sub.MarkCoverage.glyphs.index(mark_g)]
-            base = sub.BaseArray.BaseRecord[sub.BaseCoverage.glyphs.index(base_g)]
-            ba, ma = base.BaseAnchor[rec.Class], rec.MarkAnchor
-            if ba is None or ma is None:
-                return None
-            return (ba.XCoordinate - ma.XCoordinate - self.hmtx[base_g][0],
-                    ba.YCoordinate - ma.YCoordinate, 0)
+            k = j - 1
+            while k >= 1 and not self._admits(i, glyphs[k]):
+                k -= 1
+            if k < 1:
+                continue
+            below_g = glyphs[k]
+            for sub in subs:
+                if below_g not in sub.Mark2Coverage.glyphs or mark_g not in sub.Mark1Coverage.glyphs:
+                    continue
+                rec = sub.Mark1Array.MarkRecord[sub.Mark1Coverage.glyphs.index(mark_g)]
+                a2 = sub.Mark2Array.Mark2Record[sub.Mark2Coverage.glyphs.index(below_g)].Mark2Anchor[rec.Class]
+                a1 = rec.MarkAnchor
+                if a2 is None or a1 is None:
+                    break
+                return k, (a2.XCoordinate - a1.XCoordinate, a2.YCoordinate - a1.YCoordinate)
         return None
 
     def on_mark(self, below_g, mark_g):
-        """(Mark2 anchor - Mark1 anchor), or None if the pair does not
-        stack."""
-        for _, sub in self.stacks:
-            if below_g not in sub.Mark2Coverage.glyphs or mark_g not in sub.Mark1Coverage.glyphs:
-                continue
-            rec = sub.Mark1Array.MarkRecord[sub.Mark1Coverage.glyphs.index(mark_g)]
-            a2 = sub.Mark2Array.Mark2Record[sub.Mark2Coverage.glyphs.index(below_g)].Mark2Anchor[rec.Class]
-            a1 = rec.MarkAnchor
-            if a2 is None or a1 is None:
-                return None
-            return (a2.XCoordinate - a1.XCoordinate, a2.YCoordinate - a1.YCoordinate)
-        return None
+        """(Mark2 anchor - Mark1 anchor) for a mark stacked directly on
+        another, or None if the pair does not stack."""
+        got = self.stack([None, below_g, mark_g], 2)
+        return got[1] if got else None
 
     def run(self, glyphs):
         """The expected (x_offset, y_offset, x_advance) of each mark in
         a shaped run [base, mark, mark, ...], None where nothing
         places it."""
-        out = []
-        prev = None
+        out = [None]
         for j, g in enumerate(glyphs[1:], 1):
-            lift = self.on_mark(glyphs[j - 1], g) if j > 1 and prev is not None else None
-            if lift is not None:
-                pos = (prev[0] + lift[0], prev[1] + lift[1], 0)
+            stacked = self.stack(glyphs, j) if j > 1 else None
+            if stacked is not None and out[stacked[0]] is not None:
+                k, lift = stacked
+                pos = (out[k][0] + lift[0], out[k][1] + lift[1], 0)
             else:
                 pos = self.on_base(glyphs[0], g)
             out.append(pos)
-            prev = pos
-        return out
+        return out[1:]
 
 
 def _hold_run(model, shape, order, rev, text, wrong, key):
@@ -1368,7 +1455,10 @@ def vf_region_peaks(tf, axis_tag="wght"):
     for store in stores:
         for region in store.VarRegionList.Region:
             peaks.add(region.VarRegionAxis[index].PeakCoord)
-    segments = tf["avar"].segments[axis_tag] if "avar" in tf else {}
+    segments = tf["avar"].segments.get(axis_tag, {}) if "avar" in tf else {}
+    # a strictly increasing map inverts by swapping; the F2Dot14 flat
+    # step SCP's avar carries (two inputs a unit apart, one output) loses
+    # one key here, which puts the inverse a few 1e-5 off across it
     inverse = {v: k for k, v in segments.items()}
 
     def user(n):

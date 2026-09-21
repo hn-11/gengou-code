@@ -507,6 +507,11 @@ def build_style(style, env, out_dir):
         with vfsource.unrounded_cff2_instancing():
             lifted = {w: anchors.mirror_stack_lift(bases[w], upright_src.at(w)) for w in wghts}
         print(f"[{style}] stacked-accent anchors lifted as the upright's: {lifted}")
+        # the same marks at every master the upright lifts at (the
+        # wght-200 master, where the upright does not, lifts none);
+        # masters that disagree would interpolate a partial collapse
+        if len({n for n in lifted.values() if n}) > 1:
+            raise RuntimeError(f"{style}: stack lifts diverged across masters: {lifted}")
     if loose[default_wght] < build_latin.LOOSE_FLOOR:
         # as on the static path, and a count rather than a truthiness
         # test for the same reason: the two guards above compare the

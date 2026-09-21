@@ -92,7 +92,7 @@ def round_outlines(font):
         private = build.glyph_private(font, td, name)
         pen = T2CharStringPen(build.pen_width(private, hmtx[name][0]), gs)
         build.draw_clean([(gs, name, (1, 0, 0, 1, 0, 0))], pen)
-        build.set_charstring(td, name, pen.getCharString(private=private))
+        td.CharStrings[name] = pen.getCharString(private=private)
     vfsource.sync_lsb(font)
 
 

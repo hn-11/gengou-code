@@ -152,7 +152,7 @@ VARIANTS = {
 # (Source Han Sans's own Light 49u, Heavy 120u and Source Code Pro's
 # ExtraLight 28u / Black 120u have no partner in the other family and are
 # not built.) Monaspace bottoms out at wght 200 (bar ~53u at our scale);
-# Light's surplus is eroded away in the static faces (VFSource.matched).
+# Light's surplus is eroded away in the static faces (vfsource.VFSource.matched).
 
 # the weights every face takes its width decisions from
 # (reference_steps): our Regular's donor for the advance, the heaviest
@@ -275,7 +275,7 @@ def _quad_roots(a, b, c):
 def _glyphset(source):
     """`source` as a glyph set: a TTFont's, or a glyph set handed over as
     is (TTFont.getGlyphSet(location=...) for a VF probed at a location
-    without instancing it — see VFSource._probe_bar)."""
+    without instancing it — see vfsource.VFSource._probe_bar)."""
     return source.getGlyphSet() if hasattr(source, "getGlyphSet") else source
 
 
@@ -536,16 +536,6 @@ def glyph_fd(font, td, name):
     has one Private dict and no FDSelect — the tests' fixtures; every
     face this repo builds is CID-keyed)."""
     return td.FDSelect[font.getGlyphID(name)] if hasattr(td, "FDArray") else None
-
-
-def set_charstring(td, name, cs):
-    """Replace an existing glyph's charstring, in a CID-keyed CFF (the
-    index is the store) or a plain one (the dict is)."""
-    strings = td.CharStrings
-    if hasattr(strings, "charStringsIndex"):
-        strings.charStringsIndex[strings.charStrings[name]] = cs
-    else:
-        strings[name] = cs
 
 
 def glyph_private(font, td, name):

@@ -840,3 +840,62 @@ def test_check_latin_repertoire_wants_the_size_and_no_cjk():
     assert _gate(lambda f, chk: verifylib.check_latin_repertoire(chk, {**latin, 0x4E00: "a"}), None) \
         == ["no CJK / full-width codepoints"]
     assert _gate(lambda f, chk: verifylib.check_latin_repertoire(chk, dict(list(latin.items())[:10])), None)
+
+
+# round 8: the model follows the shaper's lookup order and mark filters ---
+
+def test_mark_model_takes_the_last_lookup_covering_the_pair():
+    """A shaper applies the lookups in order and each attachment
+    overwrites the one before: two mark lookups both covering (b0,
+    acute) with base anchors 20 and 120 above the letter place the
+    accent by the second. The model once took the first and failed a
+    correct face."""
+    anchors, heights = _ruled()
+    font = _mark_font(anchors, heights,
+                      fea_extra="feature mark { pos base b0 <anchor 50 520> mark @TOP; } mark;\n")
+    assert _attach(font) == []
+    assert verifylib._MarkModel(font).on_base("b0", "acute") == (50 - 50 - 600, 520, 0)
+
+
+def test_mark_model_skips_the_marks_a_lookups_class_filter_skips():
+    """A mkmk lookup flagged MarkAttachmentType looks back past marks of
+    other classes: b0 + grave (class 2) + acute (class 1) leaves the
+    acute on the letter, and the model says so."""
+    anchors, heights = _ruled()
+    heights["grave"] = 500
+    # encoded as an overlay, which no gate asks to be stackable
+    font = _mark_font(anchors, heights, cmap_extra={0x335: "grave"},
+                      fea_extra="markClass grave <anchor 50 0> @GR;\n"
+                                "feature mark { pos base b0 <anchor 50 420> mark @GR; } mark;\n"
+                                "feature mkmk { lookupflag MarkAttachmentType @TOP; "
+                                "pos mark acute <anchor 50 200> mark @TOP; } mkmk;\n")
+    assert _stack(font) == []
+    model = verifylib._MarkModel(font)
+    assert model.run(["b0", "grave", "acute"])[1] == model.on_base("b0", "acute")
+    assert model.run(["b0", "acute", "acute"])[1] == (
+        model.on_base("b0", "acute")[0], model.on_base("b0", "acute")[1] + 200, 0)
+
+
+def test_check_mark_reachability_reports_a_lookup_that_never_sees_its_marks():
+    """IgnoreMarks on a mark lookup, or a class filter its own marks are
+    not in, is a lookup that never applies."""
+    anchors, heights = _ruled()
+    deaf = _mark_font(anchors, heights, mark_scope="lookupflag IgnoreMarks;")
+    assert any("admits its own marks" in m for m in _gate(verifylib.check_mark_reachability, deaf))
+    heights["grave"] = 500
+    filtered = _mark_font(anchors, heights, cmap_extra={0x300: "grave"},
+                          fea_extra="markClass grave <anchor 50 0> @GR;\n"
+                                    "feature mark { pos base b0 <anchor 50 420> mark @GR; } mark;\n"
+                                    "feature mkmk { lookupflag MarkAttachmentType @TOP; "
+                                    "pos mark grave <anchor 50 200> mark @TOP; } mkmk;\n")
+    assert any("filters out" in m for m in _gate(verifylib.check_mark_reachability, filtered))
+
+
+def test_check_anchor_placement_does_not_ask_stacking_of_a_glyph_nothing_reaches():
+    """A Mark2 glyph no cmap or GSUB produces cannot be shaped; its
+    collapsed anchor is not a finding (the italic donor's uni0306.c)."""
+    anchors, heights = _ruled()
+    heights["grave2"] = 500
+    font = _mark_font(anchors, heights, marks={"grave2": None},
+                      mark2={"grave2": (50, 0), "acute": (50, 200)})
+    assert _placement(font) == []
