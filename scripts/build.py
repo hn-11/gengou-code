@@ -644,6 +644,9 @@ def note_redrawn(font, names):
 
 
 def append_glyph(font, td, name, cs, fd_index, width, lsb=None, vdonor=None):
+    """Append one built glyph. Returns its outline box (None if blank),
+    which it measures anyway for the side bearing — update_bbox_after's
+    caller wants it and should not pay for it twice."""
     order = font.getGlyphOrder()
     order.append(name)
     if td.charset is not order:  # same list object for CFF fonts
@@ -688,7 +691,7 @@ def append_glyph(font, td, name, cs, fd_index, width, lsb=None, vdonor=None):
     if hasattr(font, "_reverseGlyphOrderDict"):
         del font._reverseGlyphOrderDict
     font["maxp"].numGlyphs = len(order)
-
+    return box
 
 def append_context(font, fullwidth=False):
     """What appending a glyph next to 'A' needs: (top dict, cmap, FD
@@ -3949,6 +3952,132 @@ def update_bbox(font, bounds=None):
                         ("advanceHeightMax", "minTopSideBearing",
                          "minBottomSideBearing", "yMaxExtent"))
     return box
+
+
+def glyph_extent_state(font, names):
+    """What update_bbox_after needs to know about glyphs a pass is about
+    to rewrite: {name: (box, hmtx pair, vmtx pair or None)} as they are
+    now. Read before the outline is swapped, or the old state is gone."""
+    gs = font.getGlyphSet()
+    return {n: (_bounds(gs, n),
+                font["hmtx"].metrics[n],
+                font["vmtx"].metrics[n] if "vmtx" in font else None)
+            for n in names}
+
+
+def _extent_candidates(box, metrics, axis):
+    """What one glyph offers each of the four extents _update_extents
+    computes: (advance, side bearing, far-side bearing, extent), the
+    last three None for a glyph with no ink."""
+    adv, sb = metrics
+    if box is None:
+        return adv, None, None, None
+    size = int(math.ceil(box[2 + axis]) - math.floor(box[axis]))
+    return adv, sb, adv - sb - size, sb + size
+
+
+def _loses_extent(table, fields, old, new, axis):
+    """Whether rewriting one glyph can lower any of `table`'s extents.
+
+    Only where the old outline was holding an extreme up AND the new one
+    does not reach it: a rewrite that keeps the advance, or draws at
+    least as far, takes nothing away. Being strict about the advance
+    alone would refuse every face here, since the glyphs the graft
+    redraws keep the cell they had."""
+    was = _extent_candidates(*old, axis)
+    now = _extent_candidates(*new, axis)
+    for i, (field, better) in enumerate(zip(fields, (max, min, min, max))):
+        if was[i] is None or was[i] != getattr(table, field):
+            continue                      # it was not holding this one up
+        # safe only where the new outline reaches at least as far as the
+        # one it replaced, so the extreme survives in the same glyph
+        if now[i] is None or better(was[i], now[i]) != now[i]:
+            return True
+    return False
+
+
+def update_bbox_after(font, written, dropped):
+    """Set the extents after a pass that appended glyphs and rewrote a
+    named few, without measuring the ones it left alone. Returns True
+    when it could, False when the caller has to measure the font whole.
+
+    The face arrives carrying the extents of everything it had —
+    update_bbox set them when it was built — so the new values are those
+    combined with what this pass wrote. Combining only runs one way: a
+    maximum can take another candidate, but it cannot give one back. A
+    glyph the pass REWROTE is therefore a problem exactly when its old
+    outline was holding one of those extremes up, because the old
+    aggregate is then too generous and nothing short of measuring says
+    by how much. `dropped` is what those glyphs were
+    (glyph_extent_state), each is checked against every extreme, and a
+    hit returns False rather than a guess.
+
+    `written`: {name: box or None} for every glyph the pass wrote.
+    """
+    head = font["head"]
+    hbox = (head.xMin, head.yMin, head.xMax, head.yMax)
+    hh = ("advanceWidthMax", "minLeftSideBearing",
+          "minRightSideBearing", "xMaxExtent")
+    vv = ("advanceHeightMax", "minTopSideBearing",
+          "minBottomSideBearing", "yMaxExtent")
+    horizontal = "hmtx" in font and "hhea" in font
+    vertical = "vmtx" in font and "vhea" in font
+    for name, (box, hm, vm) in dropped.items():
+        now = written.get(name)
+        if box is not None:
+            edges = ((math.floor(box[0]), hbox[0], math.floor, min, 0),
+                     (math.floor(box[1]), hbox[1], math.floor, min, 1),
+                     (math.ceil(box[2]), hbox[2], math.ceil, max, 2),
+                     (math.ceil(box[3]), hbox[3], math.ceil, max, 3))
+            for was, edge, round_to, better, i in edges:
+                if was != edge:
+                    continue              # it was not holding this edge
+                if now is None or better(was, round_to(now[i])) != round_to(now[i]):
+                    return False
+        if horizontal and _loses_extent(font["hhea"], hh, (box, hm),
+                                        (now, font["hmtx"].metrics[name]), 0):
+            return False
+        if vertical and vm is not None and _loses_extent(
+                font["vhea"], vv, (box, vm),
+                (now, font["vmtx"].metrics[name]), 1):
+            return False
+
+    inked = {n: b for n, b in written.items() if b is not None}
+    box = [min([hbox[0]] + [math.floor(b[0]) for b in inked.values()]),
+           min([hbox[1]] + [math.floor(b[1]) for b in inked.values()]),
+           max([hbox[2]] + [math.ceil(b[2]) for b in inked.values()]),
+           max([hbox[3]] + [math.ceil(b[3]) for b in inked.values()])]
+    if "CFF2" not in font:
+        cff = font["CFF "].cff
+        cff[cff.fontNames[0]].FontBBox = box
+    head.xMin, head.yMin, head.xMax, head.yMax = box
+    if horizontal:
+        _extend_extents(font["hhea"], hh, font["hmtx"].metrics,
+                        written, inked, 0)
+    if vertical:
+        _extend_extents(font["vhea"], vv, font["vmtx"].metrics,
+                        written, inked, 1)
+    return True
+
+
+def _extend_extents(table, fields, metrics, written, inked, axis):
+    """_update_extents' four numbers, widened by the glyphs one pass
+    wrote instead of recomputed over every glyph in the font."""
+    adv_max, min_sb, min_far, max_extent = fields
+    advances = [metrics[n][0] for n in written if n in metrics]
+    if advances:
+        setattr(table, adv_max, max(getattr(table, adv_max), *advances))
+    sizes = {n: int(math.ceil(b[2 + axis]) - math.floor(b[axis]))
+             for n, b in inked.items() if n in metrics}
+    if not sizes:
+        return
+    sb = {n: metrics[n][1] for n in sizes}
+    setattr(table, min_sb, min(getattr(table, min_sb), *sb.values()))
+    setattr(table, min_far, min(getattr(table, min_far),
+                                *(metrics[n][0] - sb[n] - sizes[n]
+                                  for n in sizes)))
+    setattr(table, max_extent, max(getattr(table, max_extent),
+                                   *(sb[n] + sizes[n] for n in sizes)))
 
 
 def _update_extents(table, metrics, bounds, axis, fields):

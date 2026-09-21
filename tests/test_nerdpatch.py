@@ -225,7 +225,7 @@ def test_graft_symbols_appends_one_cell_icons_the_face_lacks(monkeypatch):
     face = _face()
     assert _bounds(face, "uniE0B0") == (0, -280, 600, 1040)     # Source Code Pro's
     a_before = _bounds(face, "A")
-    grafted, rehint = nerdpatch.graft_symbols(face, _symbols())
+    grafted, rehint, written, dropped = nerdpatch.graft_symbols(face, _symbols())
     assert _bounds(face, "A") == a_before        # text, not Nerd Fonts' icon
     assert (grafted, rehint) == (4, ["uniE0B0"])                # not 'A'
     cmap = face.getBestCmap()

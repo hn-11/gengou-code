@@ -3,6 +3,7 @@
 import io
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pathops
 import pytest
@@ -2566,3 +2567,110 @@ def test_prune_orphan_lookups_leaves_a_font_with_jstf_alone():
 
     assert build.prune_orphan_lookups(font) == {}
     assert gsub.LookupList.LookupCount == 2
+
+
+# --- update_bbox_after -----------------------------------------------------
+
+class _FakeCFFTop:
+    def __init__(self):
+        self.FontBBox = [0, 0, 0, 0]
+
+
+class _FakeCFFIndex:
+    def __init__(self):
+        self.fontNames = ["T"]
+        self._td = _FakeCFFTop()
+
+    def __getitem__(self, name):
+        return self._td
+
+
+class _FakeCFFTable:
+    def __init__(self):
+        self.cff = _FakeCFFIndex()
+
+
+class _FakeMtx:
+    def __init__(self, metrics):
+        self.metrics = dict(metrics)
+
+
+def _extent_font(*, box=(0, -200, 600, 800), hhea=(600, 10, 20, 500),
+                 hmtx=None, vertical=False):
+    head = SimpleNamespace(xMin=box[0], yMin=box[1], xMax=box[2], yMax=box[3])
+    h = SimpleNamespace(advanceWidthMax=hhea[0], minLeftSideBearing=hhea[1],
+                        minRightSideBearing=hhea[2], xMaxExtent=hhea[3])
+    font = {"head": head, "hhea": h, "CFF ": _FakeCFFTable(),
+            "hmtx": _FakeMtx(hmtx or {})}
+    if vertical:
+        font["vhea"] = SimpleNamespace(advanceHeightMax=1000,
+                                       minTopSideBearing=5,
+                                       minBottomSideBearing=15,
+                                       yMaxExtent=900)
+        font["vmtx"] = _FakeMtx({n: (1000, 5) for n in (hmtx or {})})
+    return font
+
+
+def test_update_bbox_after_widens_the_box_and_the_extents():
+    font = _extent_font(hmtx={"icon": (600, 30)})
+    assert build.update_bbox_after(font, {"icon": (30, -300, 700, 900)}, {})
+    head = font["head"]
+    assert (head.xMin, head.yMin, head.xMax, head.yMax) == (0, -300, 700, 900)
+    assert font["CFF "].cff["T"].FontBBox == [0, -300, 700, 900]
+    h = font["hhea"]
+    assert h.advanceWidthMax == 600                 # not beaten
+    assert h.minLeftSideBearing == 10               # 30 is not smaller
+    # size 670, advance 600, sb 30 -> far side -100, which is smaller
+    assert h.minRightSideBearing == -100
+    assert h.xMaxExtent == 700                      # 30 + 670
+
+
+def test_update_bbox_after_leaves_extents_a_new_glyph_cannot_beat():
+    font = _extent_font(hmtx={"icon": (600, 100)})
+    assert build.update_bbox_after(font, {"icon": (100, 0, 200, 100)}, {})
+    h = font["hhea"]
+    assert (h.advanceWidthMax, h.minLeftSideBearing) == (600, 10)
+    assert (h.minRightSideBearing, h.xMaxExtent) == (20, 500)
+    head = font["head"]
+    assert (head.xMin, head.yMin, head.xMax, head.yMax) == (0, -200, 600, 800)
+
+
+def test_update_bbox_after_refuses_when_a_redrawn_glyph_held_the_box_up():
+    """The Latin faces' real case: a Powerline glyph reaching 1060 is
+    redrawn to 1000, and the old maximum cannot be taken back out of an
+    aggregate. Refusing is the whole point -- the alternative is a face
+    declaring ink it no longer has."""
+    font = _extent_font(box=(0, -200, 600, 1060), hmtx={"pl": (600, 0)})
+    dropped = {"pl": ((0, -200, 600, 1060), (600, 0), None)}
+    assert build.update_bbox_after(font, {"pl": (0, -200, 600, 1000)},
+                                   dropped) is False
+    assert font["head"].yMax == 1060                # untouched, caller remeasures
+
+
+def test_update_bbox_after_refuses_when_a_redrawn_glyph_held_an_extent_up():
+    """Its old side bearing of 10 was minLeftSideBearing, and the glyph
+    that replaced it sits at 40."""
+    font = _extent_font(hhea=(600, 10, 20, 500), hmtx={"pl": (600, 40)})
+    dropped = {"pl": ((10, 0, 100, 100), (600, 10), None)}
+    assert build.update_bbox_after(font, {"pl": (40, 0, 130, 100)},
+                                   dropped) is False
+
+
+def test_update_bbox_after_allows_a_rewrite_that_reaches_as_far():
+    """A rewrite takes nothing away while the new outline still holds
+    every extreme the old one did — which is what keeps the fast path
+    open for the JP faces, whose redrawn glyphs keep their cell."""
+    font = _extent_font(hhea=(600, 10, 20, 500), hmtx={"pl": (600, 10)})
+    dropped = {"pl": ((10, 0, 100, 100), (600, 10), None)}
+    assert build.update_bbox_after(font, {"pl": (10, 0, 100, 100)}, dropped)
+    assert font["hhea"].minLeftSideBearing == 10
+
+
+def test_update_bbox_after_checks_the_vertical_extents_too():
+    """vhea has the same four, and a face with vmtx has to clear them
+    as well as hhea's."""
+    font = _extent_font(hmtx={"pl": (600, 40)}, vertical=True)
+    font["vmtx"].metrics["pl"] = (1000, 50)         # was 5, which WAS the min
+    dropped = {"pl": ((40, 0, 100, 100), (600, 40), (1000, 5))}
+    assert build.update_bbox_after(font, {"pl": (40, 0, 100, 100)},
+                                   dropped) is False

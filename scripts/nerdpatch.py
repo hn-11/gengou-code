@@ -256,8 +256,13 @@ def graft_symbols(font, symbols):
     """Append every symbol codepoint the face lacks as a one-cell glyph
     drawn from the symbols font (quadratic outlines become cubic on the
     way, exactly), and redraw the Powerline glyphs the face already has
-    from the symbols too. Returns (icons grafted, the names redrawn over
-    the face's own glyphs — the only ones that had hints to lose)."""
+    from the symbols too.
+
+    Returns (icons grafted, the names redrawn over the face's own glyphs
+    — the only ones that had hints to lose —, {name: box} for every
+    glyph written, and what the redrawn ones were before). The last two
+    are build.update_bbox_after's, so the extents can be widened by what
+    this touched instead of measured over all 30,000 glyphs."""
     scm, sgs = symbols.getBestCmap(), symbols.getGlyphSet()
     ctx = icon_context(font, symbols)
     cell = ctx[3]
@@ -278,6 +283,7 @@ def graft_symbols(font, symbols):
     # codepoint sharing that glyph cannot have it too — it gets its own,
     # appended below, rather than the first one's symbol
     new, replaced, kept = {}, {}, set()
+    written, dropped = {}, {}
     for cp in sorted(scm):
         if cp in cmap and cp not in LINE_BOX:
             # the face already draws this one as text: font-patcher's
@@ -311,6 +317,10 @@ def graft_symbols(font, symbols):
             origin = (build.vmtx_origin(font, name)
                       if "vmtx" in font and name in font["vmtx"].metrics
                       else None)
+            # what it was, before the outline goes: update_bbox_after
+            # cannot take a contribution back out of an aggregate, so it
+            # has to be told what it is losing
+            dropped.update(build.glyph_extent_state(font, [name]))
             pen = T2CharStringPen(build.pen_width(own, cell), sgs)
             sgs[scm[cp]].draw(TransformPen(pen, xform))
             cs = pen.getCharString(private=own)
@@ -322,12 +332,14 @@ def graft_symbols(font, symbols):
                     font["vmtx"].metrics[name][0],
                     otRound(origin - (box[3] if box else 0)))
             replaced[name] = cp
+            written[name] = box
             continue
         pen = T2CharStringPen(build.pen_width(private, cell), sgs)
         sgs[scm[cp]].draw(TransformPen(pen, xform))
         name = build.alloc_glyph_name(font)
-        build.append_glyph(font, td, name, pen.getCharString(private=private),
-                           fd_index, cell, None, vdon)
+        written[name] = build.append_glyph(
+            font, td, name, pen.getCharString(private=private),
+            fd_index, cell, None, vdon)
         new[cp] = name
     if kept != set(TEXT_OVER_ICON):
         raise ValueError(
@@ -343,7 +355,7 @@ def graft_symbols(font, symbols):
     # glyph the widening did not move; these icons are one cell and were
     # appended after it ran, so they have to join it (build.py)
     build.extend_realign_bases(font, new.values())
-    return len(new) + len(replaced), list(replaced)
+    return len(new) + len(replaced), list(replaced), written, dropped
 
 
 # what the face has to say about its fourth donor once the icons are in:
@@ -562,7 +574,7 @@ def patch_face(src, out_dir, symbols_path):
     font = TTFont(src)
     font.recalcBBoxes = False
     symbols = _symbols(symbols_path)
-    n, rehint = graft_symbols(font, symbols)
+    n, rehint, written, dropped = graft_symbols(font, symbols)
     font["OS/2"].recalcAvgCharWidth(font)
     # 10,000 codepoints joined the cmap, most of them in the two private
     # use areas: the declared ranges are how a fallback picker finds them
@@ -570,7 +582,13 @@ def patch_face(src, out_dir, symbols_path):
     ps = rename(font)
     os2, head = font["OS/2"], font["head"]
     covered = (os2.usWinAscent >= head.yMax and os2.usWinDescent >= -head.yMin)
-    build.update_bbox(font)
+    # widened by what the graft wrote rather than measured over all
+    # 30,000 glyphs (6.2 s of a JP face, two thirds of it spent on the
+    # 19,500 this pass never touched). False when one of the redrawn
+    # Powerline glyphs was holding an extreme up, and then there is
+    # nothing for it but to measure
+    if not build.update_bbox_after(font, written, dropped):
+        build.update_bbox(font)
     if covered:
         # the source's win metrics covered its box (Gengou's policy):
         # keep covering it with the icons in. The JP faces keep Source
