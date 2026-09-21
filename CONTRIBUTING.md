@@ -33,13 +33,13 @@ Monaspace VF から欧文レイヤー Gengouを `dist/latin` に組み、
 リファレンスです）。
 
 ```sh
-SCP_VF_U=... SCP_VF_I=... SS_VF_I=... MONA_VF=... \
-  python scripts/build_latin.py           # dist/latin/Gengou-*.otf（10 面）
-  python scripts/build_latin.py "Regular" # Regular 系のみ
-SHS_DIR=... \
-  python scripts/build.py                 # 両ファミリー
-  python scripts/build.py "Regular"       # Regular 系のみ（動作確認用、速い）
-  python scripts/build.py "Light Upright Term"   # 1 面だけ
+# export しておく（`VAR=... \` の行継続は直後の 1 コマンドにしか効かない）
+export SCP_VF_U=... SCP_VF_I=... SS_VF_I=... MONA_VF=... SHS_DIR=...
+python scripts/build_latin.py           # dist/latin/Gengou-*.otf（10 面）
+python scripts/build_latin.py "Regular" # Regular 系のみ
+python scripts/build.py                 # 両ファミリー
+python scripts/build.py "Regular"       # Regular 系のみ（動作確認用、速い）
+python scripts/build.py "Light Upright Term"   # 1 面だけ
 ```
 
 フィルタは語の組み合わせで、面がすべての語に合うものを組みます:

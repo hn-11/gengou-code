@@ -38,14 +38,17 @@ Source Han Sans の Light（49u）と Heavy（120u）、Source Code Pro の
 ExtraLight（28u）と Black（120u）は相手がいないので作らない。
 
 行の高さは `hhea` = `typo`（984 / −273、1.257 em）で、`USE_TYPO_METRICS`
-を立ててある。`usWinAscent` / `usWinDescent` は Source Han Sans の
-1160 / 288 のまま: これはクリッピング境界でもあり、Source Han Sans の
-インクは 984 を超えるので typo に合わせると GDI 系で欠ける。代わりに
-GDI 系（旧 conhost、メモ帳、Office の GDI 経路）だけは行が 1448u になる。
-この面のインクは 1808 / −1048 まであり、bbox を全部覆うと GDI の行が
-2856u（typo の 2.3 倍）になるので覆っていない。欧文レイヤーの罫線素片
-（−400）とブロック要素（−454）も 288 の外にあり、GDI 系だけは下端が
-切れうる（`docs/gengou-plan.md` に測定値と代案）。
+を立ててある。`usWinAscent` / `usWinDescent` は 1160 / 454: これは
+クリッピング境界でもあり、Source Han Sans のインクは 984 を超えるので
+typo に合わせると GDI 系で欠ける。上は Source Han Sans の宣言値 1160 の
+まま、下は欧文レイヤーの罫線素片（−400）とブロック要素（−454）を
+覆うために 288 から下げてある（欧文ファミリーが同じインクに対して
+declare している値と同じ）。代わりに GDI 系（旧 conhost、メモ帳、
+Office の GDI 経路）だけは行が 1614u になる。この面のインクは
+1808 / −1048 まであり、bbox を全部覆うと GDI の行が 2856u（typo の
+2.3 倍）になるので覆っていない。cmap 上で 454 の外に残るのは
+U+3031 / U+3032（縦書きの繰り返し記号、−549）の 2 字だけで、
+Source Han Sans 自身も 288 のまま同じ字形を出荷している。
 
 ## 幅の方針
 
@@ -202,6 +205,18 @@ stylistic set も同じ挙動なので許容している。グループを跨い
 Font Mono` / `Gengou Nerd Font Mono`（PostScript 名 `GengouJPNFM-*`
 など。`JetBrainsMono Nerd Font Mono` と同じ流儀）。
 
+ただし綴ったままだと Windows GDI の `LOGFONT.lfFaceName`（31 文字）に
+入らない面が出る（非 RIBBI は名前にウェイト名が付くので
+`Gengou JP Term Nerd Font Mono SemiBold` で 38 文字）。そこで
+**nameID 1 だけ `NFM` に略してある**——`Gengou JP NFM` /
+`Gengou JP Term NFM` / `Gengou NFM`（最長 `Gengou JP Term NFM
+SemiBold` で 27 文字）。nameID 16 / 4 は綴ったままなので、
+Windows Terminal・VS Code・macOS・Linux のピッカーには
+`Gengou JP Term Nerd Font Mono` が出て、**旧 conhost・メモ帳・Office の
+GDI 経路にだけ略称 `Gengou JP Term NFM` が出る**。指定するときは
+その環境のピッカーに出ているほうの名前を使う。本家 font-patcher の
+`--windows` と同じ手。
+
 アイコンは font-patcher で掛けるのではなく、Nerd Fonts が配っている記号
 だけのフォント `Symbols Nerd Font Mono`（各リリースの
 NerdFontsSymbolsOnly.zip。font-patcher の全記号集合と群ごとの寸法を空の
@@ -245,8 +260,9 @@ Monaspace 由来の合字61種・ASCII 記号32字・1セル矢印（SCP に無�
 する。結合文字は SCP が出荷する形（スペーシング、GPOS mark で位置決め）
 のまま。
 
-Regular は1,632グリフ・約140KB（Italic は1,335グリフ — SCP Italic VF の
-グリフ数が少ないぶん）。縦メトリクスは SCP 自身の hhea（984 / -273）を
+Regular は1,632グリフ・約140KB（Italic は1,568グリフ — SCP Italic VF の
+グリフ数が少ないぶん。ギリシャ・キリルは Source Sans 3 Italic から
+補っているので、差は直立との設計差そのものではない）。縦メトリクスは SCP 自身の hhea（984 / -273）を
 基準に、OS/2 の typo を hhea と同値にして `USE_TYPO_METRICS` を立て、win
 はファミリー全面のバウンディングボックスを覆う値（1060 / 454）。
 
@@ -271,7 +287,7 @@ instancer の整数丸めを切ってインスタンス化する。重なり除�
 ドナーと Nerd Fonts 版の入力で、単体では配布しない。
 
 **源合**（げんごう）は、源ノ角ゴシックと Source Code Pro が共有する
-`Source` の訳字「源」と、合字の「合」——3 つの上流を合わせる「合成」の
+`Source` の訳字「源」と、合字の「合」——4 つの上流を合わせる「合成」の
 合でもある——を合わせた名前。OFL の Reserved Font Name が英語の `Source`
 を塞いでいるので、漢字で言い換えている。詳しい由来・衝突調査・欧文層を
 切り出した経緯は [docs/gengou-plan.md](docs/gengou-plan.md) を参照。
@@ -319,21 +335,20 @@ v5.0.0 までの `Sumi Moji JP`（v4.0.0 までは 2:3 の基本ファミリー�
 
 ## ビルド
 
-3つの上流（Source Han Sans JP / Source Code Pro VF / Monaspace VF）と、
-Nerd Fonts 版のための `Symbols Nerd Font Mono` を取得して環境変数で場所を
-渡す。ビルドは2段階: まず `scripts/build_latin.py`
+4つの上流（Source Han Sans JP / Source Code Pro VF / Source Sans 3 VF /
+Monaspace VF）と、Nerd Fonts 版のための `Symbols Nerd Font Mono` を
+取得して環境変数で場所を渡す。ビルドは2段階: まず `scripts/build_latin.py`
 が VF から Gengou（`dist/latin`）を組み、その完成品を `scripts/build.py`
 が Source Han Sans に接ぎ木する。具体的なコマンドは
 `.github/workflows/ci.yml` の手順がそのまま実行可能なリファレンス。
 
 ```sh
 pip install -r requirements.txt
-SCP_VF_U=... SCP_VF_I=... SS_VF_I=... MONA_VF=... \
-  python scripts/build_latin.py           # dist/latin/Gengou-*.otf（10 面）
-  python scripts/build_latin_vf.py        # dist/latin/Gengou[wght].otf, -Italic[wght].otf
-SHS_DIR=... \
-  python scripts/build.py                 # 両ファミリー（JP / Term × 10 面）
-  python scripts/build.py "Regular"       # Regular系のみ（動作確認用）
+export SCP_VF_U=... SCP_VF_I=... SS_VF_I=... MONA_VF=... SHS_DIR=...
+python scripts/build_latin.py           # dist/latin/Gengou-*.otf（10 面）
+python scripts/build_latin_vf.py        # dist/latin/Gengou[wght].otf, -Italic[wght].otf
+python scripts/build.py                 # 両ファミリー（JP / Term × 10 面）
+python scripts/build.py "Regular"       # Regular系のみ（動作確認用）
 python scripts/verify_latin.py dist/latin/Gengou-Regular.otf        # Gengou の回帰テスト
 python scripts/verify_latin_vf.py "dist/latin/Gengou[wght].otf"     # 可変版（SCP と突き合わせ）
 python scripts/verify.py dist/GengouJP-Regular.otf   # JP の回帰テスト
@@ -341,9 +356,11 @@ python scripts/golden.py <前の dist> dist                  # 2つのビルド�
 NF_SYMBOLS=... python scripts/nerdpatch.py                 # Nerd Fonts 版
 ```
 
-`SCP_VF_U` / `SCP_VF_I` / `MONA_VF` は欧文を組む 2 つのスクリプト
-（`build_latin.py` と `build_latin_vf.py`）が使い、それぞれ
-Source Code Pro VF / Monaspace VF の Releases から取得する。
+`SCP_VF_U` / `SCP_VF_I` / `SS_VF_I` / `MONA_VF` は欧文を組む 2 つの
+スクリプト（`build_latin.py` と `build_latin_vf.py`）が使い、それぞれ
+Source Code Pro VF / Source Sans 3 VF / Monaspace VF の Releases から
+取得する。`SS_VF_I` は斜体のギリシャ・キリルにしか使わないが、直立だけを
+組む場合も必須（欠けたまま斜体を組むと 2 文字体系が黙って抜けるため）。
 `build.py` は Source Code Pro / Monaspace の VF に直接触らず、代わりに
 `SHS_DIR`（Source Han Sans JP）と `LATIN_DIR`（既定 `dist/latin`、
 `build_latin.py` の出力先）を見る。`verify.py` と `verify_latin_vf.py` は
@@ -393,7 +410,8 @@ Source Code Pro VF / Monaspace VF の Releases から取得する。
   側は文脈ごしにしか走らない）。`i` + U+0307 は点のない `ı` に替わり、
   `g̃` `ê̆` `ї́` は合成される
 - 行間は Source Code Pro の値（hhea = typo = 984 / −273 / 0、
-  `USE_TYPO_METRICS`）。win は Source Han Sans の宣言値（1160 / 288）。
+  `USE_TYPO_METRICS`）。win は 1160 / 454（上は Source Han Sans の
+  宣言値、下は欧文の罫線・ブロック要素を覆う値）。
   等幅メタデータ（`post.isFixedPitch` / PANOSE bProportion=9 /
   xAvgCharWidth）は各面で独自に設定・実測し、Windows Terminal 等の
   フォント選択に出るようにする

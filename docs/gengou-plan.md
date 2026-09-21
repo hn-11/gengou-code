@@ -23,7 +23,8 @@ SHCJ は上流から外れた。
   そのまま載せる。2:3（旧基本ファミリー）と 35 は廃止、Term（1:2）は
   全角の送りを 2 セルに広げるだけの変種として残す。
 - **行間は SCP の 984 / −273（1.257 em）**。hhea = typo、
-  `USE_TYPO_METRICS`。win は Source Han Sans の宣言値（1160 / 288）。
+  `USE_TYPO_METRICS`。win は 1160 / 454（上は Source Han Sans の宣言値、
+  下は欧文の罫線・ブロック要素を覆う値。`build.WIN_METRICS`）。
 - **太さの主従を逆転**。Latin は SCP の名前付きインスタンス（Light 300 /
   Regular 400 / Medium 500 / SemiBold 600 / Bold 700）そのもの、和文は
   `＝` のバーが合う Source Han Sans の面を実測で選ぶ（ExtraLight / Normal /
@@ -54,19 +55,23 @@ SHCJ は上流から外れた。
   送り幅を 600 にして中央に置いても、インクは左右にはみ出したままで
   重なりの総量は変わらない——**この 125 字は縮小しない限り直らない**のに、
   v5 はその縮小を廃止した。上流に従って全角のままにする。
-- **NF 版のファミリー名が GDI の 31 文字に収まらない**（`Gengou` への
-  改名で半減、一部残る）。`Gengou JP Term Nerd Font Mono` は 29 文字で
-  収まるが、非 RIBBI は nameID 1 にウェイト名が付くので
-  `... Nerd Font Mono SemiBold` が 38 文字になる。JP の NF 20 面のうち
-  8 面（Term の Light / Medium / SemiBold 各 2 面と、基本ファミリーの
-  SemiBold 2 面）が `LOGFONT.lfFaceName`（31 文字）に入らない。欧文の
-  10 面は全部収まる。v5.0.0 の `Sumi Moji` では Term の RIBBI が
-  32 文字で、JP 16 面・欧文 2 面が入らなかった。
-  DirectWrite の Windows Terminal や macOS / Linux では問題ないが、
-  旧 conhost・メモ帳・Office の GDI 経路ではファミリー名で引けない。
-  nameID 1 だけ短い別名にする手はあるが（本家 font-patcher の
-  `--windows` 相当）、ピッカーによって別名で出るのと引き換え。
-  Nerd Fonts 本家の命名を優先して現状維持、要判断。
+- ~~**NF 版のファミリー名が GDI の 31 文字に収まらない**~~ **解決**
+  （nameID 1 だけ `NFM` に略す。`nerdpatch.NF_MARKER_GDI`）。綴ったままだと
+  `Gengou JP Term Nerd Font Mono` 自体は 29 文字で収まるが、非 RIBBI は
+  nameID 1 にウェイト名が付くので `... Nerd Font Mono SemiBold` が
+  38 文字になり、JP の NF 20 面のうち 8 面（Term の Light / Medium /
+  SemiBold 各 2 面と、基本ファミリーの SemiBold 2 面）が
+  `LOGFONT.lfFaceName`（31 文字）に入らなかった（欧文の 10 面は全部収まる。
+  v5.0.0 の `Sumi Moji` では Term の RIBBI が 32 文字で、JP 16 面・
+  欧文 2 面が入らなかった）。nameID 1 を `Gengou JP Term NFM SemiBold`
+  （最長 27 文字）に、nameID 16 / 4 は綴ったままにする分割で解決した。
+  本家 font-patcher の `--windows` と同じ手で、DirectWrite 系
+  （Windows Terminal・macOS・Linux）は 16 を読むので表示は変わらず、
+  GDI 系のピッカーにだけ略称が出る。`verifylib.check_gdi_family_name` が
+  31 文字を全面で門番している。副作用として NF 面の nameID 4 は
+  nameID 1 で始まらなくなる（fontbakery の
+  `opentype/name/match_familyname_fullfontname` はこれを落とす。
+  本家 `--windows` も同じ）
 - ~~**`drop_features` は参照されなくなった Lookup を残す**~~ **解決**
   （`prune_orphan_lookups`）。FeatureList から到達可能性を辿り、文脈
   依存 Lookup が呼ぶ先も再帰的に追って、届かない Lookup を捨てて索引を
@@ -172,20 +177,27 @@ SHCJ は上流から外れた。
   Source Han Sans のギリシャ・キリル 115 字は Source Code Pro の 234 字に
   完全に含まれるため、この変更後は 1 字も使われない（`narrow_letters` は
   上流が変わったときの保険として残置、`letters=0` がそれを示す）。
-- **JP 面の `usWinDescent` 288 は欧文レイヤーの罫線より浅い**。
-  Source Code Pro 由来の罫線素片は −400、ブロック要素は −454 まで
-  伸びるので、cmap 上の 111 字が宣言値の外にある。`USE_TYPO_METRICS` を
-  読む描画系（DirectWrite / CoreText / HarfBuzz）は 1257u の行を使うので
-  影響しないが、GDI 系だけは下端が切れうる。この面のインクは 1808 /
+- ~~**JP 面の `usWinDescent` 288 は欧文レイヤーの罫線より浅い**~~
+  **解決**（`build.WIN_METRICS = (1160, 454)`、`verify.py` が全 JP 面で
+  門番）。Source Code Pro 由来の罫線素片は −400、ブロック要素は −454 まで
+  伸びるので、288 では cmap 上の 111 字が宣言値の外にあった
+  （`USE_TYPO_METRICS` を読む DirectWrite / CoreText / HarfBuzz は 1257u の
+  行を使うので影響せず、GDI 系だけ下端が切れうる状態）。454 まで下げて
+  罫線とブロック要素を覆い、GDI の行は 1448 → 1614u（+11%）。欧文
+  ファミリーが同じインクに対して declare している値（`harmonize_latin` の
+  実測 1060 / 454）と揃えた。454 の外に残るのは U+3031 / U+3032
+  （縦書きの繰り返し記号、−549）の 2 字だけ。この面のインクは 1808 /
   −1048 まであり、bbox を全部覆うと GDI の行が 2856u（typo の 2.3 倍）に
-  なるため覆えない。−454 まで上げれば罫線は救えて GDI の行は 1448 →
-  1614u（+11%）。Source Han Sans 自身も 288 のまま −1048 のグリフを
-  抱えているので現状維持、要判断。
-- **上流アセットのハッシュ検証が無い**。`fetch-upstreams` は 4 つの zip を
-  `curl -sSfL` で取って展開するだけで、キャッシュキーもタグ名だけから
-  作っている。GitHub のリリース資産はタグを変えずに差し替えられるので、
-  差し替えられても気付けない。zip の SHA-256 をピンと一緒に記録し、
-  キャッシュキーにも混ぜるのが筋。未着手。
+  なるため上は Source Han Sans の宣言値 1160 のままにした（Source Han Sans
+  自身も 288 のまま −1048 のグリフを抱えている）
+- ~~**上流アセットのハッシュ検証が無い**~~ **解決**。`fetch-upstreams` は
+  5 つの zip（SHS / SCP / Source Sans 3 / Monaspace / Nerd Fonts）を取り、
+  それぞれ `*_SHA` ピンと sha256 を突き合わせてから展開する。キャッシュ
+  キーもタグ 6 個とハッシュ 5 個の全 11 ピンから作る（ハッシュだけだと
+  手で上げたタグがキャッシュヒットで検証ごと素通りする）。
+  `scripts/bump_pins.py` がタグとハッシュを一緒に書き換え、タグが動いて
+  いないのに資産が差し替わっていたら書き換えずに落とす——ピンが守って
+  いるものをそのまま洗浄してしまうため。手順は CONTRIBUTING.md
 - **SHCJ 依存の解消**: バーの目標値（Latin が固定なので不要）、半角カナ
   のドナー（Source Han Sans 自身の 500 幅を中央配置）、行間（SCP）、
   半角の集合（Gengou の cmap）。`SHCJ_TTC` と `SHCJ_TAG` は消えた。
@@ -222,6 +234,11 @@ Gengou JP の欧文層（Source Code Pro の文字 + Monaspace の記号・合�
 | 和文入り | Gengou JP / Gengou JP Term | GengouJP-Regular, GengouJPTerm-Regular |
 | 和文入り NF | Gengou JP Nerd Font Mono など | GengouJPNFM-Regular など |
 
+NF 版のファミリー名は nameID 16（と nameID 4）の綴り。nameID 1 は
+GDI の 31 文字に収めるため `Gengou JP NFM` / `Gengou JP Term NFM` /
+`Gengou NFM` に略してある（上の GDI の項）ので、旧 conhost・メモ帳・
+Office のピッカーには略称のほうが出る。
+
 リブランディングで名前を変えた箇所（Shoyu Code Pro JP → Sumi Moji JP →
 Gengou JP の二度の改名とも同じ箇所を触っている。リポジトリ名と
 `PROJECT_URL` だけ未実施: リポジトリを改名すると GitHub は旧 URL を転送
@@ -245,7 +262,7 @@ Gengou JP の二度の改名とも同じ箇所を触っている。リポジト�
 - 名前の由来: **源合**（げんごう）。**源**は Source Code Pro と源ノ角
   ゴシック（Source Han Sans JP）が共有する `Source` の訳字で、RFN が英語の
   `Source` を塞いでいることへの言い換えそのもの。**合**は合字の合であり、
-  3 つの上流を合わせる合成の合でもある。どちらもこの書体の固有の特徴を
+  4 つの上流を合わせる合成の合でもある。どちらもこの書体の固有の特徴を
   指している
 - v5.0.0 までの `Sumi Moji`（墨文字）からの改名: 筆致も滲みも抑揚もない
   角ゴシックに墨の名前は合っていなかった。命名時の判定が衝突調査だけで、
@@ -280,8 +297,10 @@ Gengou JP の二度の改名とも同じ箇所を触っている。リポジト�
   整合のため維持）
 - GPOS は SCP 自身のもの（結合文字の `mark` / `mkmk`、`frac`、`size`）を保持。`kern` は無い（等幅）
 
-> **注記（v5）**: 以下 3.3・3.4 は v4 までの設計（4 は v5 の構成に
-> 書き直してある）。v5 で基準を
+> **注記（v5）**: 以下 3.3・3.4 と 5 節は v4 までの設計の記録で、
+> 数値は当時のもの（4 節は v5 の構成に書き直してある）。5 節が挙げる
+> マスター数・ウェイト数・面数と SHCJ への言及は現行の実装とは一致しない
+> ——現行の値は 1・3.1・3.2・4 節と README を見ること。v5 で基準を
 > Source Code Pro に移した結果、行間は SCP の 984 / −273、ウェイトは
 > SCP の名前付きインスタンス 5 つ、`dist/latin/term/` と拡大処理
 > （`rescale` / `narrow_ambiguous` / `latin_onecell`）は無くなっている。
@@ -319,9 +338,10 @@ Gengou JP の二度の改名とも同じ箇所を触っている。リポジト�
 実装済み（段階 1a・1b・2 とも）。v5 時点の実際のパイプライン:
 
 ```
-scripts/build_latin.py     # SCP VF + Monaspace VF
-                            #   -> dist/latin/Gengou-*.otf（配布物であり、
-                            #      JP 面のドナーでもある 10 面）
+scripts/build_latin.py     # SCP VF + Monaspace VF + SS3 VF Italic
+                            #   -> dist/latin/Gengou-*.otf（JP 面のドナー・
+                            #      NF パッチの入力・VF の検証に使う 10 面。
+                            #      単体では配布しない）
 scripts/build_latin_vf.py  # 同じマスターを varLib で合成
                             #   -> dist/latin/Gengou[wght].otf
                             #      dist/latin/Gengou-Italic[wght].otf
@@ -333,7 +353,9 @@ scripts/harmonize_latin.py # 欧文ファミリーの win メトリクスを面�
 scripts/verify.py          # JP 面の回帰テスト
 scripts/verify_latin.py    # 欧文静的面の回帰テスト
 scripts/verify_latin_vf.py # 可変フォントの回帰テスト
-scripts/verify_many.py     # 上の 3 つを glob で振り分けてまとめて走らせる
+scripts/verify_many.py     # 上の静的面 2 つ（verify.py / verify_latin.py）に
+                            #   glob で振り分けてまとめて走らせる。可変
+                            #   フォントは落とす（verify_latin_vf.py は別掛け）
 scripts/golden.py          # 2つの dist ディレクトリを比較（cmap・送り幅・
                             #   シェーピング・アウトライン・メタデータ・ヒント）
 ```
@@ -457,13 +479,14 @@ cmap・GSUB の shaping 結果が roundoff（±1〜2ユニット）を除いて�
   Monaspace 側の記号・合字はその下限の太さで止まり、静的版が erosion
   で削っている太さより太くなる——Light（SCP wght ≈317）はこの範囲に
   入るため、VF の Light 相当の記号は静的 Light（erosion 版）よりわずかに
-  太い。静的 Light は引き続き erosion 版を配布する。マスターを増やして
+  太い。静的 Light は erosion 版のまま JP 面のドナーに使う（単体では
+  配布しないので、利用者から見える差は VF 側だけ）。マスターを増やして
   この範囲もカバーする案は保留（erosion 自体が非線形なので、マスターを
   増やしても補間では再現できないことに変わりはない）
 - **太さの線形性**: SHCJ の各面に対する wght の一致点は二分探索で求めている。
   SCP 側は設計座標を SCP の avar で線形化してあるので中間ウェイトでも
   厳密に一致する（実装済み、`verify_latin_vf.py` で検証）。Monaspace 側は
-  5 マスターの間で線形補間になるため、名前付きインスタンスの間では
+  4 マスターの間で線形補間になるため、名前付きインスタンスの間では
   SCP との太さ一致に 1u 程度のずれが出うる。超える場合はマスターを増やす
   ——実測では Regular 実インスタンスのバー厚が静的版に対し ±1u 以内
   （`scripts/verify_latin_vf.py` で継続確認）
