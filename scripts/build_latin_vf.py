@@ -64,7 +64,7 @@ there is no variation for either table to carry.
 Usage:
   python scripts/build_latin_vf.py [upright|italic]   # default: both
 Env (all required):
-  SCP_VF_U, SCP_VF_I, MONA_VF   as for build_latin.py
+  SCP_VF_U, SCP_VF_I, SS_VF_I, MONA_VF   as for build_latin.py
 Env (optional): GENGOU_VERSION
 """
 
@@ -259,7 +259,7 @@ def scp_base_at(vf, wght):
     return base
 
 
-def graft_master(base, mona_source, slant):
+def graft_master(base, mona_source, slant, sans_source=None, upright=None):
     """Monaspace punctuation/ligatures onto one SCP master, in place —
     same helpers build_latin.py's static build_face uses, but bar-matched
     with erosion disabled (erode=False: a VF master can't take the
@@ -275,6 +275,16 @@ def graft_master(base, mona_source, slant):
     build.replace_from_mona(base, mona,
                             build.MONA_STANDALONE + build.MONA_AMBIGUOUS, dy, MONA_K)
     build_latin.add_missing_from_mona(base, mona, build.MONA_AMBIGUOUS, dy, MONA_K)
+    if sans_source is not None:
+        # the italic masters' Greek and Cyrillic, from the same donor and
+        # seated the same way as the static italic faces. Matched on this
+        # master's own bar, erode=False for the reason Monaspace is: a
+        # master cannot take the non-interpolatable erosion path. The
+        # outlines stay interpolatable because every master takes them
+        # from one variable font at a different location, and cell_fit
+        # only scales and shifts them
+        build_latin.add_missing_from_sans(
+            base, sans_source.matched(target, erode=False), upright)
     build_latin.remap_scp_stylistic_sets(base)
     build.add_gsub(base, added, alts, build.LIGATURES)
     build.classify_unicode_marks(base)
@@ -425,6 +435,12 @@ def build_style(style, env, out_dir):
     ref_angle = (vf_meta["post"].italicAngle or -12.0) if italic else None
     mona_source = build._vf_source(env["MONA_VF"], MONA_K,
                                    {"wght": 0, "wdth": 100, "slnt": 0})
+    # Source Code Pro Italic draws no Cyrillic and one Greek letter, so
+    # the italic masters take both scripts from Source Sans 3 Italic,
+    # bounded by what the upright faces draw (build_latin)
+    sans_source = (build._vf_source(env["SS_VF_I"], 1.0, {"wght": 0})
+                   if italic else None)
+    upright = build_latin.upright_cmap(env["SCP_VF_U"]) if italic else None
     floor = mona_floor_wght(scp, mona_source, ref_angle)
     wghts = master_scp_wghts(scp_masters, to_scp, axis.minValue, default_u, hi_u,
                              extra=[floor])
@@ -448,7 +464,8 @@ def build_style(style, env, out_dir):
     try:
         targets, monas = {}, {}
         for w in wghts:
-            targets[w], monas[w] = graft_master(bases[w], mona_source, ref_angle)
+            targets[w], monas[w] = graft_master(bases[w], mona_source, ref_angle,
+                                                sans_source, upright)
     finally:
         build.draw_clean = original_draw_clean
 
@@ -470,7 +487,11 @@ def build_style(style, env, out_dir):
 
     # credits come off the default master's own (still SCP-inherited) name
     # table — finalize_vf_names below replaces it
-    credits = build_latin.credits_from(bases[default_wght], monas[default_wght])
+    credits = build_latin.credits_from(
+        ("Source Code Pro", bases[default_wght]),
+        ("Monaspace", monas[default_wght]),
+        *([("Source Sans", sans_source.matched(targets[default_wght],
+                                               erode=False))] if italic else []))
 
     # 5. designspace: in-memory sources (no masters written to disk) at
     #    their SCP-linear design coordinate, the user axis map (varLib

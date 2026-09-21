@@ -236,7 +236,7 @@ def test_credits_from_returns_scp_then_monaspace():
     scp = _donor({0: "SCP Copyright", 9: "Paul D. Hunt, Teo Tuominen"})
     mona = _donor({0: "Mona Copyright", 9: "Riley Cran"})
 
-    credits = build_latin.credits_from(scp, mona)
+    credits = build_latin.credits_from(("Source Code Pro", scp), ("Monaspace", mona))
 
     assert credits == [
         ("Source Code Pro", "SCP Copyright", "Paul D. Hunt, Teo Tuominen"),
@@ -248,7 +248,7 @@ def test_credits_from_monaspace_falls_back_to_nameid7_when_nameid0_absent():
     scp = _donor({0: "SCP Copyright", 9: "Paul D. Hunt"})
     mona = _donor({0: None, 7: "Trademark: Monaspace", 9: "Riley Cran"})
 
-    credits = build_latin.credits_from(scp, mona)
+    credits = build_latin.credits_from(("Source Code Pro", scp), ("Monaspace", mona))
 
     label, copyright_, designer = credits[1]
     assert label == "Monaspace"
@@ -314,3 +314,70 @@ def test_fix_zone_order_rounds_the_zones_and_stems():
     assert (private.StdHW, private.StdVW) == (115, 148)
     assert private.StemSnapH == [67, 115]
     assert private.BlueScale == 0.0375     # the one real number, untouched
+
+
+# --- add_missing_from_sans ------------------------------------------------
+
+def _cff_with_greek(inks, *, cmap_extra=()):
+    """A CFF font whose Greek glyphs are rectangles of the given ink
+    widths, keyed by codepoint. 'A' comes along because append_context
+    keys the FD and its Private dict off it."""
+    from fontTools.fontBuilder import FontBuilder
+    from fontTools.pens.t2CharStringPen import T2CharStringPen
+    names = {cp: f"uni{cp:04X}" for cp in inks}
+    order = [".notdef", "A", *names.values()]
+    charstrings = {}
+    for g, w in [("A", 400)] + [(names[cp], w) for cp, w in inks.items()]:
+        pen = T2CharStringPen(0, None)
+        pen.moveTo((10, 0))
+        pen.lineTo((10 + w, 0))
+        pen.lineTo((10 + w, 500))
+        pen.closePath()
+        charstrings[g] = pen.getCharString()
+    charstrings[".notdef"] = T2CharStringPen(0, None).getCharString()
+    fb = FontBuilder(1000, isTTF=False)
+    fb.setupGlyphOrder(order)
+    fb.setupCharacterMap({ord("A"): "A", **{cp: names[cp] for cp in names},
+                          **dict(cmap_extra)})
+    fb.setupCFF("T", {}, charstrings, {})
+    fb.setupHorizontalMetrics({g: (600, 0) for g in order})
+    fb.setupHorizontalHeader(ascent=800, descent=-200)
+    fb.setupNameTable({"familyName": "T", "styleName": "R"})
+    fb.setupOS2()
+    fb.setupPost()
+    return fb.font
+
+
+def test_add_missing_from_sans_fills_only_what_the_upright_also_draws():
+    """Three rules at once: a codepoint the face already has is left
+    alone, one the upright faces do not draw is not taken even though
+    the donor has it, and what is taken is one cell wide."""
+    face = _cff_with_greek({0x03B1: 300})              # alpha already drawn
+    donor = _cff_with_greek({0x03B1: 300, 0x03B2: 700,
+                             0x03B3: 300, 0x03B4: 300})
+    before = face.getBestCmap()[0x03B1]
+    added, condensed = build_latin.add_missing_from_sans(
+        face, donor, {0x03B1, 0x03B2, 0x03B4})        # gamma withheld
+    assert (added, condensed) == (2, 1)                # beta's 700 does not fit
+    cmap = face.getBestCmap()
+    assert 0x03B3 not in cmap                          # not in the upright set
+    assert cmap[0x03B1] == before                      # untouched
+    assert {cmap[0x03B2], cmap[0x03B4]} <= set(face.getGlyphOrder())
+    for cp in (0x03B2, 0x03B4):
+        assert face["hmtx"].metrics[cmap[cp]][0] == build_latin.CELL
+
+
+def test_add_missing_from_sans_seats_the_ink_in_the_cell():
+    """What is added is centred, and condensed only as far as the cell
+    less a bearing at each side — cell_fit's rule, reaching the glyph."""
+    face = _cff_with_greek({})
+    donor = _cff_with_greek({0x03B2: 700, 0x03B4: 300})
+    build_latin.add_missing_from_sans(face, donor, {0x03B2, 0x03B4})
+    cmap, gs = face.getBestCmap(), face.getGlyphSet()
+    wide = build._bounds(gs, cmap[0x03B2])
+    narrow = build._bounds(gs, cmap[0x03B4])
+    bearing = build.LETTER_BEARING
+    assert (round(wide[0]), round(wide[2])) == (bearing,
+                                                build_latin.CELL - bearing)
+    assert round(narrow[2] - narrow[0]) == 300         # not condensed
+    assert round(narrow[0]) == round((build_latin.CELL - 300) / 2)

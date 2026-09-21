@@ -35,6 +35,7 @@ ACTION = Path(".github/actions/fetch-upstreams/action.yml")
 
 SHS_REPO = "adobe-fonts/source-han-sans"
 SCP_REPO = "adobe-fonts/source-code-pro"
+SS_REPO = "adobe-fonts/source-sans"
 MONA_REPO = "githubnext/monaspace"
 NF_REPO = "ryanoasis/nerd-fonts"
 
@@ -72,6 +73,7 @@ def scp_vf_zip(tag: str) -> str:
 SELECTORS = {
     "SHS_SHA": ("SHS_TAG",),
     "SCP_SHA": ("SCP_TAG", "SCP_VF_ZIP"),
+    "SS_SHA": ("SS_TAG",),
     "MONA_SHA": ("MONA_TAG",),
     "NF_SHA": ("NF_TAG",),
 }
@@ -85,6 +87,8 @@ def download_urls(pins: dict[str, str]) -> dict[str, str]:
         # SCP_TAG is stored %2F-encoded, so it drops into the path as-is.
         "SCP_SHA": f"https://github.com/{SCP_REPO}/releases/download/"
                    f"{pins['SCP_TAG']}/{pins['SCP_VF_ZIP']}",
+        "SS_SHA": f"https://github.com/{SS_REPO}/releases/download/"
+                  f"{pins['SS_TAG']}/VF-source-sans-{pins['SS_TAG']}.zip",
         "MONA_SHA": f"https://github.com/{MONA_REPO}/releases/download/"
                     f"{mona}/monaspace-variable-{mona}.zip",
         "NF_SHA": f"https://github.com/{NF_REPO}/releases/download/"
@@ -167,6 +171,7 @@ def main() -> int:
     new = {
         "SHS_TAG": latest_tag(SHS_REPO),
         **scp_pins,
+        "SS_TAG": latest_tag(SS_REPO),
         "MONA_TAG": latest_tag(MONA_REPO),
         "NF_TAG": latest_tag(NF_REPO),
     }

@@ -13,9 +13,10 @@ import bump_pins  # noqa: E402
 
 TAGS = {bump_pins.SHS_REPO: "2.005R",
         bump_pins.SCP_REPO: "2.042R-u/1.062R-i/1.026R-vf",
+        bump_pins.SS_REPO: "3.052R",
         bump_pins.MONA_REPO: "v1.400",
         bump_pins.NF_REPO: "v3.4.0"}
-SHAS = {"SHS_SHA": "a" * 64, "SCP_SHA": "b" * 64,
+SHAS = {"SHS_SHA": "a" * 64, "SCP_SHA": "b" * 64, "SS_SHA": "9" * 64,
         "MONA_SHA": "c" * 64, "NF_SHA": "d" * 64}
 
 
@@ -23,6 +24,7 @@ def _action(tmp_path, **over):
     pins = {"SHS_TAG": "2.005R",
             "SCP_TAG": "2.042R-u%2F1.062R-i%2F1.026R-vf",
             "SCP_VF_ZIP": "VF-source-code-VF-1.026R.zip",
+            "SS_TAG": "3.052R",
             "MONA_TAG": "v1.400",
             "NF_TAG": "v3.4.0",
             **SHAS, **over}
@@ -45,7 +47,7 @@ def test_scp_vf_zip_refuses_a_slash_tag_without_a_vf_part():
 
 def test_download_urls_names_one_asset_per_hash_pin():
     pins = {"SHS_TAG": "2.005R", "SCP_TAG": "T", "SCP_VF_ZIP": "z.zip",
-            "MONA_TAG": "v1.400", "NF_TAG": "v3.4.0"}
+            "SS_TAG": "3.052R", "MONA_TAG": "v1.400", "NF_TAG": "v3.4.0"}
     urls = bump_pins.download_urls(pins)
     assert set(urls) == set(bump_pins.SELECTORS)
     assert urls["SCP_SHA"].endswith("/T/z.zip")          # tag drops in as-is
@@ -55,15 +57,15 @@ def test_download_urls_names_one_asset_per_hash_pin():
 def test_hash_pins_takes_the_new_hash_when_the_tag_moved(monkeypatch):
     current = {"MONA_TAG": "v1.400", **SHAS,
                "SHS_TAG": "2.005R", "SCP_TAG": "T", "SCP_VF_ZIP": "z.zip",
-               "NF_TAG": "v3.4.0"}
+               "SS_TAG": "3.052R", "NF_TAG": "v3.4.0"}
     new = dict(current, MONA_TAG="v1.500")
     monkeypatch.setattr(bump_pins, "digest",
-                        lambda url: "e" * 64 if "v1.500" in url
+                        lambda url: "9" * 64 if "v1.500" in url
                         else SHAS[next(k for k, u in
                                        bump_pins.download_urls(new).items()
                                        if u == url)])
     got = bump_pins.hash_pins(current, new)
-    assert got["MONA_SHA"] == "e" * 64
+    assert got["MONA_SHA"] == "9" * 64
     assert got["SHS_SHA"] == SHAS["SHS_SHA"]
 
 
@@ -71,7 +73,7 @@ def test_hash_pins_refuses_an_asset_replaced_under_an_unmoved_tag(monkeypatch):
     """The case the hashes exist for. Rewriting the pin here would launder
     exactly what it guards, so it has to stop."""
     current = {"SHS_TAG": "2.005R", "SCP_TAG": "T", "SCP_VF_ZIP": "z.zip",
-               "MONA_TAG": "v1.400", "NF_TAG": "v3.4.0", **SHAS}
+               "SS_TAG": "3.052R", "MONA_TAG": "v1.400", "NF_TAG": "v3.4.0", **SHAS}
     new = dict(current)                      # nothing moved
     monkeypatch.setattr(bump_pins, "digest",
                         lambda url: "f" * 64 if "source-han-sans" in url
@@ -84,7 +86,7 @@ def test_hash_pins_refuses_an_asset_replaced_under_an_unmoved_tag(monkeypatch):
 
 def test_hash_pins_accepts_an_unmoved_tag_whose_asset_is_unchanged(monkeypatch):
     current = {"SHS_TAG": "2.005R", "SCP_TAG": "T", "SCP_VF_ZIP": "z.zip",
-               "MONA_TAG": "v1.400", "NF_TAG": "v3.4.0", **SHAS}
+               "SS_TAG": "3.052R", "MONA_TAG": "v1.400", "NF_TAG": "v3.4.0", **SHAS}
     monkeypatch.setattr(bump_pins, "digest",
                         lambda url: SHAS[next(k for k, u in
                                               bump_pins.download_urls(current).items()
@@ -104,6 +106,7 @@ def test_main_leaves_the_file_alone_when_nothing_moved(monkeypatch, tmp_path,
                                 {"SHS_TAG": "2.005R",
                                  "SCP_TAG": "2.042R-u%2F1.062R-i%2F1.026R-vf",
                                  "SCP_VF_ZIP": "VF-source-code-VF-1.026R.zip",
+                                 "SS_TAG": "3.052R",
                                  "MONA_TAG": "v1.400",
                                  "NF_TAG": "v3.4.0"}).items() if u == url)])
     out = tmp_path / "gh_out"
@@ -124,16 +127,16 @@ def test_main_writes_the_moved_tag_and_its_new_hash(monkeypatch, tmp_path,
     old_urls = bump_pins.download_urls(
         {"SHS_TAG": "2.005R", "SCP_TAG": "2.042R-u%2F1.062R-i%2F1.026R-vf",
          "SCP_VF_ZIP": "VF-source-code-VF-1.026R.zip",
-         "MONA_TAG": "v1.400", "NF_TAG": "v3.4.0"})
+         "SS_TAG": "3.052R", "MONA_TAG": "v1.400", "NF_TAG": "v3.4.0"})
     monkeypatch.setattr(bump_pins, "digest",
-                        lambda url: "e" * 64 if "v1.500" in url
+                        lambda url: "9" * 64 if "v1.500" in url
                         else SHAS[next(k for k, u in old_urls.items() if u == url)])
     out = tmp_path / "gh_out"
     monkeypatch.setenv("GITHUB_OUTPUT", str(out))
     assert bump_pins.main() == 0
     text = action.read_text()
     assert 'echo "MONA_TAG=v1.500"' in text
-    assert f'echo "MONA_SHA={"e" * 64}"' in text
+    assert f'echo "MONA_SHA={"9" * 64}"' in text
     assert f'echo "SHS_SHA={SHAS["SHS_SHA"]}"' in text      # untouched
     assert "changed=true" in out.read_text()
     summary = capsys.readouterr().out

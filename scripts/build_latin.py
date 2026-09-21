@@ -154,6 +154,60 @@ def add_missing_from_mona(font, mona, chars, dy, k):
     print(f"  one-cell glyphs SCP lacks, from Monaspace: {len(new)}")
 
 
+# Greek and Cyrillic, which Source Code Pro Italic does not draw.
+# Measured on the pinned releases: the upright VF carries 234 codepoints
+# in these two blocks, the italic VF carries one -- U+03C0, the letter a
+# programmer types. Adobe drew that italic by hand and stopped there; it
+# is a deliberate edge, not an oversight, so the gap does not close by
+# waiting.
+#
+# Source Sans 3 Italic is the nearest thing to what Source Code Pro
+# Italic would have drawn. Source Code Pro was derived from Source Sans,
+# and measured at wght 400 and 700 the two italics agree exactly on the
+# italic angle (-11.0) and the cap height, and to a unit on the
+# x-height. It is proportional where this family is not, so each glyph
+# is centred in the cell and condensed only where its ink will not fit
+# -- the rule narrow_letters applies to these same two scripts on the JP
+# side, for the same reason.
+SANS_BLOCKS = ((0x0370, 0x04FF),)
+
+
+def add_missing_from_sans(font, sans, upright):
+    """Append the Greek and Cyrillic of `sans` for the codepoints this
+    face has none, one cell each. Returns how many were added and how
+    many of those had to be condensed.
+
+    `upright` is the codepoint set the upright faces draw, and bounds
+    this one: Source Sans covers ten letters in these blocks that Source
+    Code Pro's upright does not (Greek sho, Cyrillic ka with hook and
+    the like), and a family whose italic reaches codepoints its upright
+    cannot is a defect of its own -- the one this whole change is
+    undoing, pointing the other way."""
+    td, cmap, fd_index, private, vdon = build.append_context(font)
+    sans_cm, sans_gs = sans.getBestCmap(), sans.getGlyphSet()
+    new, condensed = {}, 0
+    for lo, hi in SANS_BLOCKS:
+        for cp in range(lo, hi + 1):
+            if cp in cmap or cp not in sans_cm or cp not in upright:
+                continue
+            src = sans_cm[cp]
+            # the same rule narrow_letters puts on these two scripts on
+            # the JP side, from the same place
+            sx, dx = build.cell_fit(build._bounds(sans_gs, src), CELL,
+                                    build.LETTER_BEARING)
+            condensed += sx != 1.0
+            pen = build.T2CharStringPen(build.pen_width(private, CELL), sans_gs)
+            build.draw_clean([(sans_gs, src, (sx, 0, 0, 1, dx, 0))], pen)
+            name = build.alloc_glyph_name(font)
+            build.append_glyph(font, td, name, pen.getCharString(private=private),
+                               fd_index, CELL, None, vdon)
+            new[cp] = name
+    build.set_cmap(font, new, add_new=True)
+    print(f"  Greek and Cyrillic SCP Italic lacks, from Source Sans: "
+          f"{len(new)} ({condensed} condensed)")
+    return len(new), condensed
+
+
 def remap_scp_stylistic_sets(font):
     """SCP's ss01-ss07 become ss11-ss17 (their UI names come along), so
     ss01-ss08 are free for the ligature groups — the same numbering the
@@ -166,11 +220,11 @@ def remap_scp_stylistic_sets(font):
     build.sort_feature_list(gsub)
 
 
-def credits_from(scp, mona):
+def credits_from(*donors):
     return [(label, donor["name"].getDebugName(0)
              or donor["name"].getDebugName(7),
              donor["name"].getDebugName(9))
-            for label, donor in (("Source Code Pro", scp), ("Monaspace", mona))]
+            for label, donor in donors]
 
 
 def use_typo_metrics(font):
@@ -226,7 +280,13 @@ def build_face(job):
     mona_src = build._vf_source(env["MONA_VF"], MONA_K,
                                 {"wght": 0, "wdth": 100, "slnt": 0})
     mona = mona_src.matched(target, ref_angle)
-    credits = credits_from(scp, mona)
+    # the italic faces' Greek and Cyrillic, matched on the same '=' bar
+    # as Monaspace is. No slant argument: Source Sans ships a drawn
+    # italic at the same -11 degrees, so there is no residual to shear
+    sans = (build._vf_source(env["SS_VF_I"], 1.0, {"wght": 0}).matched(target)
+            if italic else None)
+    credits = credits_from(("Source Code Pro", scp), ("Monaspace", mona),
+                           *([("Source Sans", sans)] if italic else []))
 
     base = static_base(_copy_instance(scp))
     round_outlines(base)
@@ -237,6 +297,8 @@ def build_face(job):
     build.replace_from_mona(base, mona,
                             build.MONA_STANDALONE + build.MONA_AMBIGUOUS, dy, MONA_K)
     add_missing_from_mona(base, mona, build.MONA_AMBIGUOUS, dy, MONA_K)
+    if sans is not None:
+        add_missing_from_sans(base, sans, upright_cmap(env["SCP_VF_U"]))
     remap_scp_stylistic_sets(base)
     build.add_gsub(base, added, alts, build.LIGATURES)
     if "DSIG" in base:
@@ -265,6 +327,13 @@ def build_face(job):
             f"glyphs={base['maxp'].numGlyphs} -> {out.name}")
 
 
+def upright_cmap(path):
+    """The codepoints the upright faces draw, read straight off the
+    upright VF — the italic build's bound, and the same set at every
+    instance, so no instancing is needed to ask."""
+    return set(TTFont(path, lazy=True).getBestCmap())
+
+
 def _copy_instance(scp):
     """VFSource caches its converged instance; convertCFF2ToCFF mutates,
     so work on a fresh load of the same bytes."""
@@ -274,7 +343,10 @@ def _copy_instance(scp):
     return TTFont(buf)
 
 
-VF_ENV = ("SCP_VF_U", "SCP_VF_I", "MONA_VF")   # all required
+# all required, the italic donor included: a build that skipped it would
+# ship italic faces silently missing two scripts, which is the state
+# this donor was added to end
+VF_ENV = ("SCP_VF_U", "SCP_VF_I", "SS_VF_I", "MONA_VF")
 
 
 def main():

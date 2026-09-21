@@ -2410,3 +2410,42 @@ def test_copy_line_metrics_takes_the_line_from_the_latin_and_pins_the_win_box():
     assert build.WIN_METRICS == (1160, 454)
     # deep enough for the shade blocks, and not the typo descender
     assert build.WIN_METRICS[1] >= 454 > 288
+
+
+def test_cell_fit_centres_what_fits_and_condenses_only_what_does_not():
+    """The rule narrow_letters and build_latin.add_missing_from_sans
+    share. Condensing costs stroke weight, so a glyph that already fits
+    keeps its drawn width and only its position moves."""
+    cell, bearing = 600, 8
+    room = cell - 2 * bearing
+
+    # fits: untouched horizontally, ink centred in the cell. 400 of ink
+    # in 600 leaves 100 either side, which is where it was already drawn
+    sx, dx = build.cell_fit((100, 0, 500, 700), cell, bearing)
+    assert (sx, dx) == (1.0, 0)
+    assert (100 + dx, 500 + dx) == (100, 500)
+
+    # too wide: condensed to exactly the room, then centred, so the ink
+    # lands on the bearing at each side
+    box = (0, 0, 918, 742)                       # Ж as Source Han Sans draws it
+    sx, dx = build.cell_fit(box, cell, bearing)
+    assert sx == room / 918
+    left, right = box[0] * sx + dx, box[2] * sx + dx
+    assert (round(left), round(right)) == (bearing, cell - bearing)
+
+    # exactly the room: still not condensed
+    sx, _ = build.cell_fit((0, 0, room, 100), cell, bearing)
+    assert sx == 1.0
+
+    # a blank glyph has nothing to seat
+    assert build.cell_fit(None, cell, bearing) == (1.0, 0)
+
+
+def test_cell_fit_ignores_where_the_ink_sits_when_centring():
+    """Only the ink's width decides the scale, and only its position
+    decides the offset: a glyph drawn far off its origin still lands in
+    the middle of the cell."""
+    for x0 in (-300, 0, 250):
+        sx, dx = build.cell_fit((x0, 0, x0 + 400, 500), 600, 8)
+        assert sx == 1.0
+        assert round(x0 + dx) == 100          # (600 - 400) / 2

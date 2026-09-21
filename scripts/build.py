@@ -3554,6 +3554,29 @@ LETTER_BLOCKS = ((0x0370, 0x04FF),)
 LETTER_BEARING = 8
 
 
+def cell_fit(box, cell=CELL, bearing=LETTER_BEARING):
+    """(x scale, x offset) that seats `box`'s ink in one cell: centred,
+    and condensed only where the ink will not fit the cell less a
+    bearing at each side — and then only as far as that.
+
+    Condensing costs stroke weight, and a letter squeezed beside letters
+    that were not reads as thin and small inside its own alphabet, so
+    the letters that need it are the only ones that get it. A glyph with
+    no ink is centred trivially.
+
+    Two callers share this rule: narrow_letters, condensing Source Han
+    Sans's proportional Greek and Cyrillic on the JP side, and
+    build_latin.add_missing_from_sans, seating Source Sans's proportional
+    Greek and Cyrillic in the italic Latin faces. They are the same two
+    scripts for the same reason, and the rule must not drift apart."""
+    if not box:
+        return 1.0, 0
+    ink = box[2] - box[0]
+    room = cell - 2 * bearing
+    sx = 1.0 if ink <= room else room / ink
+    return sx, (cell - ink * sx) / 2 - box[0] * sx
+
+
 def narrow_letters(font, cell, blocks=LETTER_BLOCKS):
     """Condense an alphabetic glyph Source Han Sans draws wider than the
     cell into it, in place.
@@ -3604,14 +3627,11 @@ def narrow_letters(font, cell, blocks=LETTER_BLOCKS):
                   f"{sorted(hex(c) for c in reached[name] - wanted)}")
             continue
         private = glyph_private(font, td, name)
-        # scaled ONLY where the ink does not fit, and then just enough:
-        # condensing costs stroke weight, and a letter squeezed beside
-        # letters that were not stands out as thin and small in its own
-        # alphabet. Scaling everything by cell/advance did that to 61 of
-        # these 115, taking Ж's stem from 83 units to 54 while Г kept
-        # 83. Twenty-eight of them are genuinely wider than the cell
-        sx = 1.0 if ink <= room else room / ink
-        dx = (cell - (box[2] - box[0]) * sx) / 2 - box[0] * sx if box else 0
+        # cell_fit scales ONLY where the ink does not fit, and then just
+        # enough. Scaling everything by cell/advance instead did that to
+        # 61 of these 115, taking Ж's stem from 83 units to 54 while Г
+        # kept 83. Twenty-eight are genuinely wider than the cell
+        sx, dx = cell_fit(box, cell, LETTER_BEARING)
         pen = T2CharStringPen(pen_width(private, cell), gs)
         gs[name].draw(TransformPen(pen, (sx, 0, 0, 1, dx, 0)))
         drawn[name] = pen.getCharString(private=private)

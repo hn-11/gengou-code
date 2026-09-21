@@ -1,8 +1,9 @@
 # Contributing
 
 Gengou JP は上流フォント（Source Han Sans JP / Source Code Pro /
-Monaspace）を CI 上で合成して作られています。ソースグリフを直接同梱して
-いないため、ビルドには毎回それらの上流ファイルが必要です。
+Source Sans 3 / Monaspace）を CI 上で合成して作られています。ソース
+グリフを直接同梱していないため、ビルドには毎回それらの上流ファイルが
+必要です。
 
 ## ローカルビルド
 
@@ -19,6 +20,7 @@ Monaspace VF から欧文レイヤー Gengouを `dist/latin` に組み、
 |------|------|------|--------|
 | `SCP_VF_U` | `build_latin.py` / `build_latin_vf.py` | `SourceCodeVF-Upright.otf` へのパス | [Source Code Pro Releases](https://github.com/adobe-fonts/source-code-pro/releases) |
 | `SCP_VF_I` | 同上 | `SourceCodeVF-Italic.otf` へのパス | 同上 |
+| `SS_VF_I` | 同上 | `SourceSans3VF-Italic.otf` へのパス（斜体のギリシャ・キリル） | [Source Sans Releases](https://github.com/adobe-fonts/source-sans/releases) |
 | `MONA_VF` | 同上 | Monaspace の可変フォント（例: `Monaspace Neon Var.ttf`） | [Monaspace Releases](https://github.com/githubnext/monaspace/releases) |
 | `SHS_DIR` | `build.py` | `SourceHanSansJP-<Weight>.otf` が入ったディレクトリ | [Source Han Sans Releases](https://github.com/adobe-fonts/source-han-sans/releases) |
 | `NF_SYMBOLS` | `nerdpatch.py` | `SymbolsNerdFontMono-Regular.ttf` へのパス | [Nerd Fonts Releases](https://github.com/ryanoasis/nerd-fonts/releases) の `NerdFontsSymbolsOnly.zip` |

@@ -14,6 +14,12 @@ This Font Software is a derivative work combining:
     with Reserved Font Name 'Source'.
     https://github.com/adobe-fonts/source-code-pro
 
+  - Source Sans 3 (the Greek and Cyrillic of the italic faces, which
+    Source Code Pro Italic does not draw)
+    Copyright 2010-2023 Adobe (http://www.adobe.com/),
+    with Reserved Font Name 'Source'.
+    https://github.com/adobe-fonts/source-sans
+
   - Monaspace (the ligatures, the standalone ASCII punctuation, and
     the full-width arrows cut from the ligatures)
     Copyright (c) 2023 GitHub, Inc.,
