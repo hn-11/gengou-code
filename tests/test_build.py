@@ -1189,6 +1189,30 @@ def test_narrow_letters_leaves_a_shared_glyph_alone():
     assert font["hmtx"].metrics["shared"][0] == 918
 
 
+def test_narrow_halfwidth_leaves_the_latin_donors_glyph_alone():
+    """The won sign is Halfwidth and came from the Latin donor a cell
+    wide; at Bold Italic its ink is 605 wide, and judged on ink width
+    alone this pass condensed it to zero side bearings at that one
+    weight while every other weight and the Latin face kept the glyph
+    as drawn. A glyph the donor supplied is its own, as it is for
+    narrow_letters."""
+    font = _cff_font_with_widths({"won": 600, "jamo": 920}, x0=0)
+    # ink wider than the cell on both: 'won' is the donor's, 'jamo' is not
+    for g in ("won", "jamo"):
+        pen = T2CharStringPen(0, None)
+        pen.moveTo((-3, 0))
+        pen.lineTo((605, 0))
+        pen.lineTo((605, 500))
+        pen.closePath()
+        td = font["CFF "].cff.topDictIndex[0]
+        td.CharStrings[g] = pen.getCharString(private=td.Private)
+    font["cmap"].tables[0].cmap = {0x20A9: "won", 0xFFA1: "jamo"}
+    font._built = {"won"}
+    assert build.narrow_halfwidth(font, 600) == 1
+    assert font.getBestCmap()[0x20A9] == "won"        # untouched
+    assert font.getBestCmap()[0xFFA1] != "jamo"       # the jamo got its copy
+
+
 def test_narrow_halfwidth_condenses_a_shared_glyph_into_the_cell():
     """A Halfwidth codepoint whose glyph is the wide compatibility one
     gets its own copy, squeezed into the cell; the wide codepoint keeps

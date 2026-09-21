@@ -4283,19 +4283,29 @@ def narrow_halfwidth(font, cell):
     Runs before fit_to_grid, so the scale is Source Han Sans's own
     advance and not the grid step that pass would give it, and before
     widen_fullwidth, which must not widen the copies. A glyph that
-    already fits the cell is left for fit_to_grid to centre. Returns the
-    number made."""
+    already fits the cell is left for fit_to_grid to centre. A glyph
+    the Latin donor supplied is left alone altogether, as narrow_letters
+    leaves them: it is a cell wide by construction, and this pass's
+    ink-width test is the wrong question for it -- the won sign
+    (U+20A9, Halfwidth) came from Source Code Pro Italic with 605 units
+    of ink at Bold and 527-581 at the other weights, so Bold Italic
+    alone got a condensed copy with zero side bearings, 33 units left of
+    where SemiBold Italic draws it, while the Latin face at the same
+    weight keeps the donor's glyph as drawn. Returns the number made."""
     cmap = font.getBestCmap()
     hmtx = font["hmtx"]
     gs = font.getGlyphSet()
     cff = font["CFF "].cff
     td = cff[cff.fontNames[0]]
     vdon = vmtx_donor(font, fullwidth=False)
+    built = getattr(font, "_built", frozenset())
     made, new = {}, {}
     for cp, name in sorted(cmap.items()):
         adv = hmtx[name][0]
         if adv <= 0 or unicodedata.east_asian_width(chr(cp)) != "H":
             continue
+        if name in built:
+            continue                      # the Latin donor's, already a cell
         box = _bounds(gs, name)
         ink = (box[2] - box[0]) if box else 0
         if adv <= cell and ink <= cell:
