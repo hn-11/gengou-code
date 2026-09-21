@@ -186,7 +186,7 @@ def add_missing_from_sans(font, sans, upright):
     td, cmap, fd_index, private, vdon = build.append_context(font)
     sans_cm, sans_gs = sans.getBestCmap(), sans.getGlyphSet()
     new, condensed = {}, 0
-    # {donor glyph: ours} and {ours: the x scale and offset cell_fit
+    # {donor glyph: [ours]} and {ours: the x scale and offset cell_fit
     # used}, for import_donor_base_anchors: an anchor is a point on the
     # outline and has to move with it
     donor_map, placements = {}, {}
@@ -206,7 +206,10 @@ def add_missing_from_sans(font, sans, upright):
             build.append_glyph(font, td, name, pen.getCharString(private=private),
                                fd_index, CELL, None, vdon)
             new[cp] = name
-            donor_map[src] = name
+            # one donor glyph can draw more than one codepoint (Source
+            # Sans draws U+03C6 and U+03D5 with a single 'phi'), so this
+            # collects our names rather than keeping the last
+            donor_map.setdefault(src, []).append(name)
             placements[name] = (sx, dx)
     build.set_cmap(font, new, add_new=True)
     anchors = build.import_donor_base_anchors(font, sans, donor_map, placements)

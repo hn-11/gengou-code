@@ -1607,6 +1607,9 @@ def import_donor_base_anchors(base, donor, glyph_map, placements):
     the one that must be used; the base's anchor is a point on the base,
     and that is the donor's to give. Mixing the two is not a compromise,
     it is how mark attachment is defined.
+
+    `glyph_map` is {donor glyph: [our names]} -- a list, because a donor
+    glyph can be the drawing for several codepoints.
     """
     pairs = pair_mark_lookups(base, donor)
     if not pairs:
@@ -1627,18 +1630,21 @@ def import_donor_base_anchors(base, donor, glyph_map, placements):
                         ours_sub.BaseArray.BaseRecord))
         for name, rec in zip(theirs_sub.BaseCoverage.glyphs,
                              theirs_sub.BaseArray.BaseRecord):
-            ours_name = glyph_map.get(name)
-            if ours_name is None or ours_name in have:
-                continue
-            sx, dx = placements.get(ours_name, (1.0, 0))
-            moved = otTables.BaseRecord()
-            moved.BaseAnchor = [_plain_anchor(a, sx, dx)
-                                for a in rec.BaseAnchor]
-            if not any(moved.BaseAnchor):
-                continue
-            rows.append((ours_name, moved))
-            have.add(ours_name)
-            added += 1
+            # one donor glyph can stand for more than one codepoint --
+            # Source Sans draws U+03C6 and U+03D5 with a single 'phi' --
+            # and each of ours wants its own copy of the anchor
+            for ours_name in glyph_map.get(name, ()):
+                if ours_name in have:
+                    continue
+                sx, dx = placements.get(ours_name, (1.0, 0))
+                moved = otTables.BaseRecord()
+                moved.BaseAnchor = [_plain_anchor(a, sx, dx)
+                                    for a in rec.BaseAnchor]
+                if not any(moved.BaseAnchor):
+                    continue
+                rows.append((ours_name, moved))
+                have.add(ours_name)
+                added += 1
         rows.sort(key=lambda pair: gid(pair[0]))
         ours_sub.BaseCoverage.glyphs = [g for g, _ in rows]
         ours_sub.BaseArray.BaseRecord = [r for _, r in rows]
@@ -1646,9 +1652,58 @@ def import_donor_base_anchors(base, donor, glyph_map, placements):
     return added
 
 
+def _our_names(glyphs, glyph_map, donor_cmap, our_cmap):
+    """Our names for a donor coverage: the glyphs we took from it, plus
+    any the donor and we both encode at the same codepoint. A donor
+    glyph that is neither (a contextual variant like 'uni0301.g', say)
+    drops out."""
+    out = []
+    for g in glyphs:
+        ours = glyph_map.get(g)
+        if ours:
+            out.extend(ours)
+            continue
+        cp = donor_cmap.get(g)
+        if cp is not None and cp in our_cmap:
+            out.append(our_cmap[cp])
+    return out
+
+
+def _coverage(glyphs, gid):
+    cov = otTables.Coverage()
+    cov.glyphs = sorted(set(glyphs), key=gid)
+    return cov
+
+
+def _chain_context_conditions(gsub, order, callees):
+    """[(backtrack, input, lookahead)] over the format-3 chain contexts
+    in `order` that call one of `callees` at the first input position --
+    each a list of donor glyph-name lists, in the subtable's own order
+    (backtrack runs outwards from the input, as the format stores it)."""
+    out = []
+    for i in order:
+        kind, subs = _unwrap(gsub.LookupList.Lookup[i])
+        if kind != 6:
+            continue
+        for st in subs:
+            if getattr(st, "Format", None) != 3:
+                continue
+            recs = getattr(st, "SubstLookupRecord", None) or ()
+            if not any(r.LookupListIndex in callees and r.SequenceIndex == 0
+                       for r in recs):
+                continue
+            if len(st.InputCoverage or ()) != 1:
+                continue      # one input glyph is all this copies
+            out.append(([c.glyphs for c in st.BacktrackCoverage or ()],
+                        st.InputCoverage[0].glyphs,
+                        [c.glyphs for c in st.LookAheadCoverage or ()]))
+    return out
+
+
 def import_donor_decompositions(base, donor, glyph_map):
     """Carry across the donor's 'ccmp' rules that take one of the
-    imported letters apart. Returns the number of rules copied.
+    imported letters apart, under the donor's own condition. Returns the
+    number of rules copied.
 
     Some letters are positioned by decomposition rather than by an
     anchor: both Adobe donors take Cyrillic ï (U+0457) to a dotless i
@@ -1657,6 +1712,16 @@ def import_donor_decompositions(base, donor, glyph_map):
     nothing to give those -- there is no base anchor to copy, because
     the letter is never a base.
 
+    The condition comes across with the rule. The donor does not name
+    the decomposition in its feature; it names chain contexts that call
+    it, and the context is the whole point: ï comes apart BEFORE a
+    combining acute, and is one drawn letter everywhere else. Copied
+    without it, every Ukrainian ï in ordinary text was replaced by the
+    Latin dotless i -- a different letterform, 23% wider in the ink --
+    plus a floating diaeresis, and the drawn ï we had just imported was
+    never reached. So a rule no copied context can reach is dropped
+    rather than made unconditional.
+
     Only one-to-many rules, and only where every output is a glyph this
     face already has at the same codepoint: the face's own ccmp then
     carries on from there (it already composes the diaeresis and the
@@ -1664,9 +1729,10 @@ def import_donor_decompositions(base, donor, glyph_map):
     Nothing is grafted, so a rule whose outputs are unencoded in the
     donor is left behind rather than guessed at.
 
-    The new lookup goes to the front of the LookupList, because a
-    shaper runs a stage's lookups in that order and this one has to
-    happen before the marks are composed."""
+    Both new lookups go to the front of the LookupList, because a shaper
+    runs a stage's lookups in that order and this has to happen before
+    the marks are composed. The feature names the chain context only:
+    naming the substitution itself is what would strip the condition."""
     if "GSUB" not in donor or "GSUB" not in base:
         return 0
     ours = base["GSUB"].table
@@ -1674,19 +1740,17 @@ def import_donor_decompositions(base, donor, glyph_map):
                if fr.FeatureTag == "ccmp"]
     if not records:
         return 0
+    theirs = donor["GSUB"].table
     donor_cmap = {gn: cp for cp, gn in donor.getBestCmap().items()}
     our_cmap = base.getBestCmap()
-    order, _ = _ccmp_lookups(donor["GSUB"].table)
+    order, _ = _ccmp_lookups(theirs)
+    callees = {i for i in order
+               if _unwrap(theirs.LookupList.Lookup[i])[0] == 2}   # MultipleSubst
     mapping = {}
-    for i in order:
-        kind, subs = _unwrap(donor["GSUB"].table.LookupList.Lookup[i])
-        if kind != 2:                       # MultipleSubst
-            continue
+    for i in sorted(callees):
+        _, subs = _unwrap(theirs.LookupList.Lookup[i])
         for sub in subs:
             for src, seq in getattr(sub, "mapping", {}).items():
-                ours_src = glyph_map.get(src)
-                if ours_src is None or ours_src in mapping:
-                    continue
                 out = []
                 for g in seq:
                     cp = donor_cmap.get(g)
@@ -1694,18 +1758,61 @@ def import_donor_decompositions(base, donor, glyph_map):
                         out = None
                         break
                     out.append(our_cmap[cp])
-                if out:
-                    mapping[ours_src] = out
+                if not out:
+                    continue
+                for ours_src in glyph_map.get(src, ()):
+                    mapping.setdefault(ours_src, out)
+    if not mapping:
+        return 0
+    gid = base.getGlyphID
+    contexts = []
+    for back, inputs, look in _chain_context_conditions(theirs, order, callees):
+        got = [g for g in _our_names(inputs, glyph_map, donor_cmap, our_cmap)
+               if g in mapping]
+        sides = [_our_names(c, glyph_map, donor_cmap, our_cmap)
+                 for c in back + look]
+        # a context we cannot reproduce in full is not narrowed, it is
+        # dropped: a missing lookahead would widen it to "anywhere"
+        if not got or not all(sides):
+            continue
+        contexts.append((got, [_our_names(c, glyph_map, donor_cmap, our_cmap)
+                               for c in back],
+                         [_our_names(c, glyph_map, donor_cmap, our_cmap)
+                          for c in look]))
+    reached = {g for got, _, _ in contexts for g in got}
+    mapping = {k: v for k, v in mapping.items() if k in reached}
     if not mapping:
         return 0
     st = otTables.MultipleSubst()
     st.Format = 1
     st.mapping = mapping
-    lookup = otTables.Lookup()
-    lookup.LookupType, lookup.LookupFlag, lookup.SubTable = 2, 0, [st]
-    lookup.SubTableCount = 1
-    _insert_lookups_first(ours, [lookup])
+    multi = otTables.Lookup()
+    multi.LookupType, multi.LookupFlag, multi.SubTable = 2, 0, [st]
+    multi.SubTableCount = 1
+
+    chain = otTables.Lookup()
+    chain.LookupType, chain.LookupFlag = 6, 0
+    chain.SubTable = []
+    for got, back, look in contexts:
+        sub = otTables.ChainContextSubst()
+        sub.Format = 3
+        sub.BacktrackCoverage = [_coverage(c, gid) for c in back]
+        sub.BacktrackGlyphCount = len(sub.BacktrackCoverage)
+        sub.InputCoverage = [_coverage([g for g in got if g in mapping], gid)]
+        sub.InputGlyphCount = 1
+        sub.LookAheadCoverage = [_coverage(c, gid) for c in look]
+        sub.LookAheadGlyphCount = len(sub.LookAheadCoverage)
+        rec = otTables.SubstLookupRecord()
+        # index 1: the MultipleSubst below, once both sit at the front
+        rec.SequenceIndex, rec.LookupListIndex = 0, 1
+        sub.SubstLookupRecord = [rec]
+        sub.SubstCount = 1
+        chain.SubTable.append(sub)
+    chain.SubTableCount = len(chain.SubTable)
+    _insert_lookups_first(ours, [chain, multi])
     for fr in records:
+        # the chain only: the feature naming the substitution directly
+        # is exactly what would run it with its context thrown away
         fr.Feature.LookupListIndex = sorted(set(fr.Feature.LookupListIndex) | {0})
         fr.Feature.LookupCount = len(fr.Feature.LookupListIndex)
     return len(mapping)
