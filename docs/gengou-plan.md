@@ -64,12 +64,15 @@ SHCJ は上流から外れた。
   nameID 1 だけ短い別名にする手はあるが（本家 font-patcher の
   `--windows` 相当）、ピッカーによって別名で出るのと引き換え。
   Nerd Fonts 本家の命名を優先して現状維持、要判断。
-- **`drop_features` は FeatureRecord を消すだけで、参照されなくなった
-  Lookup を残す**。`kern` / `halt` / `palt` の Lookup が JP 各面に 36 KB
-  ぶん残っている（GPOS 46,320 → 9,874 bytes 相当。数値は Regular 実測で、
-  ラウンド 38〜41 が移した mark / mkmk / ccmp ぶん両辺とも 4,564 bytes
-  増えている）。索引の張り替えを伴うので、圧縮後の実利（30 面で
-  0.2 MB 程度）と天秤にかけて未着手。
+- ~~**`drop_features` は参照されなくなった Lookup を残す**~~ **解決**
+  （`prune_orphan_lookups`）。FeatureList から到達可能性を辿り、文脈
+  依存 Lookup が呼ぶ先も再帰的に追って、届かない Lookup を捨てて索引を
+  張り替える。JP Regular の実測で **GPOS 46,320 → 9,922 bytes**
+  （−79%）、GSUB 35,102 → 34,582、ファイル全体で 1 面あたり 36,916
+  bytes 減（30 面で約 1.1 MB）。`golden.py` で改修前後を突き合わせ、
+  cmap・送り幅・シェーピング 665 通り・アウトライン 16,831 グリフ・
+  メタデータがすべて一致することを確認済み。JSTF を持つフォントは同じ
+  LookupList を索引するので触らない。
 - **リリースの faces ジョブは欧文の静的面を 2 回ずつ作っている**
   （base と Term が同じドナーを使うため、10 面ぶんを 20 回）。欧文を
   別ジョブにして artifact で渡せば省けるが、アップロード / ダウンロード

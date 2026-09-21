@@ -3465,6 +3465,84 @@ def drop_features(font, tags):
             remap_required(ls, remap)
 
 
+def _lookup_records(root):
+    """Every Subst/PosLookupRecord anywhere inside a subtable.
+
+    The contextual formats nest them at different depths (format 3 holds
+    them on the subtable, formats 1 and 2 one or two rule objects down),
+    but fontTools gives them the same shape wherever they sit — a
+    SequenceIndex and a LookupListIndex — so the walk finds them without
+    a catalogue of formats to fall out of date."""
+    out, stack, seen = [], [root], set()
+    while stack:
+        obj = stack.pop()
+        if id(obj) in seen:
+            continue
+        seen.add(id(obj))
+        if isinstance(obj, (list, tuple)):
+            stack.extend(obj)
+            continue
+        fields = getattr(obj, "__dict__", None)
+        if not fields:
+            continue
+        if "LookupListIndex" in fields and "SequenceIndex" in fields:
+            out.append(obj)
+            continue
+        stack.extend(fields.values())
+    return out
+
+
+def prune_orphan_lookups(font):
+    """Drop the lookups nothing reaches any more. Returns {table: count}.
+
+    drop_features removes a FeatureRecord but not the lookups it was the
+    only route to, and Source Han Sans's kern / halt / palt left 36 KB of
+    unreachable GPOS in every JP face that way. Reachability starts at
+    the FeatureList — every LangSys's features and its required one are
+    indices into it, and drop_features has already pruned those — and
+    follows the contextual lookups' own references, which is why one pass
+    over the features is not enough.
+
+    A font with a JSTF is left alone: JSTF indexes this same LookupList
+    and nothing here would renumber it."""
+    if "JSTF" in font:
+        return {}
+    freed = {}
+    for tag, unwrap in (("GSUB", _unwrap), ("GPOS", _unwrap_pos)):
+        if tag not in font:
+            continue
+        table = font[tag].table
+        ll = getattr(table, "LookupList", None)
+        if ll is None or not ll.Lookup:
+            continue
+        lookups = ll.Lookup
+        reach, stack = set(), [i for fr in table.FeatureList.FeatureRecord
+                               for i in fr.Feature.LookupListIndex]
+        while stack:
+            i = stack.pop()
+            if i in reach or not 0 <= i < len(lookups):
+                continue
+            reach.add(i)
+            for sub in unwrap(lookups[i])[1]:
+                stack.extend(r.LookupListIndex for r in _lookup_records(sub))
+        if len(reach) == len(lookups):
+            continue
+        keep = sorted(reach)
+        remap = {old: new for new, old in enumerate(keep)}
+        for fr in table.FeatureList.FeatureRecord:
+            fr.Feature.LookupListIndex = [remap[i]
+                                          for i in fr.Feature.LookupListIndex]
+            fr.Feature.LookupCount = len(fr.Feature.LookupListIndex)
+        for i in keep:
+            for sub in unwrap(lookups[i])[1]:
+                for rec in _lookup_records(sub):
+                    rec.LookupListIndex = remap[rec.LookupListIndex]
+        ll.Lookup = [lookups[i] for i in keep]
+        ll.LookupCount = len(keep)
+        freed[tag] = len(lookups) - len(keep)
+    return freed
+
+
 def feature_map(font, tag):
     """{glyph: substitute} over every Single / Alternate subst reachable
     under `tag` — Source Han Sans's own hwid / fwid forms. The first
@@ -4409,6 +4487,10 @@ def build_face(job):
     # horizontal metrics, which a fixed cell has no use for. The
     # vertical features are left alone (the faces keep vmtx/vhea)
     drop_features(base, {"pwid", "palt", "kern", "halt"})
+    freed = prune_orphan_lookups(base)
+    if freed:
+        print("  lookups no feature reaches any more: "
+              + ", ".join(f"{t} {n}" for t, n in sorted(freed.items())))
     # the two-cell forms under fwid: the arrows redrawn from the
     # ligatures so they share their head, everything else Source Han
     # Sans's own — the full-width glyph the one-cell default replaced

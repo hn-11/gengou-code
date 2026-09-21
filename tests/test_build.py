@@ -2449,3 +2449,120 @@ def test_cell_fit_ignores_where_the_ink_sits_when_centring():
         sx, dx = build.cell_fit((x0, 0, x0 + 400, 500), 600, 8)
         assert sx == 1.0
         assert round(x0 + dx) == 100          # (600 - 400) / 2
+
+
+# --- prune_orphan_lookups --------------------------------------------------
+
+def _single(mapping):
+    st = otTables.SingleSubst()
+    st.mapping = dict(mapping)
+    lk = otTables.Lookup()
+    lk.LookupType, lk.LookupFlag, lk.SubTable = 1, 0, [st]
+    lk.SubTableCount = 1
+    return lk
+
+
+def _chain_f3(*targets):
+    """A format 3 chain context: its records sit on the subtable."""
+    st = otTables.ChainContextSubst()
+    st.Format = 3
+    st.SubstLookupRecord = []
+    for seq, idx in enumerate(targets):
+        rec = otTables.SubstLookupRecord()
+        rec.SequenceIndex, rec.LookupListIndex = seq, idx
+        st.SubstLookupRecord.append(rec)
+    lk = otTables.Lookup()
+    lk.LookupType, lk.LookupFlag, lk.SubTable = 6, 0, [st]
+    lk.SubTableCount = 1
+    return lk
+
+
+def _chain_f1(target):
+    """A format 1 chain context, whose records sit two objects down —
+    the nesting _lookup_records has to walk rather than enumerate."""
+    rec = otTables.SubstLookupRecord()
+    rec.SequenceIndex, rec.LookupListIndex = 0, target
+    rule = otTables.ChainSubRule()
+    rule.SubstLookupRecord = [rec]
+    rule.Backtrack, rule.Input, rule.LookAhead = [], [], []
+    rs = otTables.ChainSubRuleSet()
+    rs.ChainSubRule = [rule]
+    st = otTables.ChainContextSubst()
+    st.Format = 1
+    st.ChainSubRuleSet = [rs]
+    lk = otTables.Lookup()
+    lk.LookupType, lk.LookupFlag, lk.SubTable = 6, 0, [st]
+    lk.SubTableCount = 1
+    return lk
+
+
+class _FakeLookupList:
+    def __init__(self, lookups):
+        self.Lookup = list(lookups)
+        self.LookupCount = len(self.Lookup)
+
+
+def _gsub_with(lookups, feature_lookups):
+    gsub = FakeGSUB([FakeFeatureRecord("calt", FakeFeature(list(feature_lookups)))],
+                    [])
+    gsub.LookupList = _FakeLookupList(lookups)
+    return gsub
+
+
+def test_prune_orphan_lookups_keeps_what_a_feature_reaches_through_a_chain():
+    """Reachability, not membership: lookup 3 is in no feature at all and
+    survives because a chain context calls it, while 1 and 2 go."""
+    gsub = _gsub_with([_chain_f3(3), _single({"a": "b"}), _single({"c": "d"}),
+                       _single({"e": "f"})], [0])
+    font = {"GSUB": FakeTable(gsub)}
+
+    assert build.prune_orphan_lookups(font) == {"GSUB": 2}
+
+    assert gsub.LookupList.LookupCount == 2
+    assert [lk.LookupType for lk in gsub.LookupList.Lookup] == [6, 1]
+    # the chain's callee moved from 3 to 1, and the feature still points at 0
+    assert (gsub.LookupList.Lookup[0].SubTable[0]
+            .SubstLookupRecord[0].LookupListIndex) == 1
+    assert gsub.FeatureList.FeatureRecord[0].Feature.LookupListIndex == [0]
+    assert gsub.LookupList.Lookup[1].SubTable[0].mapping == {"e": "f"}
+
+
+def test_prune_orphan_lookups_follows_a_chain_nested_in_rule_sets():
+    """Format 1 buries its records two objects deeper. Missing them would
+    drop a live lookup, which is worse than leaving a dead one."""
+    gsub = _gsub_with([_chain_f1(2), _single({"a": "b"}), _single({"e": "f"})],
+                      [0])
+    font = {"GSUB": FakeTable(gsub)}
+
+    assert build.prune_orphan_lookups(font) == {"GSUB": 1}
+    assert gsub.LookupList.Lookup[1].SubTable[0].mapping == {"e": "f"}
+    assert (gsub.LookupList.Lookup[0].SubTable[0].ChainSubRuleSet[0]
+            .ChainSubRule[0].SubstLookupRecord[0].LookupListIndex) == 1
+
+
+def test_prune_orphan_lookups_follows_a_chain_through_a_chain():
+    """Transitive: 0 calls 2, and 2 calls 3."""
+    gsub = _gsub_with([_chain_f3(2), _single({"a": "b"}), _chain_f3(3),
+                       _single({"e": "f"})], [0])
+    font = {"GSUB": FakeTable(gsub)}
+
+    assert build.prune_orphan_lookups(font) == {"GSUB": 1}
+    assert [lk.LookupType for lk in gsub.LookupList.Lookup] == [6, 6, 1]
+
+
+def test_prune_orphan_lookups_leaves_a_font_with_nothing_orphaned_alone():
+    lookups = [_single({"a": "b"}), _single({"c": "d"})]
+    gsub = _gsub_with(lookups, [0, 1])
+    font = {"GSUB": FakeTable(gsub)}
+
+    assert build.prune_orphan_lookups(font) == {}
+    assert gsub.LookupList.Lookup == lookups
+
+
+def test_prune_orphan_lookups_leaves_a_font_with_jstf_alone():
+    """JSTF indexes this same LookupList and nothing here renumbers it."""
+    gsub = _gsub_with([_single({"a": "b"}), _single({"c": "d"})], [0])
+    font = {"GSUB": FakeTable(gsub), "JSTF": object()}
+
+    assert build.prune_orphan_lookups(font) == {}
+    assert gsub.LookupList.LookupCount == 2
