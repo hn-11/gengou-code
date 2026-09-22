@@ -662,6 +662,22 @@ VF インスタンスではなく `dist/latin` の完成品 OTF（`graft_halfwid
 `import_scp_variants`, `latin_ligatures` 等が受け取る）に対して呼び出す
 だけになった。
 
+round 9 で 3 つの仕組みを 1 つずつにまとめた（出力はバイト同一）:
+ドナーのルックアップを写す 3 つの取り込み（`import_scp_locl` /
+`import_scp_ccmp` / `import_scp_marks`）がそれぞれ持っていた「生き残る
+集合を固定 → 番号を振る → 深いコピーを書き換えて先頭か末尾に挿す」は
+`copy_lookups`（remap 関数と前後だけ渡す）1 つに、ドナーの輪郭を
+新しいグリフに描く 8 箇所（`graft_halfwidth`・`import_scp_variants`・
+`graft_scp_outputs`・`latin_ligatures`・`build_latin` の 2 箇所・
+`vfsource.add_glyphs`）の pen → `draw_clean` → `alloc_glyph_name` →
+`append_glyph` は `graft_outline` 1 つに、`VFSource` がインスタンスの
+TTFont に後付けしていた属性（`wght` / `master` / `erode` /
+`residual_slant`）は `vfsource.Instance` 型の宣言済み属性に（読む側の
+`getattr(..., default)` は消えた）。ネストしたルックアップ番号を歩く
+関数も `_renumber_lookups` と `_lookup_records` の 2 つから後者だけに。
+verifier では `check_one_cell` を `check_widths_by_class` に畳んだ
+（Monaspace の曖昧幅記号と `.notdef` は「方針で 1 セル」の分類）。
+
 build.py に残る処理（`build_face` の順）: SHS の読み込み、Gengou からの
 グリフ・GSUB・GPOS の取り込み（`graft_halfwidth` / `latin_ligatures` /
 `import_scp_variants` / `import_scp_locl` / `import_scp_marks` /

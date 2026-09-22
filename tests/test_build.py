@@ -443,11 +443,12 @@ def test_erode_path_shrinks_every_side():
 def test_mona_glyphset_only_erodes_when_floor_was_hit():
     class Mona:
         gs = {"equal": object()}
+        erode = 0.0
 
         def getGlyphSet(self):
             return self.gs
     m = Mona()
-    assert vfsource.mona_glyphset(m) is m.gs   # no erode attr
+    assert vfsource.mona_glyphset(m) is m.gs   # nothing to erode
     m.erode = 0.2
     assert vfsource.mona_glyphset(m) is m.gs   # below threshold
     m.erode = 6.0

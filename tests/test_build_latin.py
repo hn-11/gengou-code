@@ -338,6 +338,7 @@ def _cff_with_greek(inks, *, cmap_extra=()):
                          {ord("A"): "A", **{cp: names[cp] for cp in names},
                           **dict(cmap_extra)},
                          {g: (600, 0) for g in order})
+    font.master = False          # what a VFSource instance carries (vfsource.Instance)
     return font
 
 

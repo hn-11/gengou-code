@@ -301,7 +301,7 @@ def _mark_font(anchors, heights=None, advance=600, cmap_extra=(), width=100,
                           **{cp: g for g, cp in marks.items() if cp is not None},
                           **{0x41 + i: g for i, g in enumerate(anchors)},
                           **dict(cmap_extra)},
-                         {".notdef": (0, 0), **{g: (advance, 0) for g in order[1:]}})
+                         {".notdef": (advance, 0), **{g: (advance, 0) for g in order[1:]}})
     mx, my = mark_anchor or (width // 2, 0)
     classes = "\n".join(f"markClass {g} <anchor {mx} {my}> @TOP;"
                         for g in ["acute", *marks])
@@ -836,14 +836,15 @@ def test_check_grid_names_the_advances_off_the_cell():
     assert "601" in _gate(lambda f, chk: verifylib.check_grid(chk, metrics, 600), None)[0]
 
 
-def test_check_one_cell_asks_of_notdef_and_the_ambiguous_symbols():
-    font = _metadata_font()
-    font["cmap"].tables[0].cmap = {0x61: "a", 0x2190: "b"}
-    metrics = {".notdef": (600, 0), "a": (600, 0), "b": (600, 0)}
-    assert _gate(lambda f, chk: verifylib.check_one_cell(f, chk, f.getBestCmap(), metrics, 600), font) == []
-    metrics["b"] = (1200, 0)
-    assert "'←' is one cell" in _gate(
-        lambda f, chk: verifylib.check_one_cell(f, chk, f.getBestCmap(), metrics, 600), font)
+def test_check_widths_by_class_asks_one_cell_of_notdef_and_the_ambiguous_symbols():
+    anchors, heights = _ruled()
+    font = _mark_font(anchors, heights, cmap_extra={0x2190: "b4"}, width=500)
+    assert _cells(font) == []
+    font["hmtx"].metrics["b4"] = (1200, 0)      # ← is East Asian Ambiguous, a cell by policy
+    assert "'←': ('A', 1200)" in _cells(font)[0]
+    font["hmtx"].metrics["b4"] = (600, 0)
+    font["hmtx"].metrics[".notdef"] = (1200, 0)
+    assert "'.notdef': ('policy', 1200)" in _cells(font)[0]
 
 
 def test_check_latin_repertoire_wants_the_size_and_no_cjk():

@@ -221,16 +221,6 @@ def check_grid(check, metrics, cell):
                    f"(offenders: {off})")
 
 
-def check_one_cell(tf, check, cmap, metrics, cell):
-    """The characters that are a cell by policy: Monaspace's ambiguous-
-    width symbols and .notdef (a terminal gives an unknown character
-    one column, and a wide box pushes the line)."""
-    for ch in build.MONA_AMBIGUOUS:
-        if ord(ch) in cmap:
-            check(metrics[cmap[ord(ch)]][0] == cell, f"{ch!r} is one cell")
-    check(metrics[tf.getGlyphOrder()[0]][0] == cell, ".notdef is one cell")
-
-
 def check_style_bits(tf, check, subfamily, italic):
     """fsSelection / macStyle / post.italicAngle against the face's own
     subfamily name. The Windows family model keys off these bits, not
@@ -1861,8 +1851,9 @@ def check_widths_by_class(tf, shape, check, cell, full, label=""):
     shaper gives it that advance alone under the default features.
 
     Na and H are a cell, W and F the full width (or a cell, for the
-    few in WIDE_IN_ONE_CELL), A and N either; a mark is that or 0. A
-    face with no full width (`full` None) has no W or F but those. The
+    few in WIDE_IN_ONE_CELL), A and N either, but Monaspace's ambiguous
+    symbols and .notdef a cell by policy; a mark is that or 0. A face
+    with no full width (`full` None) has no W or F but those. The
     shaped advance is the hmtx one, so a stray placement under any
     feature -- a SinglePos advance under ccmp moved the column after
     '0' 200 units (round 9, mutants L5b, J8) -- fails here."""
@@ -1877,7 +1868,8 @@ def check_widths_by_class(tf, shape, check, cell, full, label=""):
         adv = hmtx[g][0]
         if cp in MULTI_EM:
             allowed = {MULTI_EM[cp] * (full or 2 * cell)}
-        elif eaw in ("Na", "H"):
+        elif eaw in ("Na", "H") or ch in build.MONA_AMBIGUOUS:
+            # (Monaspace's ambiguous-width symbols are a cell by policy)
             allowed = {cell}
         elif eaw in ("W", "F"):
             allowed = {cell} if cp in WIDE_IN_ONE_CELL else {full}
@@ -1898,6 +1890,10 @@ def check_widths_by_class(tf, shape, check, cell, full, label=""):
         # a shaper zeroes a mark's advance whatever the lookups say
         if got != adv and not (classes.get(g) == 3 and got == 0):
             shaped[ch] = (adv, got)
+    # and .notdef: a terminal gives an unknown character one column,
+    # and a wide box pushes the line
+    if hmtx[tf.getGlyphOrder()[0]][0] != cell:
+        off[".notdef"] = ("policy", hmtx[tf.getGlyphOrder()[0]][0])
     check(probed and not off and not shaped,
           f"every advance follows the character's width{label} "
           f"({probed} shaped; off by class: {dict(list(off.items())[:4])}; "

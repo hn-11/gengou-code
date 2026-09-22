@@ -38,7 +38,6 @@ from verifylib import (  # noqa: E402
     check_marks,
     check_monospace_metadata,
     check_name_ids,
-    check_one_cell,
     check_private,
     check_style_bits,
     check_tables,
@@ -339,7 +338,6 @@ def main():
             wrong[seq] = adv
     check(not wrong, f"every ligature is the cells it declares "
                      f"({len(build.LIGATURES)} probes; off: {wrong})")
-    check_one_cell(tf, check, vf_cmap, metrics, build.CELL)
     check(hhea.advanceWidthMax == max(adv for adv, _ in metrics.values()),
           f"hhea advanceWidthMax is the widest advance "
           f"({hhea.advanceWidthMax} vs {max(adv for adv, _ in metrics.values())})")

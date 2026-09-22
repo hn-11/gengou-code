@@ -531,6 +531,21 @@ def append_context(font, fullwidth=False):
             vmtx_donor(font, fullwidth))
 
 
+def graft_outline(font, ctx, draws, width, simplify=True):
+    """Draw `draws` (see draw_clean) into a new glyph of `width` next to
+    'A' and return its name: the one way every import puts a donor's
+    outline into this font, so the FontDict, its nominalWidthX and the
+    vertical origin come from one place (append_context) rather than
+    from each site's own copy of the sequence."""
+    td, _cmap, fd_index, private, vdon = ctx
+    pen = T2CharStringPen(pen_width(private, width), None)
+    draw_clean(draws, pen, simplify=simplify)
+    name = alloc_glyph_name(font)
+    append_glyph(font, td, name, pen.getCharString(private=private),
+                 fd_index, width, None, vdon)
+    return name
+
+
 def glyph_fd(font, td, name):
     """The FontDict index `name` lives in, or None in a plain CFF (which
     has one Private dict and no FDSelect — the tests' fixtures; every
@@ -584,7 +599,8 @@ def graft_halfwidth(base, latin):
     replaced}, {donor glyph: our glyph} for the variant wiring, the set
     of grafted 0-advance mark glyphs)."""
     scp_cm, scp_gs = latin.getBestCmap(), latin.getGlyphSet()
-    td, bcm, fd_index, private, vdon = append_context(base)
+    ctx = append_context(base)
+    td, bcm, fd_index, private, vdon = ctx
     new_map = {}
     default_map = {}  # donor glyph name -> our glyph name (variant wiring)
     made = {}         # (donor glyph, is_mark) -> our glyph (dedup aliases)
@@ -603,11 +619,8 @@ def graft_halfwidth(base, latin):
             # Gengou cmaps is one cell today, and a two-cell one it
             # ever adds must be grafted two cells wide, not overprinted
             width = 0 if is_mark else latin["hmtx"][src][0]
-            pen = T2CharStringPen(pen_width(private, width), scp_gs)
-            draw_clean([(scp_gs, src, (1, 0, 0, 1, -CELL if is_mark else 0, 0))], pen)
-            name = alloc_glyph_name(base)
-            append_glyph(base, td, name, pen.getCharString(private=private),
-                         fd_index, width, None, vdon)
+            name = graft_outline(base, ctx, [(scp_gs, src, (1, 0, 0, 1, -CELL if is_mark else 0, 0))],
+                                 width)
             made[key] = name
             if is_mark:
                 marks.add(name)
@@ -771,7 +784,8 @@ def import_scp_variants(base, scp, default_map, marks):
     UI names are only meaningful (and only defined by OpenType) for ssNN /
     cvNN — 'zero' and 'salt' come back with no entry in the names dict."""
     gsub = scp["GSUB"].table
-    td, _, fd_index, private, vdon = append_context(base)
+    ctx = append_context(base)
+    td, _, fd_index, private, vdon = ctx
     scp_gs = scp.getGlyphSet()
 
     imported = {}   # (scp variant glyph, is_mark) -> our glyph name
@@ -808,14 +822,7 @@ def import_scp_variants(base, scp, default_map, marks):
                     # glyph it replaces mid-run
                     width, dx = ((0, -CELL) if is_mark
                                  else (scp["hmtx"][src][0], 0))
-                    pen = T2CharStringPen(pen_width(private, width), scp_gs)
-                    draw_clean(
-                        [(scp_gs, dst, (1, 0, 0, 1, dx, 0))], pen)
-                    name = alloc_glyph_name(base)
-                    append_glyph(
-                        base, td, name,
-                        pen.getCharString(private=private),
-                        fd_index, width, None, vdon)
+                    name = graft_outline(base, ctx, [(scp_gs, dst, (1, 0, 0, 1, dx, 0))], width)
                     imported[dst, is_mark] = name
                     if is_mark:
                         marks.add(name)
@@ -948,7 +955,8 @@ def graft_scp_outputs(base, scp, default_map, marks, order):
     pass can run again once another import has unlocked more sources.
     Returns the number grafted."""
     gsub = scp["GSUB"].table
-    td, _, fd_index, private, vdon = append_context(base)
+    ctx = append_context(base)
+    td, _, fd_index, private, vdon = ctx
     scp_gs = scp.getGlyphSet()
     grafted = 0
 
@@ -957,11 +965,7 @@ def graft_scp_outputs(base, scp, default_map, marks, order):
         if src in default_map:
             return
         width, dx = (0, -CELL) if is_mark else (scp["hmtx"][src][0], 0)
-        pen = T2CharStringPen(pen_width(private, width), scp_gs)
-        draw_clean([(scp_gs, src, (1, 0, 0, 1, dx, 0))], pen)
-        name = alloc_glyph_name(base)
-        append_glyph(base, td, name, pen.getCharString(private=private),
-                     fd_index, width, None, vdon)
+        name = graft_outline(base, ctx, [(scp_gs, src, (1, 0, 0, 1, dx, 0))], width)
         default_map[src] = name
         grafted += 1
         if is_mark:
@@ -1050,26 +1054,13 @@ def import_scp_locl(base, scp, default_map, where_ours):
     if not order:
         return 0
     gmap = dict(default_map)
-    live = list(order)
-    while True:
-        seen = {old: k for k, old in enumerate(live)}
-        kept = [old for old in live
-                if _ccmp_remap(copy.deepcopy(gsub.LookupList.Lookup[old]),
-                               gmap, seen, base.getGlyphID)]
-        if kept == live:
-            break
-        live = kept
-    if not live:
-        return 0
     # in front, like ccmp: a locl form is what the rest of the features
     # then work on, and SCP's own ccmp composes from these outputs
-    shift = {old: k for k, old in enumerate(live)}
-    copied = []
-    for old in live:
-        lookup = copy.deepcopy(gsub.LookupList.Lookup[old])
-        _ccmp_remap(lookup, gmap, shift, base.getGlyphID)
-        copied.append(lookup)
-    _insert_lookups_first(ours, copied)
+    shift = copy_lookups(gsub, ours, order,
+                         lambda lookup, sh: _ccmp_remap(lookup, gmap, sh, base.getGlyphID),
+                         front=True)
+    if not shift:
+        return 0
     # every pair the donor names, not only those the base already has
     # a LangSys for: _add_feature_where makes the missing ones
     _add_feature_where(ours, "locl",
@@ -1078,7 +1069,7 @@ def import_scp_locl(base, scp, default_map, where_ours):
                         for pair, theirs in where.items()
                         if pair[0] in {s for s, _ in where_ours}})
     sort_feature_list(ours)
-    return len(live)
+    return len(shift)
 
 
 def _new_langsys(record, lang):
@@ -1220,26 +1211,49 @@ def graft_scp_ccmp(base, scp, default_map, marks):
     return graft_scp_outputs(base, scp, default_map, marks, order)
 
 
-def _renumber_lookups(obj, by, seen=None):
-    """Add `by` to every nested lookup index under `obj`: a contextual
-    lookup names the lookup it calls by its index in the LookupList, in
-    a SubstLookupRecord that can sit under a rule set, a class set or
-    the subtable itself."""
-    if seen is None:
-        seen = set()
-    if id(obj) in seen:
-        return
-    seen.add(id(obj))
-    if isinstance(obj, (list, tuple)):
-        for item in obj:
-            _renumber_lookups(item, by, seen)
-        return
-    for attr, value in vars(obj).items() if hasattr(obj, "__dict__") else ():
-        if attr in ("SubstLookupRecord", "PosLookupRecord"):
-            for rec in value or ():
-                rec.LookupListIndex += by
-        elif isinstance(value, (list, tuple)) or hasattr(value, "__dict__"):
-            _renumber_lookups(value, by, seen)
+def copy_lookups(donor, ours, indices, remap, front, warn=None):
+    """Copy the donor table's lookups `indices` into `ours`, at the front
+    of its LookupList (`front`) or the end. Returns {donor index: ours}.
+
+    `remap(lookup, shift)` rewrites one deep-copied lookup in place --
+    its glyph names to ours, its nested lookup indices through `shift`
+    -- and says whether anything of it is left. Which lookups survive
+    is settled first: a rule can name a glyph this face does not have
+    (the italic donor has no Greek), and a chain context whose only
+    callee went with it is dead too, so the live set has to settle
+    before the indices are handed out. `warn` names the feature in a
+    line per lookup dropped, for an import that expects none.
+
+    The one shape the three importers (locl, ccmp, the marks) had each
+    spelled out for themselves."""
+    live = list(indices)
+    while True:
+        seen = {old: k for k, old in enumerate(live)}
+        kept = [old for old in live
+                if remap(copy.deepcopy(donor.LookupList.Lookup[old]), seen)]
+        if kept == live:
+            break
+        if warn:
+            for old in live:
+                if old not in kept:
+                    print(f"  warning: {warn} lookup {old} has no rule this "
+                          f"face can use, dropped")
+        live = kept
+    if not live:
+        return {}
+    first = 0 if front else len(ours.LookupList.Lookup)
+    shift = {old: first + k for k, old in enumerate(live)}
+    copied = []
+    for old in live:
+        lookup = copy.deepcopy(donor.LookupList.Lookup[old])
+        remap(lookup, shift)
+        copied.append(lookup)
+    if front:
+        _insert_lookups_first(ours, copied)
+    else:
+        ours.LookupList.Lookup.extend(copied)
+        ours.LookupList.LookupCount = len(ours.LookupList.Lookup)
+    return shift
 
 
 def _insert_lookups_first(table, lookups):
@@ -1255,7 +1269,8 @@ def _insert_lookups_first(table, lookups):
     if getattr(table, "FeatureVariations", None) is not None:
         raise ValueError("FeatureVariations name lookups this does not renumber")
     for lookup in table.LookupList.Lookup:
-        _renumber_lookups(lookup, by)
+        for rec in _lookup_records(lookup):
+            rec.LookupListIndex += by
     for fr in table.FeatureList.FeatureRecord:
         fr.Feature.LookupListIndex = [i + by for i in fr.Feature.LookupListIndex]
     table.LookupList.Lookup[:0] = list(lookups)
@@ -1299,39 +1314,17 @@ def import_scp_ccmp(base, scp, default_map, marks):
     # import_scp_variants made that glyph
     grafted = graft_scp_ccmp(base, scp, default_map, marks)
     gmap = dict(default_map)
-
-    # which lookups survive the copy, before they are numbered: a rule
-    # can name a glyph this donor does not have (the italic donor has no
-    # Greek), and a chain context whose only callee went with it is
-    # dead too, so the set has to settle before the indices are handed
-    # out. Nothing is expected to drop today, and a drop says so
-    live = list(order)
-    while True:
-        seen = {old: k for k, old in enumerate(live)}
-        kept = [old for old in live
-                if _ccmp_remap(copy.deepcopy(gsub.LookupList.Lookup[old]),
-                               gmap, seen, base.getGlyphID)]
-        if kept == live:
-            break
-        for old in live:
-            if old not in kept:
-                print(f"  warning: ccmp lookup {old} has no rule this face "
-                      f"can use, dropped")
-        live = kept
     # at the FRONT of the list, where ccmp belongs: a shaper runs a
     # stage's lookups in LookupList order, so appended ones ran after
     # the variant features and the ligatures, and cv04's serifed i met
     # a combining mark with its dot still on — the very defect the
-    # import exists to fix, on the variant path
-    shift = {old: k for k, old in enumerate(live)}
-    copied = []
-    for old in live:
-        lookup = copy.deepcopy(gsub.LookupList.Lookup[old])
-        _ccmp_remap(lookup, gmap, shift, base.getGlyphID)
-        copied.append(lookup)
-    _insert_lookups_first(ours, copied)
+    # import exists to fix, on the variant path. Nothing is expected to
+    # drop today, and a drop says so
+    shift = copy_lookups(gsub, ours, order,
+                         lambda lookup, sh: _ccmp_remap(lookup, gmap, sh, base.getGlyphID),
+                         front=True, warn="ccmp")
     # the feature names what the donor's feature named, not the closure
-    listed = sorted(shift[old] for old in live if old in own)
+    listed = sorted(shift[old] for old in shift if old in own)
     for fr in records:
         fr.Feature.LookupListIndex.extend(listed)
         fr.Feature.LookupCount = len(fr.Feature.LookupListIndex)
@@ -1532,6 +1525,12 @@ def import_scp_marks(base, scp, default_map, marks):
                 wanted.setdefault(rec.LookupListIndex, set())
 
     def remap(lookup, shift):
+        # a mark filtering set indexes the donor's MarkGlyphSetsDef,
+        # which does not travel: copied, the flag would index a table
+        # the base has none of (_ccmp_remap refuses it the same way)
+        if lookup.LookupFlag & 0x0010:
+            raise ValueError("mark: a donor lookup uses a mark filtering "
+                             "set, which is not carried")
         kind, subtables = _unwrap_pos(lookup)
         keep = []
         for entry, sub in zip(lookup.SubTable, subtables):
@@ -1553,32 +1552,11 @@ def import_scp_marks(base, scp, default_map, marks):
                 _shift_subtable_anchors(kind, sub, {n: -CELL for n in marks})
         return bool(keep)
 
-    # which lookups survive, before they are numbered
-    live = sorted(wanted)
-    while True:
-        seen = {old: k for k, old in enumerate(live)}
-        kept = [old for old in live
-                if remap(copy.deepcopy(donor.LookupList.Lookup[old]), seen)]
-        if kept == live:
-            break
-        live = kept
-    if not live:
+    shift = copy_lookups(donor, ours, sorted(wanted), remap, front=False)
+    if not shift:
         return 0
-    first = len(ours.LookupList.Lookup)
-    shift = {old: first + k for k, old in enumerate(live)}
-    for old in live:
-        lookup = copy.deepcopy(donor.LookupList.Lookup[old])
-        # a mark filtering set indexes the donor's MarkGlyphSetsDef,
-        # which does not travel: copied, the flag would index a table
-        # the base has none of (_ccmp_remap refuses it the same way)
-        if lookup.LookupFlag & 0x0010:
-            raise ValueError(f"mark: donor lookup {old} uses a mark "
-                             f"filtering set, which is not carried")
-        remap(lookup, shift)
-        ours.LookupList.Lookup.append(lookup)
-    ours.LookupList.LookupCount = len(ours.LookupList.Lookup)
     for tag in ("ccmp", "mark", "mkmk"):
-        idx = sorted(shift[old] for old in live if tag in wanted[old])
+        idx = sorted(shift[old] for old in shift if tag in wanted[old])
         if idx:
             _add_feature(ours, tag, idx)
     sort_feature_list(ours)
@@ -1603,7 +1581,7 @@ def import_scp_marks(base, scp, default_map, marks):
         if gdef.MarkAttachClassDef is None:
             gdef.MarkAttachClassDef = otTables.MarkAttachClassDef()
         gdef.MarkAttachClassDef.classDefs = classes
-    return len(live)
+    return len(shift)
 
 
 # (usWinAscent, usWinDescent) for every JP face — a clipping bound in
@@ -1705,7 +1683,8 @@ def latin_ligatures(font, latin, latin_path, alts, ligatures):
     # encoded relative to its FD's nominalWidthX — encoding it against
     # another FD (the symbol one, as before) left every ligature's CFF
     # width 510u off its hmtx advance
-    td, cmap, fd_index, private, vdon = append_context(font)
+    ctx = append_context(font)
+    td, cmap, fd_index, private, vdon = ctx
     lgs = latin.getGlyphSet()
     order = latin.getGlyphOrder()
     hbfont = hb.Font(hb.Face(hb.Blob.from_file_path(str(latin_path))))
@@ -1728,19 +1707,11 @@ def latin_ligatures(font, latin, latin_path, alts, ligatures):
             print(f"  skip {seq!r}: component not in target cmap")
             continue
         width = CELL * spec["cells"]
-        pen = T2CharStringPen(pen_width(private, width), lgs)
-        draw_clean([(lgs, glyphs[0], (1, 0, 0, 1, 0, 0))], pen)
-        name = alloc_glyph_name(font)
-        append_glyph(font, td, name, pen.getCharString(private=private),
-                     fd_index, width, None, vdon)
+        name = graft_outline(font, ctx, [(lgs, glyphs[0], (1, 0, 0, 1, 0, 0))], width)
         added[seq] = name
         alt = shaped(seq, {"calt": True, "liga": True, "cv99": True})
         if len(alt) == 1 and alt[0] != glyphs[0]:
-            pen = T2CharStringPen(pen_width(private, width), lgs)
-            draw_clean([(lgs, alt[0], (1, 0, 0, 1, 0, 0))], pen)
-            alt_name = alloc_glyph_name(font)
-            append_glyph(font, td, alt_name, pen.getCharString(private=private),
-                         fd_index, width, None, vdon)
+            alt_name = graft_outline(font, ctx, [(lgs, alt[0], (1, 0, 0, 1, 0, 0))], width)
             alts[name] = alt_name
             n_alt += 1
     print(f"  ligatures from the Latin donor: {len(added)}, cv99 alternates: {n_alt}")

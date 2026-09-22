@@ -28,7 +28,6 @@ from verifylib import (  # noqa: E402
     check_marks,
     check_monospace_metadata,
     check_name_ids,
-    check_one_cell,
     check_private,
     check_stat,
     check_style_bits,
@@ -86,7 +85,6 @@ def main():
     hmtx = tf["hmtx"]
     check_latin_repertoire(check, cmap)
     check_grid(check, hmtx.metrics, CELL)
-    check_one_cell(tf, check, cmap, hmtx.metrics, CELL)
     widths, bearings, bounds = hmtx_mismatches(tf)
     check(not widths, f"CFF charstring widths agree with hmtx ({widths[:3]})")
     check_tables(tf, check, bounds, tf["hmtx"].metrics, cmap, codepages=True)

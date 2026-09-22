@@ -143,19 +143,17 @@ def fix_zone_order(font):
 def add_missing_from_mona(font, mona, chars, dy, k):
     """Characters Source Code Pro lacks but Monaspace has (⇔): append the
     one-cell Monaspace glyph and map it."""
-    td, cmap, fd_index, private, vdon = build.append_context(font)
+    ctx = build.append_context(font)
+    td, cmap, fd_index, private, vdon = ctx
     mona_cm, mona_gs = mona.getBestCmap(), vfsource.mona_glyphset(mona)
     new = {}
     for ch in chars:
         cp = ord(ch)
         if cp in cmap or cp not in mona_cm:
             continue
-        pen = build.T2CharStringPen(build.pen_width(private, CELL), mona_gs)
-        build.draw_clean([(mona_gs, mona_cm[cp], vfsource.mona_transform(mona, 0, dy, k))],
-                         pen, simplify=not vfsource.keeps_overlaps(mona))
-        name = build.alloc_glyph_name(font)
-        build.append_glyph(font, td, name, pen.getCharString(private=private),
-                           fd_index, CELL, None, vdon)
+        name = build.graft_outline(font, ctx,
+                                   [(mona_gs, mona_cm[cp], vfsource.mona_transform(mona, 0, dy, k))],
+                                   CELL, simplify=not vfsource.keeps_overlaps(mona))
         new[cp] = name
     build.set_cmap(font, new, add_new=True)
     print(f"  one-cell glyphs SCP lacks, from Monaspace: {len(new)}")
@@ -215,7 +213,8 @@ def add_missing_from_sans(font, sans, upright):
     the like), and a family whose italic reaches codepoints its upright
     cannot is a defect of its own -- the one this whole change is
     undoing, pointing the other way."""
-    td, cmap, fd_index, private, vdon = build.append_context(font)
+    ctx = build.append_context(font)
+    td, cmap, fd_index, private, vdon = ctx
     sans_cm, sans_gs = sans.getBestCmap(), sans.getGlyphSet()
     new, condensed = {}, 0
     # {donor glyph: [ours]} and {ours: the x scale and offset cell_fit
@@ -236,12 +235,8 @@ def add_missing_from_sans(font, sans, upright):
             sx, dx = build.cell_fit(build._bounds(sans_gs, src), CELL,
                                     build.LETTER_BEARING)
             condensed += sx != 1.0
-            pen = build.T2CharStringPen(build.pen_width(private, CELL), sans_gs)
-            build.draw_clean([(sans_gs, src, (sx, 0, 0, 1, dx, 0))], pen,
-                             simplify=not vfsource.keeps_overlaps(sans))
-            name = build.alloc_glyph_name(font)
-            build.append_glyph(font, td, name, pen.getCharString(private=private),
-                               fd_index, CELL, None, vdon)
+            name = build.graft_outline(font, ctx, [(sans_gs, src, (sx, 0, 0, 1, dx, 0))],
+                                       CELL, simplify=not vfsource.keeps_overlaps(sans))
             new[cp] = name
             # one donor glyph can draw more than one codepoint (Source
             # Sans draws U+03C6 and U+03D5 with a single 'phi'), so this

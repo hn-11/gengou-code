@@ -21,6 +21,7 @@ from build import (  # noqa: E402
     charstring_lsb,
     draw_clean,
     glyph_bounds,
+    graft_outline,
     note_redrawn,
     pen_width,
 )
@@ -50,6 +51,23 @@ def unrounded_cff2_instancing():
         yield
     finally:
         instancer.instantiateCFF2 = orig
+
+
+class Instance(TTFont):
+    """A static instance VFSource built, with what the search found out
+    about it: `wght`, the location; `residual_slant`, the slant the slnt
+    axis could not deliver (mona_transform shears it in); `erode`, the
+    surplus stroke per side where the wght floor stopped short of the
+    target (mona_glyphset erodes by it); `master`, whether it is a
+    variable font's master, whose outline takes neither pathops pass
+    (keeps_overlaps)."""
+
+    def __init__(self, path):
+        super().__init__(path)
+        self.wght = None
+        self.residual_slant = 0.0
+        self.erode = 0.0
+        self.master = False
 
 
 class VFSource:
@@ -87,7 +105,7 @@ class VFSource:
     def _instance(self, axes):
         """A static instance at `axes`: a fresh load of the file (faster
         than deep-copying a decompiled VF) instanced in place."""
-        inst = TTFont(self.vf_path)
+        inst = Instance(self.vf_path)
         instantiateVariableFont(inst, axes, inplace=True)
         return inst
 
@@ -251,21 +269,20 @@ def mona_glyphset(mona):
     """The glyph set every Monaspace import draws from: eroded when the
     weight search hit the axis floor (matched() sets `erode`)."""
     gs = mona.getGlyphSet()
-    d = getattr(mona, "erode", 0.0)
-    return _ErodedGlyphSet(gs, d) if d > 0.5 else gs
+    return _ErodedGlyphSet(gs, mona.erode) if mona.erode > 0.5 else gs
 
 
 def keeps_overlaps(donor):
     """Whether outlines drawn from `donor` skip draw_clean's overlap
     removal: a variable font's master does (VFSource.matched(master=
     True)), for the reason given there."""
-    return getattr(donor, "master", False)
+    return donor.master
 
 
 def mona_transform(mona, dx, dy, k):
     """Affine for a Monaspace outline landing in our em: scale to the cell,
     shear in whatever slant the slnt axis clamped away, then offset."""
-    shear = math.tan(math.radians(-getattr(mona, "residual_slant", 0.0)))
+    shear = math.tan(math.radians(-mona.residual_slant))
     return (k, 0, k * shear, k, dx, dy)
 
 
@@ -311,7 +328,8 @@ def add_glyphs(font, mona, alts, ligatures, dy, cell=CELL):
     return {seq: glyph name}. Alternate (.alt) designs are appended too
     and recorded in `alts`."""
     k = cell / MONA_CELL
-    td, cmap, fd_index, private, vdon = append_context(font)
+    ctx = append_context(font)
+    td, cmap, fd_index, private, vdon = ctx
     mona_gs = mona_glyphset(mona)
     mona_names = set(mona.getGlyphOrder())
 
@@ -334,15 +352,12 @@ def add_glyphs(font, mona, alts, ligatures, dy, cell=CELL):
             # cell each part sits in ('&&=' is ampersand.init in cell 0 and
             # the 2-cell ampersand_equal, drawn in its final cell, at 2)
             offsets = [c * cell for c in spec.get("at", range(len(spec["glyphs"])))]
-        pen = T2CharStringPen(pen_width(private, width), font.getGlyphSet())
         # composed sequences (':=' etc.) overlap by construction — the same
         # pathops pass the .alt path uses removes the seams
-        draw_clean([(mona_gs, gname, mona_transform(mona, dx, dy, k))
-                    for gname, dx in zip(spec["glyphs"], offsets)], pen,
-                   simplify=not keeps_overlaps(mona))
-        name = alloc_glyph_name(font)
-        append_glyph(font, td, name, pen.getCharString(private=private),
-                     fd_index, width, None, vdon)
+        name = graft_outline(font, ctx,
+                             [(mona_gs, gname, mona_transform(mona, dx, dy, k))
+                              for gname, dx in zip(spec["glyphs"], offsets)],
+                             width, simplify=not keeps_overlaps(mona))
         added[seq] = name
 
         # alternate design, if Monaspace ships one (cv99 toggles to it);

@@ -83,7 +83,7 @@ def test_floor_clamps_and_reports_the_surplus(vf_path):
     assert inst.wght == pytest.approx(200, abs=1.5)
     assert inst.erode == pytest.approx(5, abs=0.2)   # 10u surplus, per side
     assert build.bar_thickness(src.matched(30, master=True), "equal") == pytest.approx(40, abs=0.2)
-    assert not hasattr(src.matched(30, master=True), "erode")
+    assert src.matched(30, master=True).erode == 0.0    # a master is never eroded
 
 
 def test_matched_caches_by_rounded_target(vf_path):
