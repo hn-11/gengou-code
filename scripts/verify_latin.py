@@ -16,6 +16,7 @@ import build_latin  # noqa: E402
 from verify import CASES  # noqa: E402
 from verifylib import (  # noqa: E402
     Checker,
+    check_cells,
     check_coverage_order,
     check_features_work,
     check_gdef_marks,
@@ -152,6 +153,7 @@ def main():
     # the mark gates: the anchors themselves, their coverage, and what
     # the shaper makes of them (verifylib says why there are seven)
     check_marks(tf, check, shape, gs)
+    check_cells(tf, check, shape, gs, CELL)
     check_heights(tf, check, gs, cmap)
     check_zones(tf, check, cmap)
     check_features_work(shape, check, cmap)

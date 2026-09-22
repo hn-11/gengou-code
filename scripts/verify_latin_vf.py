@@ -26,6 +26,7 @@ import build  # noqa: E402
 import build_latin_vf  # noqa: E402
 from verifylib import (  # noqa: E402
     Checker,
+    check_cells,
     check_coverage_order,
     check_features_work,
     check_gdef_marks,
@@ -308,6 +309,7 @@ def main():
         inst = TTFont(io.BytesIO(buf.getvalue()))
         shape_at, gs_at = make_shaper(buf.getvalue()), inst.getGlyphSet()
         check_marks(inst, check, shape_at, gs_at, f" at wght {round(loc, 2):g}")
+        check_cells(inst, check, shape_at, gs_at, build.CELL, label=f" at wght {round(loc, 2):g}")
     check_features_work(shape_default, check, vf_cmap)
     # the nameIDs verify_latin.py requires of the statics; 13 and 14 are
     # the licence and its URL, and dropping all seven passed this file

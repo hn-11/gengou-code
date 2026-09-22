@@ -792,13 +792,76 @@ _SEAT_MEDIAN_DY = (-60, 130)
 # verifier caught when the caron took the .cap anchor
 CLEAR_BASES = "bdfhklt"
 CLEAR_MARKS = STACKABLE_MARKS + "\u030c"
+# a letter's mark sits within _SEAT_SPREAD of where the rest of its
+# lookup and category (Lu, Ll ...) put theirs -- what a whole lookup's
+# median cannot see, one letter's anchors moved 140 units (round 9,
+# mutant L12b: 6,142 square units of B under the acute). Measured: the
+# letters of a category take the accent within about 45 units of one
+# another, except where the letter's outer ink is not its body -- the
+# horn of ơ ư, the hook of ɠ, the descender of η ɥ ɻ ɕ ʇ ɖ y ỵ ỷ ỹ under a
+# below-mark -- which sit up to 200 off and are held to the absolute
+# bands only
+_SEAT_SPREAD = 60
+# (sideways, one letter's anchors are held to the absolute _SEAT_DX
+# only: a per-kind or overlap rule was tried in round 9 and every
+# version needed a list of the designs it fails -- the cedilla under
+# F's stem, the ogonek at A's foot, a wide mark over Light l -- so an
+# anchor 250 to the right on ONE letter is a known blind spot)
+# and each MARK sideways: within a lookup every mark sits at the same
+# offset from the letter's centre, so one mark's own median dx is held
+# to the lookup's -- a mark's outline moved 220 with its anchor left
+# behind passed (round 9, mutant L13). Measured 45 upright, 74 at Bold
+# Italic (the double grave)
+_MARK_DX_SPREAD = 110
+_SEAT_KIND = 5               # letters a kind needs before it has a median to hold to
+SEAT_EDGE_LETTERS = frozenset("\u01a1\u01b0\u01a0\u01af\u0260\u03b7\u0265\u027b\u0255"
+                              "\u0287\u0256y\u1ef5\u1ef7\u1ef9")
+# a second accent's sideways step from the first, beyond where each
+# sits alone: mkmk's Mark2 anchors read exactly (check_marks_stack),
+# and the ink then held to what an exact anchor 200 units off would
+# fail (mutant L18). The step is 0 by design, and the slant of an
+# italic leans a stacked mark about 40 units
+_STACK_DX = 80
+
+# ---- one glyph in its cell (check_cells) ----
+# an advance follows the character's East Asian Width: Na and H a cell,
+# W and F the full width, A and N either (or none, for a mark). No
+# other bound sees ONE glyph's advance: a whole number of cells passes
+# check_grid, xAvgCharWidth absorbs it, and 'e' at two cells moved the
+# rest of the line a cell (round 9, mutant L1)
+WIDE_IN_ONE_CELL = frozenset({0x2615, 0x26A1, 0x1F3B5, 0x1F3B6, 0x1F4A9, 0x1F512, 0x1F916,
+                              0x302E, 0x302F, 0x31B4, 0x31B5, 0x31B6, 0x31B7, 0x31BB})
+# ... the East Asian Wide characters the donors draw in one cell: the
+# five Monaspace emoji, the Nerd Fonts ⚡, and Source Han Sans's own
+# half-width Hangul tone marks and Bopomofo extensions
+# what a shaper gives no advance whatever the font says: the
+# default-ignorable code points among the repertoire (soft hyphen, the
+# zero-width and joiner controls, the byte order mark)
+DEFAULT_IGNORABLE = (frozenset({0x00AD, 0x034F, 0x061C, 0x115F, 0x1160, 0x17B4, 0x17B5,
+                                0x180E, 0x3164, 0xFEFF, 0xFFA0})
+                     | frozenset(range(0x200B, 0x2010)) | frozenset(range(0x2060, 0x2070))
+                     | frozenset(range(0xFE00, 0xFE10)) | frozenset(range(0x1D173, 0x1D17B)))
+# the two-em and three-em dashes: that many full widths, by policy
+MULTI_EM = {0x2E3A: 2, 0x2E3B: 3}
+_CENTRE_BAND = 120           # a narrow letter's or digit's ink centre from the cell's; measured 77 (V, Bold Italic)
+_BASELINE = (-20, 10)        # a digit's or capital's ink bottom; measured -12 (round overshoot) .. 0
+_IDEOGRAPH_Y = (-130, 890)   # an ideograph's or kana's ink, in Source Han Sans's em box -120..880; measured -104..872
+_EDGE = 12                   # a full-width glyph's ink past its cell
+_ZERO_ADVANCE_X = (-120, 300)  # a zero-advance mark's ink: x0 >= -(full width) + this[0], x1 <= this[1]; measured -1000..214
 _BOPOMOFO = anchors.BOPOMOFO
 DOUBLE_SPAN = anchors.DOUBLE_SPAN
 
 
+# how far a glyph's ink may reach past its advance: the widest italic
+# lean is 224 (the deferred `#(` at Bold Italic 20 past its cells). Half
+# a cell let a two-cell ligature drawn 300 to the right pass (round 9,
+# mutant L4: 236 into the next cell)
+_LEAN = 230
+
+
 def ink_spill(bounds, advance, cmap, cell):
     """The glyphs whose ink reaches past their advance by more than the
-    lean allowed: [(name, advance, xMin, xMax)]. `bounds` maps a drawn
+    lean allowed (_LEAN): [(name, advance, xMin, xMax)]. `bounds` maps a drawn
     glyph to its box, `advance` a glyph to its advance width.
 
     WHERE the ink lands, not just how wide it is: every width check
@@ -813,7 +876,7 @@ def ink_spill(bounds, advance, cmap, cell):
     spill = []
     for name, box in bounds.items():
         adv = advance(name)
-        lean = cell if name in double else cell // 2
+        lean = cell if name in double else _LEAN
         if adv > 0 and (round(box[0]) < -lean or round(box[2]) > adv + lean):
             spill.append((name, adv, round(box[0]), round(box[2])))
     return spill
@@ -1355,6 +1418,22 @@ def check_marks_attach(tf, shape, check, label=""):
           f"({exact} marks exact; off, by lookup: {worst})")
 
 
+def _centres(shape, gs, order, text):
+    """The ink centre of each shaped glyph of `text`, or None if one
+    glyph has no ink or the run is not one glyph per character."""
+    infos, positions = shape(text, {})
+    if len(infos) != len(text):
+        return None
+    centres, x = [], 0
+    for info, pos in zip(infos, positions):
+        box = build._bounds(gs, order[info.codepoint])
+        if box is None:
+            return None
+        centres.append(x + pos.x_offset + (box[0] + box[2]) / 2)
+        x += pos.x_advance
+    return centres
+
+
 def check_marks_stack(tf, shape, check, label=""):
     """A second accent stacks exactly where the first one's Mark2
     anchor says, and the common above-accents can all be stacked on.
@@ -1427,6 +1506,17 @@ def check_marks_stack(tf, shape, check, label=""):
             if len(unicodedata.normalize("NFC", text)) != 3:
                 continue
             exact += _hold_run(model, shape, order, rev, text, wrong, i)
+            # and the ink: the second mark's centre over the first's,
+            # less where each sits on the letter alone (the marks'
+            # own drawings differ), which leaves the Mark2 anchor's
+            # sideways step
+            stacked = _centres(shape, gs, order, text)
+            alone = [_centres(shape, gs, order, chr(rev[base_g]) + chr(rev[m]))
+                     for m in (m2, m1)]
+            if stacked and all(alone):
+                step = (stacked[2] - stacked[1]) - (alone[1][1] - alone[0][1])
+                if abs(step) > _STACK_DX:
+                    wrong.setdefault(i, []).append((m2, m1, "ink", round(step)))
     worst = {i: (len(v), v[:2]) for i, v in wrong.items()}
     check(exact and not wrong,
           f"the shaper stacks every second mark on the first{label} "
@@ -1497,17 +1587,21 @@ def check_marks_seat(tf, shape, check, gs, label=""):
         marks = [g for g in sub.MarkCoverage.glyphs
                  if g in rev and rev[g] not in SPARSE_MARKS]
         bases = [g for g in sub.BaseCoverage.glyphs if g in rev]
-        probes = {(b, m) for b in bases for m in marks[:2]}
-        probes |= {(b, m) for b in bases[:3] for m in marks}
-        dxs, dys = [], []
-        for base_g, mark_g in sorted(probes, key=lambda p: (order.index(p[0]), order.index(p[1]))):
+        # every letter with the first mark it does not compose with,
+        # and every mark on a few letters. A pair the shaper
+        # composes used to be skipped, which left 50 letters of the top
+        # lookup (E I N O U a e ... and every Greek vowel) never
+        # measured (round 9, mutants L8, L9, L14)
+        dxs, dys, rows = [], [], []
+
+        def measure(base_g, mark_g):
             infos, positions = shape(chr(rev[base_g]) + chr(rev[mark_g]), {})
             got = [order[info.codepoint] for info in infos]
             if len(got) < 2:
-                continue
+                return False
             letter = build._bounds(gs, got[0])
             if not letter:
-                continue
+                return True
             for j in range(1, len(got)):
                 mark = build._bounds(gs, got[j])
                 if not mark or got[j] not in sub.MarkCoverage.glyphs:
@@ -1518,15 +1612,64 @@ def check_marks_seat(tf, shape, check, gs, label=""):
                       else (letter[1] - positions[j].y_offset - mark[3]))
                 dxs.append(dx)
                 dys.append(dy)
+                rows.append((got[0], got[j], dx, dy, chr(rev[base_g])))
                 lo, hi = _SEAT_DY[top]
+                # and the mark's ink over the letter's: a fraction of
+                # the mark's width, since a below-mark under one stem of
+                # m or the ogonek at the foot of A are half off by design
                 if not lo <= dy <= hi or abs(dx) > _SEAT_DX:
                     off.setdefault(i, []).append((got[0], got[j], round(dx), round(dy)))
-                break
+                return True
+            return True
+
+        seen = set()
+        for base_g in bases:
+            for mark_g in marks:
+                if measure(base_g, mark_g):
+                    seen.add((base_g, mark_g))
+                    break
+        # every mark on the first three letters of each case: after a
+        # capital the shaper swaps the mark for its raised form, so the
+        # lowercase letters are where the mark itself is measured
+        firsts = bases[:3] + [b for b in bases
+                              if unicodedata.category(chr(rev[b])) == "Ll"][:6]
+        for base_g in firsts:
+            for mark_g in marks:
+                if (base_g, mark_g) not in seen:
+                    measure(base_g, mark_g)
         if dxs:
             mdx, mdy = statistics.median(dxs), statistics.median(dys)
             medians[i] = (round(mdx), round(mdy))
             if abs(mdx) > _SEAT_MEDIAN_DX or not _SEAT_MEDIAN_DY[0] <= mdy <= _SEAT_MEDIAN_DY[1]:
                 off.setdefault(i, []).append(("median", round(mdx), round(mdy)))
+            # and each letter against its kind's median: the letters of
+            # a category, under one mark, the full-width ones (Source
+            # Han Sans's drawings, at another size) apart -- where the
+            # kind has enough letters to have a median
+            by_kind = {}
+            for base_g, mark_g, dx, dy, ch in rows:
+                kind = (unicodedata.category(ch), mark_g,
+                        unicodedata.east_asian_width(ch) in ("W", "F"))
+                by_kind.setdefault(kind, []).append(dy)
+            kind_median = {kind: statistics.median(v) for kind, v in by_kind.items()
+                           if len(v) >= _SEAT_KIND}
+            by_mark = {}
+            for base_g, mark_g, dx, dy, ch in rows:
+                by_mark.setdefault(mark_g, []).append(dx)
+            for mark_g, v in by_mark.items():
+                # a median of one letter is that letter's own offset
+                # (b sets every accent over its stem, 180 left)
+                if len(v) >= 3 and abs(statistics.median(v) - mdx) > _MARK_DX_SPREAD:
+                    off.setdefault(i, []).append((mark_g, "dx", round(statistics.median(v)),
+                                                  "lookup", round(mdx)))
+            for base_g, mark_g, dx, dy, ch in rows:
+                kind = (unicodedata.category(ch), mark_g,
+                        unicodedata.east_asian_width(ch) in ("W", "F"))
+                if ch in SEAT_EDGE_LETTERS or kind not in kind_median:
+                    continue
+                if abs(dy - kind_median[kind]) > _SEAT_SPREAD:
+                    off.setdefault(i, []).append((base_g, mark_g, "dy", round(dy),
+                                                  "kind", round(kind_median[kind])))
     worst = {i: (len(v), v[:2]) for i, v in off.items()}
     check(medians and not off,
           f"every mark's ink sits on its letter's{label} (medians dx, dy by lookup: "
@@ -1578,8 +1721,14 @@ def check_cap_forms(tf, shape, check, label=""):
     if ord("B") not in cmap or 0x0301 not in cmap:
         return
     infos, _ = shape("B\u0301", {})
-    if len(infos) != 2 or order[infos[1].codepoint] == cmap[0x0301]:
-        return                      # this face does not raise: nothing to hold
+    if len(infos) == 2 and order[infos[1].codepoint] == cmap[0x0301]:
+        # this used to return here, "this face does not raise: nothing
+        # to hold" -- and a face whose raising chain was deleted passed
+        # every gate (round 9, mutant L10)
+        check(False, f"B raises the accent after it{label} (the plain acute)")
+        return
+    if len(infos) != 2:
+        return
     low, probed = [], 0
     for cp, g in sorted(cmap.items()):
         ch = chr(cp)
@@ -1640,6 +1789,34 @@ GREEK_ITALIC_GAP = {"\u0392": "the Latin accent",
                     "\u03c1\u0313\u0301": 3, "\u03b1\u0313\u0300": 3}
 
 
+def check_dotless(tf, shape, check, label=""):
+    """i and j lose their dot under an above-mark: Source Code Pro's
+    ccmp swaps them for the dotless forms before a combining mark of
+    the above class, and a face whose rule is gone draws the mark on
+    the dot (round 9, mutant L7). Every above-mark the face has is
+    asked, except the two comma-aboves U+0312 and U+0313, which the
+    donor itself leaves out of the class."""
+    cmap = tf.getBestCmap()
+    order = tf.getGlyphOrder()
+    if not any(ord(base) in cmap for base in "ij"):
+        return
+    dotted, probed = {}, 0
+    for base in "ij":
+        if ord(base) not in cmap:
+            continue
+        for cp in range(0x0300, 0x0315):
+            if cp not in cmap or cp in (0x0312, 0x0313):
+                continue
+            infos, _ = shape(base + chr(cp), {})
+            if len(infos) != 2:
+                continue
+            probed += 1
+            if order[infos[0].codepoint] == cmap[ord(base)]:
+                dotted.setdefault(base, []).append(f"U+{cp:04X}")
+    check(probed and not dotted, f"i and j lose the dot under an accent{label} "
+                                 f"({probed} probed; dotted: {dotted})")
+
+
 def check_greek_accents(tf, shape, check, label=""):
     """Greek gets the Greek accents. Source Code Pro maps them under
     'locl' for script grek -- the tonos is 132 units wide where the
@@ -1679,6 +1856,110 @@ def check_greek_accents(tf, shape, check, label=""):
                    + ")")
 
 
+def check_widths_by_class(tf, shape, check, cell, full, label=""):
+    """Every character's advance follows its East Asian Width, and the
+    shaper gives it that advance alone under the default features.
+
+    Na and H are a cell, W and F the full width (or a cell, for the
+    few in WIDE_IN_ONE_CELL), A and N either; a mark is that or 0. A
+    face with no full width (`full` None) has no W or F but those. The
+    shaped advance is the hmtx one, so a stray placement under any
+    feature -- a SinglePos advance under ccmp moved the column after
+    '0' 200 units (round 9, mutants L5b, J8) -- fails here."""
+    cmap = tf.getBestCmap()
+    hmtx = tf["hmtx"].metrics
+    gdef = getattr(tf.get("GDEF"), "table", None)
+    classes = getattr(getattr(gdef, "GlyphClassDef", None), "classDefs", None) or {}
+    off, shaped, probed = {}, {}, 0
+    for cp, g in sorted(cmap.items()):
+        ch = chr(cp)
+        eaw = unicodedata.east_asian_width(ch)
+        adv = hmtx[g][0]
+        if cp in MULTI_EM:
+            allowed = {MULTI_EM[cp] * (full or 2 * cell)}
+        elif eaw in ("Na", "H"):
+            allowed = {cell}
+        elif eaw in ("W", "F"):
+            allowed = {cell} if cp in WIDE_IN_ONE_CELL else {full}
+        else:
+            allowed = {cell, full}
+        if classes.get(g) == 3 or unicodedata.category(ch).startswith("M"):
+            allowed = allowed | {0}
+        if adv not in allowed:
+            off[ch] = (eaw, adv)
+            continue
+        if cp in DEFAULT_IGNORABLE:
+            continue
+        infos, positions = shape(ch, {})
+        if len(infos) != 1:
+            continue
+        probed += 1
+        got = positions[0].x_advance
+        # a shaper zeroes a mark's advance whatever the lookups say
+        if got != adv and not (classes.get(g) == 3 and got == 0):
+            shaped[ch] = (adv, got)
+    check(probed and not off and not shaped,
+          f"every advance follows the character's width{label} "
+          f"({probed} shaped; off by class: {dict(list(off.items())[:4])}; "
+          f"shaped otherwise: {dict(list(shaped.items())[:4])})")
+
+
+def check_glyph_placement(tf, check, gs, cell, full, label=""):
+    """Each glyph's ink sits in its own cell where its kind belongs:
+    a narrow letter, digit or half-width kana centred within
+    _CENTRE_BAND, a digit or capital on the baseline within _BASELINE,
+    an ideograph or kana inside the em box (_IDEOGRAPH_Y) and, like
+    every full-width glyph, inside its cell to _EDGE, and a
+    zero-advance mark drawn in the cell before (_ZERO_ADVANCE_X).
+
+    ink_spill allows half a cell, centring was a mean, and there was
+    no bound on a glyph's height at all: one glyph moved 250 units
+    sideways or 200 up passed every gate (round 9, mutants L2, L3,
+    J2, J13, V3b). Per glyph, against its own cell, no donor needed."""
+    cmap = tf.getBestCmap()
+    hmtx = tf["hmtx"].metrics
+    off = {}
+    n = 0
+    for cp, g in sorted(cmap.items()):
+        ch = chr(cp)
+        box = build._bounds(gs, g)
+        if box is None:
+            continue
+        adv = hmtx[g][0]
+        eaw = unicodedata.east_asian_width(ch)
+        cat = unicodedata.category(ch)
+        n += 1
+        if adv == cell and ((eaw == "Na" and cat in ("Lu", "Ll", "Nd"))
+                            or (eaw == "H" and cat == "Lo")):
+            centre = (box[0] + box[2]) / 2 - cell / 2
+            if abs(centre) > _CENTRE_BAND:
+                off[ch] = ("centre", round(centre))
+            if (cat == "Nd" or (cat == "Lu" and ch not in "JQ")) \
+                    and not _BASELINE[0] <= box[1] <= _BASELINE[1]:
+                off[ch] = ("baseline", round(box[1]))
+        elif full and adv == full and eaw in ("W", "F"):
+            if box[0] < -_EDGE or box[2] > full + _EDGE:
+                off[ch] = ("cell", round(box[0]), round(box[2]))
+            elif (0x4E00 <= cp <= 0x9FFF or 0x3041 <= cp <= 0x30FF) \
+                    and not _IDEOGRAPH_Y[0] <= box[1] <= box[3] <= _IDEOGRAPH_Y[1]:
+                # no centre band for an ideograph: 亻丬亅 sit at one
+                # side of the cell by design (verify.py holds the Term
+                # face's widening against its JP sibling instead)
+                off[ch] = ("em box", round(box[1]), round(box[3]))
+        elif adv == 0 and cp not in DOUBLE_SPAN and full:
+            if box[0] < -full + _ZERO_ADVANCE_X[0] or box[2] > _ZERO_ADVANCE_X[1]:
+                off[ch] = ("before", round(box[0]), round(box[2]))
+    check(n and not off, f"every glyph's ink sits in its cell{label} "
+                         f"({n} drawn; off: {dict(list(off.items())[:5])})")
+
+
+def check_cells(tf, check, shape, gs, cell, full=None, label=""):
+    """One glyph in one cell: its advance by its width class, as
+    shaped, and its ink where that class sits."""
+    check_widths_by_class(tf, shape, check, cell, full, label)
+    check_glyph_placement(tf, check, gs, cell, full, label)
+
+
 def check_marks(tf, check, shape, gs, label=""):
     """Every mark gate, in the order they build on each other: the
     features and classes, the lookups' reachability, the language
@@ -1696,6 +1977,7 @@ def check_marks(tf, check, shape, gs, label=""):
     check_marks_seat(tf, shape, check, gs, label)
     check_marks_clear(tf, shape, check, gs, label)
     check_cap_forms(tf, shape, check, label)
+    check_dotless(tf, shape, check, label)
     check_greek_accents(tf, shape, check, label)
     check_tie_bars(tf, shape, check, gs, label)
 

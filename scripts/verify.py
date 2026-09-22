@@ -4,9 +4,11 @@
 import json
 import os
 import sys
+import unicodedata
 from pathlib import Path
 
 import pathops
+from fontTools.pens.boundsPen import BoundsPen
 from fontTools.pens.transformPen import TransformPen
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -15,6 +17,7 @@ import build  # noqa: E402
 from build import FULLWIDTH, _unwrap, _unwrap_pos  # noqa: E402
 from verifylib import (  # noqa: E402
     Checker,
+    check_cells,
     check_coverage_order,
     check_features_work,
     check_gdi_family_name,
@@ -77,6 +80,13 @@ WIN_METRICS = build.WIN_METRICS
 # the known one, passed on the italic and failed on the upright. (The
 # Greek gaps live with their gate, verifylib.GREEK_ITALIC_GAP.)
 LOCL_ITALIC_GAP = {("cyrl", "sr"): "unchanged"}
+# where Source Han Sans draws the dakuten and handakuten after a
+# half-width kana (the mark's ink, y): measured 652..875 at Regular,
+# 655..902 at Bold Italic
+VOICING_Y = (620, 940)
+# the ASCII punctuation whose full-width vertical form is its Unicode
+# vertical presentation form's glyph (check_width_forms)
+VERTICAL_AS_FULLWIDTH = frozenset(b"()[]{},")
 
 # drawn to tile, so a run of them must show no seam: the full-width low
 # line and overline, the wave dash, a quadrant, and the box-drawing and
@@ -153,6 +163,94 @@ def expected_metrics(tf):
         if suffix in fam.split(" "):
             return pair
     return DEFAULT_METRICS
+
+
+def check_width_forms(tf, check, shape):
+    """'fwid' and 'vert' give the glyph Unicode already encodes for the
+    form: the full-width form of an ASCII character is U+FF01.. and
+    the vertical form of a full-width punctuation mark is its
+    <vertical> presentation form (U+FE10.., U+FE30..). A substitution
+    re-pointed to the wrong glyph of the right width passed every
+    other gate (round 9, mutants J4, J5)."""
+    cmap = tf.getBestCmap()
+    order = tf.getGlyphOrder()
+    off, probed = {}, 0
+    for cp in range(0x21, 0x7F):
+        wide = 0xFF01 + cp - 0x21
+        if cp not in cmap or wide not in cmap:
+            continue
+        infos, _ = shape(chr(cp), {"fwid": True})
+        probed += 1
+        if len(infos) != 1 or order[infos[0].codepoint] != cmap[wide]:
+            off[chr(cp)] = "fwid"
+    for cp in list(range(0xFE10, 0xFE1A)) + list(range(0xFE30, 0xFE45)):
+        form = unicodedata.decomposition(chr(cp))
+        if not form.startswith("<vertical>") or cp not in cmap:
+            continue
+        base = int(form.split()[1], 16)
+        # an ASCII base stands for its full-width form -- the brackets
+        # and the comma, whose vertical glyph Source Han Sans shares
+        # with the presentation form; ：；！？ and the wavy low line
+        # take rotated forms of their own and are not asked
+        if base in VERTICAL_AS_FULLWIDTH:
+            base = 0xFF01 + base - 0x21
+        elif base < 0x3000:
+            continue
+        if base not in cmap:
+            continue
+        infos, _ = shape(chr(base), {"vert": True})
+        probed += 1
+        if len(infos) != 1 or order[infos[0].codepoint] != cmap[cp]:
+            off[chr(base)] = "vert"
+    check(probed and not off, f"fwid and vert give the encoded forms "
+                              f"({probed} probed; off: {off})")
+
+
+def check_term_sibling(tf, check, full):
+    """A Term face is its JP sibling with every kana and ideograph moved
+    half the extra width to the right, and every half-width glyph drawn
+    the same: held glyph by glyph against the sibling built beside it,
+    when it is there (CI builds both). One kanji left at its 1000 width
+    in the 1200 cell passed every gate (round 9, mutant J11). The
+    symbols are not modelled -- a rule is extended to tile, a dashed
+    line stretched, a wide numeral refitted -- and are left to the
+    general gates."""
+    from fontTools.ttLib import TTFont
+    name = FONT.name
+    if "Term" not in name:
+        return
+    sibling = FONT.with_name(name.replace("Term", "", 1))
+    if not sibling.exists():
+        return
+    jp = TTFont(str(sibling))
+    jp_full = expected_metrics(jp)[1]
+    shift = (full - jp_full) / 2
+    gs, jp_gs = tf.getGlyphSet(), jp.getGlyphSet()
+    jp_hmtx = jp["hmtx"].metrics
+    cmap, jp_cmap = tf.getBestCmap(), jp.getBestCmap()
+    off, n = {}, 0
+    for cp, g in cmap.items():
+        theirs = jp_cmap.get(cp)
+        if theirs is None:
+            off[chr(cp)] = "not in the sibling"
+            continue
+        wide = jp_hmtx[theirs][0] == jp_full
+        if wide and not (0x3041 <= cp <= 0x30FF or 0x4E00 <= cp <= 0x9FFF):
+            continue
+        if not wide and jp_hmtx[theirs][0] != build.CELL:
+            continue            # a zero-advance mark or a multi-em dash
+        box, jp_box = build._bounds(gs, g), build._bounds(jp_gs, theirs)
+        if box is None or jp_box is None:
+            if (box is None) != (jp_box is None):
+                off[chr(cp)] = "drawn in one"
+            continue
+        n += 1
+        dx = shift if wide else 0
+        want = (jp_box[0] + dx, jp_box[1], jp_box[2] + dx, jp_box[3])
+        if any(abs(a - b) > 1 for a, b in zip(box, want)):
+            off[chr(cp)] = (tuple(round(v) for v in box), tuple(round(v) for v in want))
+    check(n and not off, f"the Term face is its JP sibling, the kana and ideographs {shift:g} over "
+                         f"({n} glyphs; off: {dict(list(off.items())[:4])})")
 
 
 def main():
@@ -432,6 +530,24 @@ def main():
         off = [row for row in off if abs(row[1] - row[2]) > 2]
         check(not off, f"vmtx and VORG agree on the vertical origin "
                        f"({len(off)} off, e.g. {off[:3]})")
+        # and the column itself: every glyph with a horizontal advance
+        # is one em tall in vertical text, and an ideograph or kana
+        # keeps Source Han Sans's default origin -- the ones it moves
+        # are its full-width forms and symbols. A vertical advance of
+        # 1500 on one kanji, or its origin 300 down, passed (round 9,
+        # mutants J3, J3b)
+        em = tf["head"].unitsPerEm
+        # the vertical kana repeat marks 〱〲 are two em tall by design
+        tall = {chr(cp): vmtx[g][0] for cp, g in cmap.items()
+                if g in vmtx and hmtx[g][0] > 0 and cp not in (0x3031, 0x3032)
+                and vmtx[g][0] != em}
+        moved = {cp: vorg.VOriginRecords[g] for cp, g in cmap.items()
+                 if g in vorg.VOriginRecords
+                 and (0x3040 <= cp <= 0x30FF or 0x4E00 <= cp <= 0x9FFF)}
+        check(not tall, f"every glyph with an advance is one em tall in "
+                        f"vertical text ({len(tall)} off, e.g. {list(tall.items())[:3]})")
+        check(not moved, f"no kana or ideograph moves its vertical origin "
+                         f"({len(moved)} off, e.g. {list(moved.items())[:3]})")
 
     sub = subfamily_name(tf)
     check_style_bits(tf, check, sub, italic)
@@ -442,6 +558,9 @@ def main():
     # above, before a shaper exists): the moved anchor and the moved
     # mark still meet
     check_marks(tf, check, shape_infos, tf.getGlyphSet())
+    check_cells(tf, check, shape_infos, tf.getGlyphSet(), exp_half, exp_full)
+    check_width_forms(tf, check, shape_infos)
+    check_term_sibling(tf, check, exp_full)
 
     # the hinting the build spends a minute a face on: nothing here read
     # it, and a face whose autohint pass silently did nothing — which is
@@ -695,7 +814,6 @@ def main():
     # box of a sheared shape is not the shear of its box: in the italic
     # faces every arrow came out tan(11°) of its own height to the right
     # — 67u off centre, ⇐ 56u into the next cell, ↑ 72u away from ↓
-    from fontTools.pens.boundsPen import BoundsPen
     arrow_gs = tf.getGlyphSet()
     off_centre = {}
     for ch in ARROWS_H + ARROWS_V:
@@ -1032,6 +1150,19 @@ def main():
     # catches shared up to 4,651
     budget = build.CELL * build.CELL // 400
     voiced = {}
+    # every half-width kana that takes a voicing mark, not three of
+    # them: the Term re-shift is a chain context naming each kana, and
+    # one dropped from it put the mark 100 units left (round 9, mutant
+    # J15). The mark's own ink is held to the kana's cell and to the
+    # height Source Han Sans draws it at (VOICING_Y), which nothing
+    # else bounds for a zero-advance glyph (mutant J6)
+    # the shared-ink budget on the three kana it was measured for (the
+    # strokes of ﾁ ｻ ｿ ﾃ reach under the mark in Source Han Sans's own
+    # design, up to 6,800 square units at Bold); the mark's PLACE on
+    # every kana: Source Han Sans sets the voicing mark at one place
+    # in the cell whatever the kana, so each is held to where it lands
+    # after ｶ, and to the height the mark is drawn at (VOICING_Y) --
+    # which nothing else bounds for a zero-advance glyph (mutant J6)
     for kana in "\uff76\uff88\uff73":
         for mark in "\u3099\u309a":
             if ord(kana) not in cmap or ord(mark) not in cmap:
@@ -1039,9 +1170,30 @@ def main():
             area = ink_overlap(kana + mark)
             if area > budget:
                 voiced[kana + mark] = round(area)
-    check(not voiced, f"a voicing mark clears the half-width kana it "
-                      f"marks (over {budget} square units of shared ink: "
-                      f"{voiced})")
+    places = {}
+    for kana in [chr(cp) for cp in range(0xFF73, 0xFF8F) if cp in cmap]:
+        for mark in "\u3099\u309a":
+            if ord(mark) not in cmap:
+                continue
+            infos, positions = shape_infos(kana + mark, {})
+            if len(infos) != 2:
+                continue
+            pen = BoundsPen(None)
+            arrow_gs[glyph_order[infos[1].codepoint]].draw(pen)
+            if pen.bounds is None:
+                continue
+            x0 = positions[0].x_advance + positions[1].x_offset
+            place = (round(x0 + pen.bounds[0]), round(positions[1].y_offset + pen.bounds[1]),
+                     round(x0 + pen.bounds[2]), round(positions[1].y_offset + pen.bounds[3]))
+            first = places.setdefault(mark, (kana, place))
+            if place != first[1]:
+                voiced[kana + mark] = ("place", place, "after", first[0], first[1])
+            elif place[0] < 0 or place[2] > build.CELL + 12 \
+                    or not VOICING_Y[0] <= place[1] <= place[3] <= VOICING_Y[1]:
+                voiced[kana + mark] = ("ink", place)
+    check(len(places) == 2 and not voiced,
+          f"a voicing mark clears the half-width kana it marks, at one "
+          f"place (over {budget} square units of shared ink, or off: {voiced})")
 
     # the Serbian and Northern Sami forms are copied in with the Greek;
     # Source Han Sans JP has no LangSys for either, so they were
@@ -1571,7 +1723,6 @@ def main():
     ok = avg_w == want_avg
     check(ok, f"OS/2.xAvgCharWidth is the mean non-zero advance ({avg_w} vs {want_avg})")
 
-    from fontTools.pens.boundsPen import BoundsPen
     gs = tf.getGlyphSet()
     for attr, ch in (("sxHeight", "x"), ("sCapHeight", "H")):
         pen = BoundsPen(gs)

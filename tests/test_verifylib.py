@@ -554,15 +554,19 @@ def test_check_anchor_coverage_asks_only_of_letters():
     assert _coverage(font) == []
 
 
-def test_ink_spill_allows_half_a_cell_and_not_a_unit_more():
-    """The bound is half a cell of lean either side of the advance."""
+def test_ink_spill_allows_the_widest_lean_and_not_a_unit_more():
+    """The bound is _LEAN either side of the advance: the widest italic
+    lean is 224, and half a cell let a ligature drawn 300 to the right
+    pass (round 9, mutant L4)."""
     cmap = {0x61: "a"}
-    ok = {"a": (-300, 0, 900, 700)}
+    lean = verifylib._LEAN
+    assert lean == 230
+    ok = {"a": (-lean, 0, 600 + lean, 700)}
     assert verifylib.ink_spill(ok, lambda g: 600, cmap, 600) == []
-    assert verifylib.ink_spill({"a": (-301, 0, 500, 700)}, lambda g: 600, cmap, 600) \
-        == [("a", 600, -301, 500)]
-    assert verifylib.ink_spill({"a": (0, 0, 901, 700)}, lambda g: 600, cmap, 600) \
-        == [("a", 600, 0, 901)]
+    assert verifylib.ink_spill({"a": (-lean - 1, 0, 500, 700)}, lambda g: 600, cmap, 600) \
+        == [("a", 600, -lean - 1, 500)]
+    assert verifylib.ink_spill({"a": (0, 0, 601 + lean, 700)}, lambda g: 600, cmap, 600) \
+        == [("a", 600, 0, 601 + lean)]
 
 
 def test_ink_spill_gives_a_double_diacritic_a_whole_cell_and_only_it():
@@ -582,7 +586,7 @@ def test_ink_spill_gives_a_double_diacritic_a_whole_cell_and_only_it():
 def test_ink_spill_rounds_as_the_static_faces_store_the_outline():
     """A variable font blends to -300.135 where the static rounds to
     -300: the same outline, judged the same way."""
-    assert verifylib.ink_spill({"a": (-300.135, 0, 500, 700)},
+    assert verifylib.ink_spill({"a": (-230.135, 0, 500, 700)},
                                lambda g: 600, {0x61: "a"}, 600) == []
 
 
@@ -716,9 +720,16 @@ def test_check_mark_features_wants_the_gdef_classes_gpos_filters_on():
 
 def test_check_marks_runs_every_gate_and_passes_a_sound_face():
     anchors, heights = _ruled()
-    font = _mark_font(anchors, heights, marks={"grave": 0x0300},
+    heights["acutecap"] = 500
+    # every capital raises the acute; b5 is also 'b', where it seats
+    font = _mark_font(anchors, heights, marks={"grave": 0x0300, "acutecap": None},
                       mark2={"grave": (50, 200), "acute": (50, 200)},
-                      fea_extra="feature ccmp { pos b1 <0 10 0 0>; } ccmp;\n")
+                      cmap_extra={0x62: "b5"},
+                      fea_extra="feature ccmp { pos b1 <0 10 0 0>; } ccmp;\n"
+                                "feature ccmp { sub [%s] acute' by acutecap; } ccmp;\n"
+                                % " ".join(g for g in anchors if g != "b5"))
+    for table in font["cmap"].tables:
+        table.cmap.pop(0x46, None)        # b5 is 'b' only, not also 'F'
     assert _all_marks(font) == []
 
 
@@ -1200,3 +1211,129 @@ def test_check_tone_lookups_wants_no_letter_in_a_tone_lookup():
     assert _gate(verifylib.check_tone_lookups, _tone_font(shared=False)) == []
     off = _gate(verifylib.check_tone_lookups, _tone_font(shared=True))
     assert off and "b0" in off[0]
+
+
+def _seat(font):
+    return _gate(lambda f, chk: verifylib.check_marks_seat(f, _shaper_for(f), chk,
+                                                          f.getGlyphSet()), font)
+
+
+def _cells(font, full=None):
+    return _gate(lambda f, chk: verifylib.check_cells(f, chk, _shaper_for(f), f.getGlyphSet(),
+                                                     600, full), font)
+
+
+def test_check_marks_seat_holds_each_letter_to_its_kind():
+    """One letter's anchor 100 below its category's, inside every
+    absolute band (round 9, mutant L12b: B's anchors 140 down passed)."""
+    anchors, heights = _ruled()
+    anchors["b3"] = (50, heights["b3"] - 80)      # dy -80: inside _SEAT_DY, 100 off the kind
+    off = _seat(_mark_font(anchors, heights))
+    assert off and "b3" in off[0] and "kind" in off[0]
+    # the same letter, in a kind too small to have a median (the one
+    # lowercase letter among capitals), is held to the absolute bands only
+    assert _seat(_mark_font(anchors, heights, cmap_extra={0x61: "b3"})) == []
+
+
+def test_check_marks_seat_measures_a_letter_that_composes_with_the_first_mark():
+    """'A' + acute composes to Á and used to be skipped; the gate takes
+    the next mark that does not compose (round 9, mutants L8, L14)."""
+    anchors, heights = _ruled()
+    anchors["b0"] = (50, heights["b0"] - 80)      # b0 is 'A'
+    font = _mark_font(anchors, heights, marks={"grave": 0x0310})  # U+0310 composes with nothing
+    assert any("b0" in m for m in _seat(font))
+
+
+def test_check_marks_stack_holds_the_second_marks_ink_over_the_first():
+    """An exact Mark2 anchor 200 to the side stacks the second accent
+    beside the first (round 9, mutant L18)."""
+    anchors, heights = _ruled()
+    font = _mark_font(anchors, heights, marks={"grave": 0x0300},
+                      mark2={"grave": (250, 200), "acute": (250, 200)})
+    off = _stack(font)
+    assert off and "ink" in off[0]
+
+
+def test_check_cap_forms_fails_a_face_that_does_not_raise():
+    """This used to return with no check when B + acute kept the plain
+    acute (round 9, mutant L10: the raising chain deleted)."""
+    anchors, heights = _ruled()
+    low = _gate(lambda f, chk: verifylib.check_cap_forms(f, _shaper_for(f), chk),
+                _mark_font(anchors, heights))
+    assert low and "plain acute" in low[0]
+
+
+def test_check_dotless_wants_i_and_j_swapped_under_an_accent():
+    anchors, heights = _ruled(2)
+    heights["dotlessi"] = 400
+    cmap = {0x69: "b0", 0x6A: "b1"}
+    swapped = _mark_font(anchors, heights, cmap_extra=cmap,
+                         fea_extra="feature ccmp { sub [b0 b1]' acute by dotlessi; } ccmp;\n")
+    run = lambda f: _gate(lambda g, chk: verifylib.check_dotless(g, _shaper_for(g), chk), f)  # noqa: E731
+    assert run(swapped) == []
+    dotted = run(_mark_font(anchors, heights, cmap_extra=cmap))
+    assert dotted and "U+0301" in dotted[0]
+
+
+def test_check_widths_by_class_holds_the_advance_and_the_shaped_advance():
+    """'e' at two cells passed check_grid (a whole number of cells);
+    a SinglePos advance under ccmp moved the next column (round 9,
+    mutants L1, L5b)."""
+    anchors, heights = _ruled()
+    font = _mark_font(anchors, heights, cmap_extra={0x65: "b4"}, width=500)
+    assert _cells(font) == []
+    font["hmtx"].metrics["b4"] = (1200, 0)
+    off = _cells(font)
+    assert off and "'e': ('Na', 1200)" in off[0]
+    pushed = _mark_font(anchors, heights, cmap_extra={0x65: "b4"}, width=500,
+                        fea_extra="feature ccmp { pos b4 <0 0 100 0>; } ccmp;\n")
+    off = _cells(pushed)
+    assert off and "'e': (600, 700)" in off[0]
+
+
+def test_check_glyph_placement_holds_a_letter_to_its_cells_centre_and_baseline():
+    """One glyph drawn 250 to the side, or 200 up, passed every gate
+    (round 9, mutants L2, L3)."""
+    anchors, heights = _ruled()
+    assert _cells(_mark_font(anchors, heights, width=500)) == []
+    aside = _cells(_mark_font(anchors, heights, width=100))    # ink 0..100, centre 50 of 300
+    assert aside and "centre" in aside[0]
+    from fontTools.pens.t2CharStringPen import T2CharStringPen
+    font = _mark_font(anchors, heights, width=500)
+    pen = T2CharStringPen(0, None)
+    pen.moveTo((0, 200))
+    pen.lineTo((500, 200))
+    pen.lineTo((500, 600))
+    pen.closePath()
+    td = font["CFF "].cff.topDictIndex[0]
+    td.CharStrings["b2"] = pen.getCharString(private=td.Private)
+    up = _cells(font)
+    assert up and "baseline" in up[0]
+
+
+def test_round_9_bands_are_the_measured_ones():
+    assert verifylib._SEAT_SPREAD == 60 and verifylib._SEAT_KIND == 5
+    assert verifylib._STACK_DX == 80 and verifylib._LEAN == 230
+    assert verifylib._CENTRE_BAND == 120 and verifylib._BASELINE == (-20, 10)
+    assert verifylib._IDEOGRAPH_Y == (-130, 890)
+    assert verifylib._EDGE == 12 and verifylib._ZERO_ADVANCE_X == (-120, 300)
+    assert verifylib.MULTI_EM == {0x2E3A: 2, 0x2E3B: 3}
+    assert 0xFEFF in verifylib.DEFAULT_IGNORABLE and 0x00AD in verifylib.DEFAULT_IGNORABLE
+
+
+def test_check_marks_seat_holds_each_mark_to_the_lookups_sideways_offset():
+    """One mark's outline moved 220 right, its anchor left behind, sits
+    220 off where the lookup's other marks sit (round 9, mutant L13)."""
+    from fontTools.pens.t2CharStringPen import T2CharStringPen
+    anchors, heights = _ruled()
+    font = _mark_font(anchors, heights, marks={"grave": 0x0300, "circ": 0x0302}, width=100)
+    pen = T2CharStringPen(0, None)
+    pen.moveTo((220, 0))
+    pen.lineTo((320, 0))
+    pen.lineTo((320, 500))
+    pen.closePath()
+    td = font["CFF "].cff.topDictIndex[0]
+    td.CharStrings["circ"] = pen.getCharString(private=td.Private)
+    off = _seat(font)
+    assert off and "'circ', 'dx', 220" in off[0]
+    assert verifylib._MARK_DX_SPREAD == 110
