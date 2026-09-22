@@ -71,7 +71,6 @@ python scripts/build.py "Light Upright Term"   # 1 面だけ
 
 ```sh
 python -m pytest tests/ -q                                  # 単体テスト
-python scripts/lint_workflows.py                            # .github/ の YAML が読めるか
 python scripts/verify_latin.py dist/latin/Gengou-Regular.otf
 python scripts/verify_latin_vf.py "dist/latin/Gengou[wght].otf"
 python scripts/verify.py dist/GengouJP-Regular.otf
