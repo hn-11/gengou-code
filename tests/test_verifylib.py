@@ -543,15 +543,17 @@ def test_check_marks_attach_catches_a_vertical_disagreement_alone():
     assert out and "b5" in out[0]
 
 
-def test_check_anchor_coverage_asks_only_of_letters():
-    """A drawn, cmapped glyph that is not a letter takes no accent and
-    is not a base; its absence is not a gap. The middle dot (U+00B7)
-    sits inside the Latin-1 letter range, so it is the category test,
-    not the range test, that has to excuse it."""
+def test_check_anchor_coverage_asks_of_what_takes_an_accent():
+    """A drawn, cmapped glyph outside anchors.accent_bases (an arrow)
+    takes no accent and its absence is not a gap; the middle dot
+    (U+00B7) is Latin-1 punctuation, which takes one since round 10,
+    and unanchored it is a gap."""
     anchors, heights = _ruled()
+    heights["arrow"] = 500
+    assert _coverage(_mark_font(anchors, heights, cmap_extra={0x2190: "arrow"})) == []
     heights["periodcentered"] = 500
-    font = _mark_font(anchors, heights, cmap_extra={0xB7: "periodcentered"})
-    assert _coverage(font) == []
+    short = _coverage(_mark_font(anchors, heights, cmap_extra={0xB7: "periodcentered"}))
+    assert short and "periodcentered" in short[0]
 
 
 def test_ink_spill_allows_the_widest_lean_and_not_a_unit_more():
@@ -1337,4 +1339,172 @@ def test_check_marks_seat_holds_each_mark_to_the_lookups_sideways_offset():
     td.CharStrings["circ"] = pen.getCharString(private=td.Private)
     off = _seat(font)
     assert off and "'circ', 'dx', 220" in off[0]
+
+
+# --- the face-wide gates (round 10) ------------------------------------------
+
+def test_check_font_matrix_wants_1_1000_everywhere():
+    """A FontMatrix of 0.0007 drew every glyph at 70% in FreeType while
+    every other gate here read it whole, since fontTools ignores the
+    matrix (round 10, mutants G8, J29)."""
+    anchors, heights = _ruled(2)
+    font = _mark_font(anchors, heights)
+    assert _gate(verifylib.check_font_matrix, font) == []
+    td = font["CFF "].cff.topDictIndex[0]
+    td.FontMatrix = [0.0007, 0, 0, 0.0007, 0, 0]
+    off = _gate(verifylib.check_font_matrix, font)
+    assert off and "top" in off[0]
+
+
+def test_check_line_metrics_wants_the_pinned_numbers_not_just_agreement():
+    """verify.py pinned LINE_METRICS and the Latin faces only asked
+    hhea == typo, so a 1400/-600 line -- equal to itself but not the
+    real numbers -- passed there (round 10, mutants G7, G33, V11)."""
+    font = _metadata_font()
+    hhea, os2 = font["hhea"], font["OS/2"]
+    hhea.ascent, hhea.descent, hhea.lineGap = verifylib.LINE_METRICS
+    os2.sTypoAscender, os2.sTypoDescender, os2.sTypoLineGap = verifylib.LINE_METRICS
+    assert _gate(verifylib.check_line_metrics, font) == []
+    bad = _metadata_font()
+    hhea, os2 = bad["hhea"], bad["OS/2"]
+    hhea.ascent, hhea.descent, hhea.lineGap = 1400, -600, 0
+    os2.sTypoAscender, os2.sTypoDescender, os2.sTypoLineGap = 1400, -600, 0
+    off = _gate(verifylib.check_line_metrics, bad)
+    assert off and "1400" in off[0]
+
+
+def test_check_gdef_classes_wants_no_spacing_letter_marked_as_a_mark():
+    """A shaper zeroes the advance of every class-3 glyph: '?' classed
+    as a mark drew over the letter before it (round 10, mutants G3,
+    J27)."""
+    anchors, heights = _ruled(2)
+    font = _mark_font(anchors, heights)
+    assert _gate(verifylib.check_gdef_classes, font) == []
+    font["GDEF"].table.GlyphClassDef.classDefs["b0"] = 3
+    off = _gate(verifylib.check_gdef_classes, font)
+    assert off and "U+0041" in off[0]
+
+
+def test_check_pair_positioning_wants_only_vkrn_pairs():
+    """A PairPos under ccmp moved the letter after 'a' 300 units; the
+    build drops kern/palt/halt because the grid is the spacing, and
+    Source Han Sans's vertical kerning stays, opt-in (round 10,
+    mutants G4, J28b, J46)."""
+    anchors, heights = _ruled(2)
+    kerned = _mark_font(anchors, heights,
+                        fea_extra="feature kern { pos b0 b1 -300; } kern;\n")
+    off = _gate(verifylib.check_pair_positioning, kerned)
+    assert off and "kern" in off[0]
+    vkerned = _mark_font(anchors, heights,
+                         fea_extra="feature vkrn { pos b0 b1 -300; } vkrn;\n")
+    assert _gate(verifylib.check_pair_positioning, vkerned) == []
+
+
+def test_check_substitution_identity_wants_nfkd_equivalence():
+    """A substitution never turns a character into another character --
+    rn to m, 0 to O, ａ to ｂ's half-width form -- but an unencoded
+    output (the ligature glyphs the other gates measure) is exempt, and
+    so is 'aalt', whose whole point is to reach every related glyph
+    (round 10, mutants G5, G37, J51)."""
+    anchors, heights = _ruled(3)          # b0/b1/b2 cmap to 'A'/'B'/'C'
+    bad = _mark_font(anchors, heights,
+                     fea_extra="feature liga { sub b0 b1 by b2; } liga;\n")
+    off = _gate(verifylib.check_substitution_identity, bad)
+    assert off and "b2" in off[0]
+    good = _mark_font(anchors, heights, marks={"lig": None},
+                      fea_extra="feature liga { sub b0 b1 by lig; } liga;\n"
+                                "feature aalt { sub b0 by b2; } aalt;\n")
+    assert _gate(verifylib.check_substitution_identity, good) == []
+
+
+def _lig_box(cell, *pts):
+    from fontTools.pens.t2CharStringPen import T2CharStringPen
+    x0, y0, x1, y1 = pts
+    pen = T2CharStringPen(0, None)
+    pen.moveTo((x0, y0))
+    pen.lineTo((x1, y0))
+    pen.lineTo((x1, y1))
+    pen.lineTo((x0, y1))
+    pen.closePath()
+    return pen
+
+
+def _lig_font(lig_box, cell=500):
+    """b0 ('-'), b1 ('>') and an unencoded 'lig' -- build.LIGATURES'
+    '->' entry, the one two-character ligature a two-letter fixture can
+    map -- with 'lig' drawn at `lig_box`."""
+    from conftest import make_cff_font
+    from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
+    order = [".notdef", "b0", "b1", "lig"]
+    boxes = {".notdef": (0, 0, cell, 500), "b0": (0, 0, cell, 500),
+            "b1": (0, 0, cell, 500), "lig": lig_box}
+    font = make_cff_font(order, {g: _lig_box(cell, *boxes[g]).getCharString() for g in order},
+                         {0x2D: "b0", 0x3E: "b1"}, {g: (cell, 0) for g in order})
+    td = font["CFF "].cff.topDictIndex[0]
+    for g in order:                       # re-cut with the real Private subrs
+        td.CharStrings[g] = _lig_box(cell, *boxes[g]).getCharString(private=td.Private)
+    addOpenTypeFeaturesFromString(font, "feature liga { sub b0 b1 by lig; } liga;\n")
+    return font
+
+
+def test_check_ligature_cells_holds_the_unencoded_glyph_to_its_parts():
+    """A ligature glyph is unencoded, so nothing else holds its ink: one
+    drawn 250 up floated over the x-height and every other gate passed
+    it (round 10, mutants G1, G1b, G1c, V10)."""
+    good = _lig_font((0, 0, 1000, 500))
+    off = _gate(lambda f, chk: verifylib.check_ligature_cells(
+        f, _shaper_for(f), chk, f.getGlyphSet(), 500), good)
+    assert off == []
+    bad = _lig_font((0, 700, 1000, 900))     # floats over b0/b1's 0..500 ink
+    off = _gate(lambda f, chk: verifylib.check_ligature_cells(
+        f, _shaper_for(f), chk, f.getGlyphSet(), 500), bad)
+    assert off and "'->': ('height'" in off[0]
+
+
+def test_check_blank_glyphs_wants_notdef_inked_and_spaces_blank():
+    """.notdef must draw a box (an unknown character shows one, not
+    nothing) and the spaces / default-ignorables must draw nothing
+    (round 10, mutants G25, G26)."""
+    from fontTools.pens.t2CharStringPen import T2CharStringPen
+    anchors, heights = _ruled(2)
+    font = _mark_font(anchors, heights, width=200)
+    assert _gate(lambda f, chk: verifylib.check_blank_glyphs(f, chk, f.getGlyphSet()),
+                font) == []
+    blank_notdef = _mark_font(anchors, heights, width=200)
+    td = blank_notdef["CFF "].cff.topDictIndex[0]
+    td.CharStrings[".notdef"] = T2CharStringPen(0, None).getCharString(private=td.Private)
+    off = _gate(lambda f, chk: verifylib.check_blank_glyphs(f, chk, f.getGlyphSet()),
+               blank_notdef)
+    assert off and ".notdef draws a box" in off[0]
+    inked_space = _mark_font(anchors, heights, width=200, cmap_extra={0x20: "b0"})
+    off = _gate(lambda f, chk: verifylib.check_blank_glyphs(f, chk, f.getGlyphSet()),
+               inked_space)
+    assert off and "U+0020" in off[0]
+
+
+def test_check_name_composition_wants_full_and_postscript_to_match_family_and_style():
+    """nameID 4 is the family and subfamily, 6 the PostScript pair: a
+    Regular calling itself 'Gengou Bold' in both passed (round 10,
+    mutant G13)."""
+    font = _metadata_font()
+    font["name"].setName("Test", 4, 3, 1, 0x409)
+    font["name"].setName("Test-Regular", 6, 3, 1, 0x409)
+    assert _gate(verifylib.check_name_composition, font) == []
+    bad = _metadata_font()
+    bad["name"].setName("Test Bold", 4, 3, 1, 0x409)
+    bad["name"].setName("Test-Regular", 6, 3, 1, 0x409)
+    off = _gate(verifylib.check_name_composition, bad)
+    assert off and "Test Bold" in off[0]
+
+
+def test_check_family_cmap_wants_every_sibling_codepoint():
+    """A codepoint dropped from one face still passed its own repertoire
+    floor: check_family_cmap holds it to a sibling built beside it
+    (round 10, mutant G9)."""
+    mine = _metadata_font()
+    sibling = _metadata_font()
+    sibling["cmap"].tables[0].cmap[0x63] = "a"
+    off = _gate(lambda f, chk: verifylib.check_family_cmap(f, chk, sibling), mine)
+    assert off and "U+0063" in off[0]
+    assert _gate(lambda f, chk: verifylib.check_family_cmap(f, chk, mine), sibling) == []
     assert verifylib._MARK_DX_SPREAD == 110

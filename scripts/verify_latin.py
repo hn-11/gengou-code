@@ -16,21 +16,30 @@ import build_latin  # noqa: E402
 from verify import CASES  # noqa: E402
 from verifylib import (  # noqa: E402
     Checker,
+    check_blank_glyphs,
     check_cells,
     check_coverage_order,
+    check_family_cmap,
     check_features_work,
+    check_font_matrix,
+    check_gdef_classes,
     check_gdef_marks,
     check_gdi_family_name,
     check_grid,
     check_heights,
     check_latin_repertoire,
+    check_ligature_cells,
+    check_line_metrics,
     check_mark_class_closure,
     check_marks,
     check_monospace_metadata,
+    check_name_composition,
     check_name_ids,
+    check_pair_positioning,
     check_private,
     check_stat,
     check_style_bits,
+    check_substitution_identity,
     check_tables,
     check_version_stamp,
     check_zones,
@@ -135,6 +144,15 @@ def main():
     for tbl in ("vhea", "vmtx", "VORG", "DSIG"):
         check(tbl not in tf, f"no {tbl} table")
     check_gdef_marks(tf, check, cmap)
+    check_gdef_classes(tf, check)
+    check_line_metrics(tf, check)
+    check_font_matrix(tf, check)
+    check_pair_positioning(tf, check)
+    check_substitution_identity(tf, check)
+    check_blank_glyphs(tf, check, tf.getGlyphSet())
+    check_name_composition(tf, check)
+    ref = FONT.with_name("Gengou-Regular.otf")
+    check_family_cmap(tf, check, TTFont(str(ref)) if ref != FONT and ref.exists() else None)
     check_coverage_order(tf, check)
     check_mark_class_closure(tf, check)
     check_private(tf, check)
@@ -152,6 +170,7 @@ def main():
     # the shaper makes of them (verifylib says why there are seven)
     check_marks(tf, check, shape, gs)
     check_cells(tf, check, shape, gs, CELL)
+    check_ligature_cells(tf, shape, check, gs, CELL)
     check_heights(tf, check, gs, cmap)
     check_zones(tf, check, cmap)
     check_features_work(shape, check, cmap)
@@ -179,7 +198,12 @@ def main():
 
     if is_nf:
         import nerdpatch
-        for ok, msg in nerdpatch.icon_checks(tf, nerdpatch.symbols_for_checks()):
+        symbols = nerdpatch.symbols_for_checks()
+        # the icon gates without the donor keep a tenth of the cell of
+        # slack, and a separator 50 units short of the line passed that
+        # way (round 10, mutant N9): the release builds have the donor
+        check(symbols is not None, "NF_SYMBOLS points at the Symbols donor")
+        for ok, msg in nerdpatch.icon_checks(tf, symbols):
             check(ok, msg)
 
     print("FAILED" if check.failed else "all checks passed")

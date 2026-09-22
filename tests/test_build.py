@@ -3071,13 +3071,20 @@ def test_anchor_loose_letters_handed_nothing_places_nothing():
                            .SubTable[0].BaseCoverage.glyphs)
 
 
-def test_anchor_loose_letters_skips_what_is_not_a_letter():
+def test_anchor_loose_letters_skips_what_takes_no_accent():
+    """A symbol outside the Latin layer's spacing characters (an arrow)
+    gets no anchor; the ASCII period does (anchors.accent_bases)."""
     marks = {"acute": (0, _anchor(0, 0))}
+    font = _drawn_gpos_font(
+        {**_HEIGHTS, "arrow": 100, "acute": 100},
+        _letters_cmap(_HEIGHTS, {0x0301: "acute", 0x2190: "arrow"}),
+        [_edge_markbase(marks, _HEIGHTS, 20, top=True)])
+    assert anchors.anchor_loose_letters(font) == 0
     font = _drawn_gpos_font(
         {**_HEIGHTS, "period": 100, "acute": 100},
         _letters_cmap(_HEIGHTS, {0x0301: "acute", 0x2E: "period"}),
         [_edge_markbase(marks, _HEIGHTS, 20, top=True)])
-    assert anchors.anchor_loose_letters(font) == 0
+    assert anchors.anchor_loose_letters(font) == 1
 
 
 def test_import_donor_base_anchors_moves_the_anchor_with_the_outline():

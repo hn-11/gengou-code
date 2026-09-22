@@ -26,20 +26,29 @@ import build  # noqa: E402
 import build_latin_vf  # noqa: E402
 from verifylib import (  # noqa: E402
     Checker,
+    check_blank_glyphs,
     check_cells,
     check_coverage_order,
+    check_family_cmap,
     check_features_work,
+    check_font_matrix,
+    check_gdef_classes,
     check_gdef_marks,
     check_gdi_family_name,
     check_grid,
     check_heights,
     check_latin_repertoire,
+    check_ligature_cells,
+    check_line_metrics,
     check_mark_class_closure,
     check_marks,
     check_monospace_metadata,
+    check_name_composition,
     check_name_ids,
+    check_pair_positioning,
     check_private,
     check_style_bits,
+    check_substitution_identity,
     check_tables,
     check_version_stamp,
     check_zones,
@@ -259,6 +268,14 @@ def main():
     check("mark" in vf_gpos and "kern" not in vf_gpos,
           f"GPOS keeps SCP's mark positioning, no kern ({sorted(vf_gpos)})")
     check_gdef_marks(tf, check, vf_cmap)
+    check_gdef_classes(tf, check)
+    check_line_metrics(tf, check)
+    check_font_matrix(tf, check)
+    check_pair_positioning(tf, check)
+    check_substitution_identity(tf, check)
+    check_name_composition(tf, check)
+    ref = ROOT / "dist" / "latin" / "Gengou-Regular.otf"
+    check_family_cmap(tf, check, TTFont(str(ref)) if ref.exists() else None)
     check_coverage_order(tf, check)
     check_mark_class_closure(tf, check)
     check_private(tf, check)
@@ -309,6 +326,8 @@ def main():
         shape_at, gs_at = make_shaper(buf.getvalue()), inst.getGlyphSet()
         check_marks(inst, check, shape_at, gs_at, f" at wght {round(loc, 2):g}")
         check_cells(inst, check, shape_at, gs_at, build.CELL, label=f" at wght {round(loc, 2):g}")
+        check_ligature_cells(inst, shape_at, check, gs_at, build.CELL, label=f" at wght {round(loc, 2):g}")
+        check_blank_glyphs(inst, check, gs_at)
     check_features_work(shape_default, check, vf_cmap)
     # the nameIDs verify_latin.py requires of the statics; 13 and 14 are
     # the licence and its URL, and dropping all seven passed this file

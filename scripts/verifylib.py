@@ -833,6 +833,14 @@ DEFAULT_IGNORABLE = (frozenset({0x00AD, 0x034F, 0x061C, 0x115F, 0x1160, 0x17B4, 
                      | frozenset(range(0xFE00, 0xFE10)) | frozenset(range(0x1D173, 0x1D17B)))
 # the two-em and three-em dashes: that many full widths, by policy
 MULTI_EM = {0x2E3A: 2, 0x2E3B: 3}
+# the features a shaper applies without being asked (check_substitution_identity)
+DEFAULT_FEATURES = frozenset({"ccmp", "locl", "liga", "clig", "calt", "rlig", "rclt",
+                              "curs", "kern", "dist", "mark", "mkmk", "abvm", "blwm"})
+# the default rules that do turn one character into another, by design:
+# i and j to the encoded dotless letters (the accent then sits on a
+# bare stem), and Source Han Sans composing the vertical repeat marks
+SUBSTITUTED_CHARACTERS = frozenset({("i", "\u0131"), ("j", "\u0237"),
+                                    ("\u3033\u3035", "\u3031"), ("\u3034\u3035", "\u3032")})
 _CENTRE_BAND = 120           # a narrow letter's or digit's ink centre from the cell's; measured 77 (V, Bold Italic)
 _BASELINE = (-20, 10)        # a digit's or capital's ink bottom; measured -12 (round overshoot) .. 0
 _IDEOGRAPH_Y = (-130, 890)   # an ideograph's or kana's ink, in Source Han Sans's em box -120..880; measured -104..872
@@ -847,6 +855,17 @@ DOUBLE_SPAN = anchors.DOUBLE_SPAN
 # a cell let a two-cell ligature drawn 300 to the right pass (round 9,
 # mutant L4: 236 into the next cell)
 _LEAN = 230
+# every face's line metrics (Source Code Pro's), hhea and typo alike:
+# verify.py pinned them and the Latin faces only asked typo == hhea,
+# so a 1400/-600 line passed there (round 10, mutants G7, G33, V11)
+LINE_METRICS = (984, -273, 0)
+# a ligature glyph is unencoded, so nothing held its ink: one drawn
+# 250 up floated over the x-height (round 10, mutants G1, G1b, V10).
+# Its ink stays in its cells to _EDGE and within the union of its
+# components' ink heights, below by this[0] and above by this[1];
+# measured 58 (~-) and 100 (::)
+_LIG_Y = (70, 120)
+_LIG_EDGE = 40               # a ligature's ink past its cells; the deferred `#(` reaches 20 at Bold Italic
 
 
 def ink_spill(bounds, advance, cmap, cell):
@@ -935,14 +954,11 @@ def _mark_mark_subtables(tf):
 
 
 def _letters(tf, gs):
-    """The glyphs that take an accent: every cmapped letter of the
-    Latin layer's scripts that draws, and what GSUB turns one into
-    (the Serbian locl б, a cvNN variant), since the shaper substitutes
-    before it positions."""
+    """The glyphs that take an accent (anchors.accent_bases) that draw,
+    and what GSUB turns one into (the Serbian locl б, a cvNN variant),
+    since the shaper substitutes before it positions."""
     cmap = tf.getBestCmap()
-    letters = {g for cp, g in cmap.items()
-               if any(lo <= cp <= hi for lo, hi in LETTER_RANGES)
-               and unicodedata.category(chr(cp)).startswith("L")}
+    letters = anchors.accent_bases(cmap)
     letters |= anchors._letter_variants(tf, letters)
     return {g for g in letters if build._bounds(gs, g)}
 
@@ -2027,6 +2043,194 @@ def vf_region_peaks(tf, axis_tag="wght"):
 SS_PROBES = (("ss01", "=="), ("ss02", "->"), ("ss03", "<>"), ("ss04", "|>"),
              ("ss05", "::"), ("ss06", ".."), ("ss07", "//"), ("ss08", "||"))
 VARIANT_PROBES = (("0", "zero"), ("a", "cv01"), ("g", "cv02"), ("a", "salt"))
+
+
+def check_font_matrix(tf, check):
+    """The top DICT and every FontDict draw at 1/1000: fontTools reads
+    outlines through neither, so a FontMatrix of 0.0007 drew every
+    glyph at 70% in FreeType while every gate here read them whole
+    (round 10, mutants G8, J29)."""
+    unit = [0.001, 0, 0, 0.001, 0, 0]
+    cff = tf["CFF2" if "CFF2" in tf else "CFF "].cff
+    td = cff.topDictIndex[0]
+    dicts = [("top", td)] + [(f"FD {i}", fd) for i, fd in enumerate(getattr(td, "FDArray", None) or [])]
+    off = [name for name, d in dicts
+           if list(getattr(d, "FontMatrix", unit)) != unit]
+    check(not off, f"every FontMatrix is 1/1000 (off: {off})")
+
+
+def check_line_metrics(tf, check):
+    """hhea and typo are LINE_METRICS, with USE_TYPO_METRICS."""
+    hhea, os2 = tf["hhea"], tf["OS/2"]
+    got = ((hhea.ascent, hhea.descent, hhea.lineGap),
+           (os2.sTypoAscender, os2.sTypoDescender, os2.sTypoLineGap))
+    check(got == (LINE_METRICS, LINE_METRICS),
+          f"line metrics {LINE_METRICS} (hhea = typo), got {got}")
+    check(bool(os2.fsSelection & (1 << 7)), "USE_TYPO_METRICS set")
+
+
+def check_gdef_classes(tf, check):
+    """No spacing character is a GDEF mark: a shaper zeroes the advance
+    of every class-3 glyph, so '?' classed as a mark drew over the k
+    before it (round 10, mutants G3, J27). check_gdef_marks asks the
+    converse of the combining marks."""
+    cmap = tf.getBestCmap()
+    gdef = getattr(tf.get("GDEF"), "table", None)
+    classes = getattr(getattr(gdef, "GlyphClassDef", None), "classDefs", None) or {}
+    hmtx = tf["hmtx"].metrics
+    off = [f"U+{cp:04X}" for cp, g in sorted(cmap.items())
+           if classes.get(g) == 3 and hmtx[g][0] > 0
+           and not unicodedata.category(chr(cp)).startswith("M")]
+    check(not off, f"no spacing character is a GDEF mark ({len(off)}: {off[:5]})")
+
+
+def check_pair_positioning(tf, check, allowed=("vkrn",)):
+    """GPOS pair positioning only under `allowed`: the build drops kern,
+    palt and halt because the grid is the spacing, and a PairPos under
+    ccmp moved the letter after 'a' 300 units (round 10, mutants G4,
+    J28b, J46). Source Han Sans's vertical kerning stays, opt-in."""
+    off = []
+    for i, kind, _subs, tags in _pos_lookups(tf):
+        if kind == 2 and not tags <= set(allowed):
+            off.append((i, sorted(tags)))
+    check(not off, f"pair positioning only under {list(allowed)} (off: {off})")
+
+
+def check_substitution_identity(tf, check):
+    """A substitution never turns a character into another character:
+    where a GSUB rule's input and output are both encoded, the two are
+    compatibility-equivalent (NFKD) -- か + U+3099 to が, ( to its
+    vertical form, A to full-width Ａ -- and never rn to m, 0 to O, or
+    ａ to ｂ's half-width form (round 10, mutants G5, G37, J51). The
+    unencoded outputs (the .cap accents, the dotless i, the variants)
+    are what the other gates measure. Asked of the lookups a shaper
+    runs by default (DEFAULT_FEATURES, and what those call): an opt-in
+    feature is allowed to change the character -- jp78 gives another
+    kanji, vert the vertical form of a different dash -- and the two
+    default rules that do (i and j to the encoded dotless letters, the
+    vertical repeat marks 〳〵 composed into 〱) are named."""
+    cmap = tf.getBestCmap()
+    rev = {g: cp for cp, g in cmap.items()}
+    table = tf["GSUB"].table
+    live = set()
+    for fr in table.FeatureList.FeatureRecord:
+        if fr.FeatureTag in DEFAULT_FEATURES:
+            live.update(fr.Feature.LookupListIndex)
+    stack = list(live)
+    while stack:
+        i = stack.pop()
+        for sub in build._unwrap(table.LookupList.Lookup[i])[1]:
+            for rec in build._lookup_records(sub):
+                if rec.LookupListIndex not in live:
+                    live.add(rec.LookupListIndex)
+                    stack.append(rec.LookupListIndex)
+
+    def same(inputs, output):
+        if output not in rev or any(g not in rev for g in inputs):
+            return True
+        want = unicodedata.normalize("NFKD", "".join(chr(rev[g]) for g in inputs))
+        got = unicodedata.normalize("NFKD", chr(rev[output]))
+        return got == want or (want, got) in SUBSTITUTED_CHARACTERS
+
+    off, rules = {}, 0
+    for i, lookup in enumerate(table.LookupList.Lookup):
+        if i not in live:
+            continue
+        kind, subs = build._unwrap(lookup)
+        for sub in subs:
+            if kind == 1:
+                for g, out in sub.mapping.items():
+                    rules += 1
+                    if not same([g], out):
+                        off.setdefault(i, []).append((g, out))
+            elif kind == 4:
+                for first, ligs in sub.ligatures.items():
+                    for lig in ligs:
+                        rules += 1
+                        if not same([first, *lig.Component], lig.LigGlyph):
+                            off.setdefault(i, []).append((first, lig.LigGlyph))
+    worst = {i: (len(v), v[:2]) for i, v in off.items()}
+    check(rules and not off, f"no substitution turns a character into another "
+                             f"({rules} rules; off by lookup: {worst})")
+
+
+def check_ligature_cells(tf, shape, check, gs, cell, label=""):
+    """Every declared ligature's glyph sits in its cells: ink inside
+    [0, cells x cell] to _LIG_EDGE, and no lower or higher than the
+    characters it is cut from by _LIG_Y (an unencoded glyph, so
+    check_glyph_placement never sees it; round 10, mutants G1, G1b,
+    G1c, V10)."""
+    cmap = tf.getBestCmap()
+    order = tf.getGlyphOrder()
+    off, n = {}, 0
+    for seq, spec in build.LIGATURES.items():
+        if any(ord(c) not in cmap for c in seq):
+            continue
+        infos, positions = shape(seq, {"calt": True, "liga": True})
+        if len(infos) != 1:
+            continue                # the multi-glyph ones: their parts are cmapped
+        n += 1
+        box = build._bounds(gs, order[infos[0].codepoint])
+        parts = [build._bounds(gs, cmap[ord(c)]) for c in seq]
+        if box is None or any(p is None for p in parts):
+            off[seq] = "blank"
+            continue
+        lo, hi = min(p[1] for p in parts), max(p[3] for p in parts)
+        width = spec["cells"] * cell
+        if box[0] < -_LIG_EDGE or box[2] > width + _LIG_EDGE:
+            off[seq] = ("cells", round(box[0]), round(box[2]))
+        elif box[1] < lo - _LIG_Y[0] or box[3] > hi + _LIG_Y[1]:
+            off[seq] = ("height", round(box[1]), round(box[3]), "parts", round(lo), round(hi))
+    check(n and not off, f"every ligature sits in its cells at its parts' height{label} "
+                         f"({n} ligatures; off: {off})")
+
+
+def check_blank_glyphs(tf, check, gs):
+    """.notdef draws (an unknown character shows a box, not nothing),
+    and the spaces and the default-ignorable characters draw nothing
+    (round 10, mutants G25, G26)."""
+    cmap = tf.getBestCmap()
+    notdef = build._bounds(gs, tf.getGlyphOrder()[0])
+    check(notdef is not None and notdef[2] - notdef[0] > 100 and notdef[3] - notdef[1] > 100,
+          f".notdef draws a box ({notdef})")
+    # (the soft hyphen is drawn, as Source Code Pro draws it: a hyphen
+    # for the renderer that shows one at a break; a shaper hides it)
+    inked = [f"U+{cp:04X}" for cp, g in sorted(cmap.items())
+             if (unicodedata.category(chr(cp)) in ("Zs", "Cf") or cp in DEFAULT_IGNORABLE)
+             and cp != 0x00AD and build._bounds(gs, g) is not None]
+    check(not inked, f"every space and ignorable is blank (inked: {inked})")
+
+
+def check_name_composition(tf, check):
+    """nameID 4 is the family and subfamily, 6 the PostScript pair: a
+    Regular calling itself 'Gengou Bold' in 4 and 6 passed (round 10,
+    mutant G13)."""
+    name = tf["name"]
+    fam = name.getDebugName(16) or name.getDebugName(1)
+    sub = name.getDebugName(17) or name.getDebugName(2)
+    full, ps = name.getDebugName(4), name.getDebugName(6)
+    want_full = fam if sub == "Regular" else f"{fam} {sub}"
+    check(full in (want_full, f"{fam} {sub}"), f"nameID 4 is family + subfamily ({full!r})")
+    # the family half is abbreviated by design (GengouNFM for the Nerd
+    # Fonts face); the style half is the subfamily, and there are no spaces
+    want_style = sub.replace(" ", "")
+    styles = {want_style, "Roman"} if want_style == "Regular" else {want_style}   # a variable font's upright is "Roman"
+    check(" " not in ps and ps.split("-")[-1] in styles,
+          f"nameID 6 ends in the subfamily ({ps!r}, want ...-{want_style})")
+
+
+def check_family_cmap(tf, check, reference):
+    """Every face of a family maps the same characters: the face's cmap
+    equals `reference`'s (a sibling built beside it), or, for a face
+    that adds to it, contains it. A codepoint dropped from one face
+    passed its own repertoire floor (round 10, mutant G9)."""
+    if reference is None:
+        check(True, "family cmap (no sibling beside the face to compare)")
+        return
+    mine, theirs = set(tf.getBestCmap()), set(reference.getBestCmap())
+    missing = sorted(theirs - mine)
+    check(not missing, f"the face maps every character its sibling maps "
+                       f"({len(missing)} missing: {[f'U+{c:04X}' for c in missing[:5]]})")
 
 
 def check_features_work(shape, check, cmap):

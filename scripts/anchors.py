@@ -38,6 +38,20 @@ LETTER_RANGES = ((0x0041, 0x02FF), (0x0370, 0x052F), (0x1D00, 0x1FFF))
 BOPOMOFO = frozenset(range(0x3100, 0x3130)) | frozenset(range(0x31A0, 0x31C0))
 
 
+def accent_bases(cmap):
+    """The cmapped glyphs an accent may be set on: every letter of
+    LETTER_RANGES, and the digits, punctuation and symbols of ASCII and
+    Latin-1 -- the Latin layer's spacing characters. Source Code Pro
+    anchors letters only, and a mark after a digit or a bracket landed
+    a cell to the right in the Latin faces and, in the JP faces, in the
+    cell but through the top of the 0 (round 10); Monaspace, which
+    draws that punctuation, anchors marks on it."""
+    return {gn for cp, gn in cmap.items()
+            if (any(lo <= cp <= hi for lo, hi in LETTER_RANGES)
+                and unicodedata.category(chr(cp)).startswith("L"))
+            or (0x21 <= cp <= 0xFF and unicodedata.category(chr(cp))[0] in "NPS")}
+
+
 def _mark_base_lookups(font, on_letter=False):
     """[(lookup index, [MarkBasePos subtables])] under 'mark', Extension
     unwrapped, in LookupList order. `on_letter` leaves out a lookup
@@ -249,9 +263,7 @@ def anchor_loose_letters(font, rules=None):
         rules = fit_anchor_rules(font)
     gs = font.getGlyphSet()
     cmap = font.getBestCmap()
-    letters = {gn for cp, gn in cmap.items()
-               if any(lo <= cp <= hi for lo, hi in LETTER_RANGES)
-               and unicodedata.category(chr(cp)).startswith("L")}
+    letters = accent_bases(cmap)
     # and what GSUB turns a letter into: the shaper substitutes before
     # it positions, so the Serbian locl б takes the accent, not б, and
     # a JP face's full-width Ａ (fwid) takes it, not A

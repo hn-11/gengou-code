@@ -13,20 +13,30 @@ from fontTools.pens.transformPen import TransformPen
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
+import anchors  # noqa: E402
 import build  # noqa: E402
 from build import FULLWIDTH, _unwrap, _unwrap_pos  # noqa: E402
 from verifylib import (  # noqa: E402
     Checker,
+    check_blank_glyphs,
     check_cells,
     check_coverage_order,
+    check_family_cmap,
     check_features_work,
+    check_font_matrix,
+    check_gdef_classes,
     check_gdi_family_name,
+    check_ligature_cells,
+    check_line_metrics,
     check_mark_class_closure,
     check_marks,
+    check_name_composition,
     check_name_ids,
+    check_pair_positioning,
     check_private,
     check_stat,
     check_style_bits,
+    check_substitution_identity,
     check_tables,
     check_version_stamp,
     glyph_has_hint,
@@ -120,7 +130,6 @@ WIDE_AT_ONE_CELL = {0x2615, 0x302E, 0x302F, 0x31B4, 0x31B5, 0x31B6, 0x31B7,
 
 # the line metrics of an English terminal font: Source Code Pro's, hhea
 # and typo alike, with USE_TYPO_METRICS set (build.copy_line_metrics)
-LINE_METRICS = (984, -273, 0)
 
 # a few ligature sequences (rendered text -> glyph to probe) and CJK
 # codepoints, checked for self-intersecting outlines alongside the Latin set
@@ -206,6 +215,55 @@ def check_width_forms(tf, check, shape):
                               f"({probed} probed; off: {off})")
 
 
+def family_reference(tf):
+    """The Regular JP face beside this one (the family's cmap reference),
+    or None when this is it or it is not there."""
+    from fontTools.ttLib import TTFont
+    ref = FONT.with_name("GengouJP-Regular.otf")
+    if ref == FONT or not ref.exists():
+        return None
+    return TTFont(str(ref))
+
+
+VORG_DEFAULT = 880    # Source Han Sans's vertical origin, kept as is
+
+
+def check_vertical_layout(tf, check, shape, full):
+    """Vertical text is the grid too: every full-width character shaped
+    top-to-bottom advances one em, centred on the column (x offset
+    -half the width) from its own vertical origin, alone and in a pair;
+    and the default origin is Source Han Sans's. A vertical kern, a
+    placement under 'vert' and a lowered origin all passed (round 10,
+    mutants J20, J21, J42)."""
+    cmap = tf.getBestCmap()
+    order = tf.getGlyphOrder()
+    hmtx = tf["hmtx"].metrics
+    vorg = tf["VORG"]
+    em = tf["head"].unitsPerEm
+    check(vorg.defaultVertOriginY == VORG_DEFAULT,
+          f"VORG default {vorg.defaultVertOriginY} (want {VORG_DEFAULT})")
+    # (the two-em repeat marks 〱〲 and the Bopomofo letters, which
+    # Source Han Sans sets on their own vertical metrics, are not asked)
+    wide = [chr(cp) for cp, g in sorted(cmap.items()) if hmtx[g][0] == full
+            and cp not in (0x3031, 0x3032) and cp not in anchors.BOPOMOFO]
+
+    def place(text):
+        infos, positions = shape(text, {}, script="Hani", language="ja", direction="ttb")
+        out = []
+        for info, pos in zip(infos, positions):
+            g = order[info.codepoint]
+            origin = vorg.VOriginRecords.get(g, vorg.defaultVertOriginY)
+            out.append((pos.x_offset, pos.y_offset, pos.y_advance) == (-full // 2, -origin, -em))
+        return out
+
+    off = [ch for ch in wide if not all(place(ch))]
+    kana = [ch for ch in wide if 0x3041 <= ord(ch) <= 0x30FF]
+    pairs = sum(1 for a in kana for b in kana[::7] if not all(place(a + b)))
+    check(wide and not off and not pairs,
+          f"vertical text is the grid ({len(wide)} full-width characters, "
+          f"{len(kana) * len(kana[::7])} kana pairs; off: {off[:5]}, pairs off: {pairs})")
+
+
 def check_term_sibling(tf, check, full):
     """A Term face is its JP sibling with every kana and ideograph moved
     half the extra width to the right, and every half-width glyph drawn
@@ -221,6 +279,7 @@ def check_term_sibling(tf, check, full):
         return
     sibling = FONT.with_name(name.replace("Term", "", 1))
     if not sibling.exists():
+        check(True, "Term against its JP sibling (skipped: no sibling beside the face)")
         return
     jp = TTFont(str(sibling))
     jp_full = expected_metrics(jp)[1]
@@ -392,13 +451,15 @@ def main():
     check_mark_class_closure(tf, check)
     check_private(tf, check)
 
-    # line metrics: Source Code Pro's, hhea and typo alike, USE_TYPO_METRICS
-    hhea, os2 = tf["hhea"], tf["OS/2"]
-    got = ((hhea.ascent, hhea.descent, hhea.lineGap),
-           (os2.sTypoAscender, os2.sTypoDescender, os2.sTypoLineGap))
-    check(got == (LINE_METRICS, LINE_METRICS),
-          f"line metrics {LINE_METRICS} (hhea = typo), got {got}")
-    check(bool(os2.fsSelection & (1 << 7)), "USE_TYPO_METRICS set")
+    check_line_metrics(tf, check)
+    hhea = tf["hhea"]
+    check_font_matrix(tf, check)
+    check_gdef_classes(tf, check)
+    check_pair_positioning(tf, check)
+    check_substitution_identity(tf, check)
+    check_blank_glyphs(tf, check, tf.getGlyphSet())
+    check_name_composition(tf, check)
+    check_family_cmap(tf, check, family_reference(tf))
 
     # every charstring's own width (encoded against its FD's nominalWidthX)
     # must agree with hmtx: a glyph appended under one FD and re-homed to
@@ -561,6 +622,8 @@ def main():
     check_cells(tf, check, shape_infos, tf.getGlyphSet(), exp_half, exp_full)
     check_width_forms(tf, check, shape_infos)
     check_term_sibling(tf, check, exp_full)
+    check_ligature_cells(tf, shape_infos, check, tf.getGlyphSet(), exp_half)
+    check_vertical_layout(tf, check, shape_infos, exp_full)
 
     # the hinting the build spends a minute a face on: nothing here read
     # it, and a face whose autohint pass silently did nothing — which is
