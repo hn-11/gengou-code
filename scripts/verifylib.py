@@ -853,9 +853,9 @@ _STACK_DX = 80
 # to +25 at Bold as a median -- the thin weights' marks overlap where
 # the heavy ones clear -- so no band tight enough to catch every mkmk
 # Mark1 anchor 150 units lower (round 11, mutant C3) passes Light.
-# What that mutant leaves is a 2 px gap between the two accents;
-# check_anchor_placement's 250-unit band is what reads the anchor
-# itself, and 200 units lower it does fail)
+# The gap was the wrong thing to measure: check_mkmk_anchors holds
+# that anchor to the mark's own mark-to-base anchor, which is an
+# equality and catches the same mutant exactly, on every face)
 
 # ---- one glyph in its cell (check_cells) ----
 # an advance follows the character's East Asian Width: Na and H a cell,
