@@ -41,15 +41,18 @@ from verifylib import (  # noqa: E402
     check_blank_glyphs,
     check_cases,
     check_cells,
+    check_charstring_metrics,
     check_coverage_order,
     check_donor_letters,
     check_donor_repertoire,
     check_family_cmap,
+    check_family_names,
     check_features_work,
     check_font_matrix,
     check_gdef_classes,
     check_gdi_family_name,
     check_heights,
+    check_ink_inside,
     check_ligature_cells,
     check_line_metrics,
     check_mark_class_closure,
@@ -57,6 +60,7 @@ from verifylib import (  # noqa: E402
     check_monospace_metadata,
     check_name_composition,
     check_name_ids,
+    check_nerd_font_icons,
     check_pair_positioning,
     check_private,
     check_stat,
@@ -64,12 +68,12 @@ from verifylib import (  # noqa: E402
     check_substitution_identity,
     check_tables,
     check_version_stamp,
+    check_weight_class,
     check_zones,
     family_reference,
     glyph_has_hint,
     glyph_shape,
     hmtx_mismatches,
-    ink_spill,
     is_italic,
     make_shaper,
     weight_name,
@@ -581,20 +585,14 @@ def check_advance_grid(face, check):
 
 
 def check_names(face, check):
-    tf, fam, exp_full = face.tf, face.fam, face.exp_full
-    # the names the face ships under. verify_latin.py checks its side;
-    # nothing checked this one, and the JP faces are what GengouJP.zip
-    # carries
-    name = tf["name"]
-    is_nf = fam.endswith(" Nerd Font Mono")
-    base_fam = fam[:-len(" Nerd Font Mono")] if is_nf else fam
-    want_fam = "Gengou JP" + (" Term" if exp_full > 1000 else "")
-    check(base_fam == want_fam, f"family name {fam!r} (want {want_fam!r})")
-    ps_family = "GengouJP" + ("Term" if exp_full > 1000 else "") \
-        + ("NFM" if is_nf else "")
-    check((name.getDebugName(6) or "").startswith(ps_family + "-"),
-          f"PostScript name {name.getDebugName(6)!r} (want {ps_family}-...)")
-    n0 = name.getDebugName(0) or ""
+    tf, exp_full = face.tf, face.exp_full
+    # the names the face ships under -- GengouJP.zip carries these
+    # faces. The family pair and the weight are the gates verify_latin.py
+    # asks of its own faces
+    term = exp_full > 1000
+    check_family_names(tf, check, "Gengou JP" + (" Term" if term else ""),
+                       "GengouJP" + ("Term" if term else ""))
+    n0 = tf["name"].getDebugName(0) or ""
     for donor in ("Source Han Sans", "Source Code Pro", "Monaspace"):
         check(donor in n0, f"nameID 0 credits {donor}")
     check_name_ids(tf, check, (1, 2, 3, 4, 5, 6, 8, 9, 11, 13, 14, 16, 17))
@@ -603,31 +601,7 @@ def check_names(face, check):
     # gate, and a release step that misses GENGOU_VERSION makes exactly
     # that
     check_version_stamp(tf, check, unique_id=True)
-    # the weight the face calls itself, in the number Windows sorts by
-    weight = weight_name(subfamily_name(tf))
-    if check(weight in build.WEIGHT_CLASS,
-             f"subfamily {subfamily_name(tf)!r} names a weight ({weight!r})"):
-        check(tf["OS/2"].usWeightClass == build.WEIGHT_CLASS[weight],
-              f"OS/2 usWeightClass {tf['OS/2'].usWeightClass} "
-              f"(want {build.WEIGHT_CLASS[weight]} for {weight})")
-
-
-def check_charstring_metrics(face, check):
-    tf = face.tf
-    # every charstring's own width (encoded against its FD's nominalWidthX)
-    # must agree with hmtx: a glyph appended under one FD and re-homed to
-    # another (add_latin_fd) would carry a stale width — invisible to
-    # renderers, which read hmtx, but wrong for anything reading the CFF
-    # (a TTFont glyph set's .width is hmtx's; the charstring's own decoded
-    # width is what has to be compared)
-    # -- and the left side bearing must be the outline's xMin (a CFF
-    # font's lsb is nothing fontTools maintains: the Latin donors used to
-    # carry SCP's default-master bearings at every weight)
-    widths, bearings = face.widths, face.bearings
-    check(not widths, f"CFF charstring widths agree with hmtx "
-                      f"({len(tf.getGlyphOrder())} glyphs, {len(widths)} off: {widths[:5]})")
-    check(not bearings, f"hmtx bearings are the outlines' xMin "
-                        f"({len(bearings)} off: {bearings[:5]})")
+    check_weight_class(tf, check, face.sub)
 
 
 def check_jp_tables(face, check):
@@ -678,14 +652,7 @@ def check_ink_placement(face, check):
     # overhangs by design (up to 138u in the Latin layer), a glyph put on
     # a step too small for its ink would not (grid_step). The boxes are
     # the pass above's, not a second one
-    # WHERE the ink lands, not just how wide it is: a width test says
-    # nothing about position, and translating every kanji a whole column
-    # to the right left it reporting a clean face (ink_spill says what
-    # the bound is)
-    spill = ink_spill(bounds, lambda name: hmtx[name][0], cmap, exp_half)
-    check(not spill, f"every glyph's ink is inside its advance, give or "
-                     f"take the lean ({len(spill)} are not, "
-                     f"e.g. {spill[:3]})")
+    check_ink_inside(check, bounds, hmtx, cmap, exp_half)
 
     # and, for the glyphs that fill their advance, WHERE inside it: the
     # bound above is half a cell, which a quarter-cell mistranslation
@@ -1891,22 +1858,6 @@ def check_win_metrics(face, check):
     # which holds .notdef to exp_half by the same policy
 
 
-def check_nerd_font(face, check):
-    tf, fam = face.tf, face.fam
-    if "Nerd Font" in fam:
-        import nerdpatch
-        symbols = nerdpatch.symbols_for_checks()
-        # the icon gates without the donor keep a tenth of the cell of
-        # slack, and a separator 50 units short of the line passed that
-        # way (round 10, mutant N9); six of the nine skip themselves
-        # outright. The Latin driver has asked for the donor since that
-        # round and this one never did, though the JP Nerd Font faces
-        # are two of the six shipped zips (round 12)
-        check(symbols is not None, "NF_SYMBOLS points at the Symbols donor")
-        for ok, msg in nerdpatch.icon_checks(tf, symbols):
-            check(ok, msg)
-
-
 def main():
     # the order below is the order the lines print in, and it is kept:
     # a run's log diffed against the last one is how a change to these
@@ -1942,7 +1893,7 @@ def main():
     check_name_composition(tf, check)
     check_family_cmap(tf, check, family_reference(FONT, tf))
 
-    check_charstring_metrics(face, check)
+    check_charstring_metrics(tf, check, face.widths, face.bearings)
     check_jp_tables(face, check)
     check_ink_placement(face, check)
     check_repertoire_draws(face, check)
@@ -2013,7 +1964,8 @@ def main():
     check_monospace_metadata(tf, check, win_covers_bbox=False)
     check_heights(tf, check, tf.getGlyphSet(), cmap)
     check_win_metrics(face, check)
-    check_nerd_font(face, check)
+    if "Nerd Font" in face.fam:
+        check_nerd_font_icons(tf, check)
 
     print("FAILED" if check.failed else "all checks passed")
     sys.exit(check.exit_code())
