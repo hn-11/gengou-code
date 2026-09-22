@@ -334,7 +334,9 @@ def check_term_sibling(tf, check, full):
         return
     sibling = FONT.with_name(name.replace("Term", "", 1))
     if not sibling.exists():
-        check(True, "Term against its JP sibling (skipped: no sibling beside the face)")
+        # "skip", not "ok": a gate that did not run must not read as
+        # green on a dashboard (round 11)
+        check(None, "Term against its JP sibling: no sibling beside the face")
         return
     jp = TTFont(str(sibling))
     jp_full = expected_metrics(jp)[1]

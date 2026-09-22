@@ -1529,3 +1529,177 @@ def test_check_family_cmap_wants_every_sibling_codepoint():
     assert off and "U+0063" in off[0]
     assert _gate(lambda f, chk: verifylib.check_family_cmap(f, chk, mine), sibling) == []
     assert verifylib._MARK_DX_SPREAD == 150
+
+
+# --- round 11: a shaper reads everything at once (check_run_identity,
+# check_ligature_guards), the GPOS surface, mark filtering sets, the
+# stacked gap, and every GSUB kind -------------------------------------
+
+def _run_identity(font):
+    return _gate(lambda f, chk: verifylib.check_run_identity(f, _shaper_for(f), chk), font)
+
+
+def test_check_run_identity_passes_a_plain_run():
+    anchors, heights = _ruled()
+    assert _run_identity(_mark_font(anchors, heights)) == []
+
+
+def test_check_run_identity_catches_a_singlepos_placement_under_ccmp():
+    """The gates around this one read one thing each -- check_widths_by_class
+    the advance, check_glyph_placement the outline -- and a shaper reads
+    both at once: a SinglePos y placement under ccmp dropped the digits
+    180 units, sitting 3 px low beside the letters, while every gate
+    that reads one thing at a time stayed clean (round 11)."""
+    anchors, heights = _ruled()
+    font = _mark_font(anchors, heights,
+                      fea_extra="feature ccmp { pos b0 <0 -180 0 0>; } ccmp;\n")
+    off = _run_identity(font)
+    assert off and "moved" in off[0] and "'A'" in off[0]
+
+
+def test_check_run_identity_catches_an_uncontexted_substitution():
+    """check_substitution_identity excuses i -> dotless i by name, since
+    that pair is meant for a letter about to take an accent -- so an
+    UNCONTEXTED version of the same rule, firing on a bare 'i' too, is
+    invisible to it; only shaping a run on its own shows it (round 11)."""
+    anchors, heights = _ruled(2)
+    heights["dotlessi"] = heights["iletter"] = 400
+    font = _mark_font(anchors, heights, cmap_extra={0x69: "iletter"},
+                      fea_extra="feature ccmp { sub iletter by dotlessi; } ccmp;\n")
+    assert _gate(verifylib.check_substitution_identity, font) == []
+    off = _run_identity(font)
+    assert off and "'i'" in off[0] and "dotlessi" in off[0]
+
+
+def _guard_font(guarded):
+    """':' alone in the cmap and the unencoded glyph build.LIGATURES'
+    own '::' entry compiles to -- every other declared ligature needs a
+    second character (=, >, <) this font has no glyph for, so '::' is
+    the only one check_ligature_guards has anything to probe.
+    `guarded` writes the real defence, a chain context that blocks the
+    rule when a third colon precedes or follows (build._guard_subtables'
+    rules a and b); without it the ligature reaches into a longer run,
+    same as deleting those two rules did (round 11, mutant B3)."""
+    from conftest import make_cff_font
+    from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
+    from fontTools.pens.t2CharStringPen import T2CharStringPen
+    order = [".notdef", "colon", "lig"]
+
+    def box():
+        pen = T2CharStringPen(0, None)
+        pen.moveTo((0, 0))
+        pen.lineTo((500, 0))
+        pen.lineTo((500, 500))
+        pen.closePath()
+        return pen.getCharString()
+    font = make_cff_font(order, {g: box() for g in order}, {0x3A: "colon"},
+                         {g: (500, 0) for g in order})
+    fea = ("feature liga {\n"
+           "    ignore sub colon colon' colon';\n"
+           "    ignore sub colon' colon' colon;\n"
+           "    sub colon' colon' by lig;\n"
+           "} liga;\n") if guarded else "feature liga { sub colon colon by lig; } liga;\n"
+    addOpenTypeFeaturesFromString(font, fea)
+    return font
+
+
+def test_check_ligature_guards_passes_a_guarded_ligature():
+    font = _guard_font(guarded=True)
+    assert _gate(lambda f, chk: verifylib.check_ligature_guards(f, _shaper_for(f), chk),
+                font) == []
+
+
+def test_check_ligature_guards_catches_a_ligature_reaching_into_a_longer_run():
+    """Only verify.py's hand-written CASES list ever probed the guards:
+    without them ':::' shapes as the '::' ligature and a bare colon,
+    three colons collapsed to two glyphs instead of staying three."""
+    font = _guard_font(guarded=False)
+    off = _gate(lambda f, chk: verifylib.check_ligature_guards(f, _shaper_for(f), chk), font)
+    assert off and "':::'" in off[0]
+
+
+def test_check_pair_positioning_wants_only_positioning_kinds():
+    """A cursive lookup under 'curs' (type 3) walks a word up the line
+    -- the build makes only single adjustment, pair, the two mark
+    attachments and chain context (POSITIONING_KINDS) -- while every
+    gate that read by feature, not by type, passed it (round 11,
+    mutant A2)."""
+    anchors, heights = _ruled(2)
+    assert _gate(verifylib.check_pair_positioning, _mark_font(anchors, heights)) == []
+    curs = _mark_font(anchors, heights,
+                      fea_extra="feature curs { pos cursive b0 <anchor 100 0> "
+                                "<anchor 500 260>; } curs;\n")
+    off = _gate(verifylib.check_pair_positioning, curs)
+    assert off and "curs" in off[0]
+
+
+def test_check_mark_reachability_wants_the_filtering_set_to_hold_every_mark():
+    """The two doors a lookup filters its marks through are the mark
+    attachment class and the filtering set (LookupFlag 0x10); a set
+    that leaves the acute out silenced the stacking and every gate
+    agreed (round 11, mutant C1)."""
+    from fontTools.ttLib.tables import otTables
+    anchors, heights = _ruled()
+    font = _mark_font(anchors, heights, marks={"grave": 0x0300},
+                      mark2={"grave": (50, 500), "acute": (50, 500)})
+    assert _gate(verifylib.check_mark_reachability, font) == []
+    cov = otTables.Coverage()
+    cov.glyphs = ["grave"]              # leaves 'acute' out
+    mgs = otTables.MarkGlyphSetsDef()
+    mgs.Coverage = [cov]
+    mgs.MarkSetCount = 1
+    font["GDEF"].table.MarkGlyphSetsDef = mgs
+    lookup = next(font["GPOS"].table.LookupList.Lookup[i]
+                 for i, kind, _subs, _tags in verifylib._pos_lookups(font) if kind == 6)
+    lookup.LookupFlag |= 0x10
+    lookup.MarkFilteringSet = 0
+    off = _gate(verifylib.check_mark_reachability, font)
+    assert off and "leaves out" in off[0] and "acute" in off[0]
+
+
+def test_check_substitution_identity_catches_an_alternate_subst():
+    """A shaper takes alternate 0 of a default feature, so every
+    alternate is a rule: an AlternateSubst turning l into 1 was read by
+    nothing while the gate walked the single and ligature kinds only
+    (round 11, mutant A4)."""
+    anchors, heights = _ruled(3)
+    off = _gate(verifylib.check_substitution_identity,
+               _mark_font(anchors, heights,
+                          fea_extra="feature ccmp { sub b0 from [b1 b2]; } ccmp;\n"))
+    assert off and "b0" in off[0] and "b1" in off[0]
+
+
+def test_check_substitution_identity_excuses_an_alternate_to_an_unencoded_glyph():
+    """An alternate reaching an unencoded glyph is what the other gates
+    measure, same as a ligature's own unencoded output."""
+    anchors, heights = _ruled(3)
+    heights["variant"] = 500
+    font = _mark_font(anchors, heights, marks={"variant": None},
+                      fea_extra="feature ccmp { sub b0 from [variant]; } ccmp;\n")
+    assert _gate(verifylib.check_substitution_identity, font) == []
+
+
+def test_check_substitution_identity_catches_a_multiple_subst():
+    """All four GSUB kinds are walked now: a MultipleSubst spelling one
+    character as two others was invisible to the single/ligature walk
+    (round 11)."""
+    anchors, heights = _ruled(3)
+    off = _gate(verifylib.check_substitution_identity,
+               _mark_font(anchors, heights,
+                          fea_extra="feature ccmp { sub b0 by b1 b2; } ccmp;\n"))
+    assert off and "b0" in off[0]
+
+
+def test_check_substitution_identity_allows_the_ukrainian_yi_decomposition():
+    """SUBSTITUTED_CHARACTERS is built by NFKD-normalising its pairs and
+    names the Ukrainian ї, which both Adobe donors take apart onto the
+    Latin dotless i before a combining accent so the accent can stack
+    (anchors.import_donor_decompositions) -- its own canonical
+    decomposition uses the Cyrillic і instead, so only the donor's exact
+    pair is let through, not ї's decomposition in general."""
+    anchors, heights = _ruled(2)
+    heights["dotlessi"] = heights["diaeresis"] = 400
+    font = _mark_font(anchors, heights,
+                      cmap_extra={0x457: "b0", 0x131: "dotlessi", 0x308: "diaeresis"},
+                      fea_extra="feature ccmp { sub b0 by dotlessi diaeresis; } ccmp;\n")
+    assert _gate(verifylib.check_substitution_identity, font) == []

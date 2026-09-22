@@ -27,10 +27,19 @@ jobs:
       - run: pip install -r requirements.txt ruff pytest
       - run: ruff check scripts/ tests/
       - run: python -m pytest tests/ -q
-  # one weight, style and family per job: the Latin donor (build_latin.py),
-  # then the JP face on top (build.py), then both verified side by side;
-  # the Regular Upright jobs also graft the Nerd Fonts symbols into the
-  # JP face (nerdpatch.py) and verify that
+  # one weight and style per job, BOTH families: the Latin donor
+  # (build_latin.py), then the JP face and its Term sibling on top
+  # (build.py), then all of them verified side by side; the Regular
+  # Upright job also grafts the Nerd Fonts symbols into the JP faces
+  # (nerdpatch.py) and verifies that.
+  #
+  # The two families build in one job because two of the gates compare
+  # a face with its sibling -- the Term face against the JP one it is
+  # widened from (verify.check_term_sibling, 14,345 glyphs) and every
+  # face's cmap against its family's Regular (check_family_cmap) -- and
+  # a job that builds one family has no sibling to compare against, so
+  # both gates reported "skipped" on every run they ever made (round
+  # 11). Three jobs instead of six, each one JP face longer.
   faces:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -38,18 +47,17 @@ jobs:
       fail-fast: false
       matrix:
         face: [Regular Upright, Regular Italic, Light Italic]
-        family: [base, Term]
         include:
           - face: Regular Upright
             nerd: "true"
-    name: faces (${{ matrix.face }} ${{ matrix.family }})
+    name: faces (${{ matrix.face }})
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/setup-build
       # the Latin layer (Gengou) is assembled first
       # from the VFs; build.py grafts it into Source Han Sans
       - run: python scripts/build_latin.py "${{ matrix.face }}"
-      - run: python scripts/build.py "${{ matrix.face }} ${{ matrix.family }}"
+      - run: python scripts/build.py "${{ matrix.face }} base Term"
       - if: matrix.nerd
         run: python scripts/nerdpatch.py dist/*.otf
       - run: python scripts/verify_many.py 'dist/latin/*.otf' 'dist/*.otf' 'dist/nerd/*.otf'

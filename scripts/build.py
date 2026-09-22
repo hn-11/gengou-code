@@ -217,6 +217,13 @@ def contour_boxes(font, glyph_name):
             contours.append(cur)
             cur = []
         cur.append((op, args))
+        # a TrueType contour with no on-curve point at all is drawn as
+        # a bare qCurveTo ending in None, with no moveTo to split on
+        # (611 of the Nerd Fonts symbols); closing on the end of the
+        # path is what separates those
+        if op in ("closePath", "endPath"):
+            contours.append(cur)
+            cur = []
     if cur:
         contours.append(cur)
     out = []

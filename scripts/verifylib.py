@@ -817,11 +817,14 @@ SEAT_EDGE_LETTERS = frozenset("\u01a1\u01b0\u01a0\u01af\u0260\u03b7\u0265\u027b\
 # fail (mutant L18). The step is 0 by design, and the slant of an
 # italic leans a stacked mark about 40 units
 _STACK_DX = 80
-# and the vertical gap a stack leaves (the second mark's ink bottom
-# less the first's ink top): the marks touch or nearly touch, never
-# float. Measured -142..86 per pair, median -52 to -69 by face
-_STACK_DY = (-200, 160)
-_STACK_DY_MEDIAN = (-130, 10)
+# (the vertical gap a stack leaves is NOT bounded here: measured over
+# the weights it runs from -158 to 96 per pair and from -109 at Light
+# to +25 at Bold as a median -- the thin weights' marks overlap where
+# the heavy ones clear -- so no band tight enough to catch every mkmk
+# Mark1 anchor 150 units lower (round 11, mutant C3) passes Light.
+# What that mutant leaves is a 2 px gap between the two accents;
+# check_anchor_placement's 250-unit band is what reads the anchor
+# itself, and 200 units lower it does fail)
 
 # ---- one glyph in its cell (check_cells) ----
 # an advance follows the character's East Asian Width: Na and H a cell,
@@ -885,6 +888,9 @@ LINE_METRICS = (984, -273, 0)
 # components' ink heights, below by this[0] and above by this[1];
 # measured 58 (~-) and 100 (::)
 _LIG_Y = (70, 120)
+# (a ligature is a redrawn glyph, not its components side by side:
+# '!=' begins 132 units left of where '!' is drawn and '|>' 266, so
+# there is no tight sideways bound to hold it to -- only the cells)
 _LIG_EDGE = 40               # a ligature's ink past its cells; the deferred `#(` reaches 20 at Bold Italic
 
 
@@ -1531,7 +1537,7 @@ def check_marks_stack(tf, shape, check, label=""):
         return None
 
     exact = 0
-    wrong, gaps = {}, []
+    wrong = {}
     for i, sub in model.stacks:
         ones = [g for g in sub.Mark1Coverage.glyphs if g in rev]
         twos = [g for g in sub.Mark2Coverage.glyphs if g in rev]
@@ -1560,19 +1566,6 @@ def check_marks_stack(tf, shape, check, label=""):
                 step = (stacked[2][0] - stacked[1][0]) - (alone[1][1][0] - alone[0][1][0])
                 if abs(step) > _STACK_DX:
                     wrong.setdefault(i, []).append((m2, m1, "ink", round(step)))
-                # and the gap it leaves: the second mark's ink begins
-                # where the first's ends. Every mkmk Mark1 anchor 150
-                # units lower left the pair 2 px apart, inside the
-                # anchor band and invisible to the sideways step
-                # (round 11, mutant C3)
-                gap = stacked[2][1] - stacked[1][2]
-                gaps.append(gap)
-                if not _STACK_DY[0] <= gap <= _STACK_DY[1]:
-                    wrong.setdefault(i, []).append((m2, m1, "gap", round(gap)))
-    if gaps:
-        median = statistics.median(gaps)
-        if not _STACK_DY_MEDIAN[0] <= median <= _STACK_DY_MEDIAN[1]:
-            wrong.setdefault("median", []).append(round(median))
     worst = {i: (len(v), v[:2]) for i, v in wrong.items()}
     check(exact and not wrong,
           f"the shaper stacks every second mark on the first{label} "
@@ -2267,10 +2260,26 @@ def check_gdef_classes(tf, check):
     gdef = getattr(tf.get("GDEF"), "table", None)
     classes = getattr(getattr(gdef, "GlyphClassDef", None), "classDefs", None) or {}
     hmtx = tf["hmtx"].metrics
-    off = [f"U+{cp:04X}" for cp, g in sorted(cmap.items())
-           if classes.get(g) == 3 and hmtx[g][0] > 0
-           and not unicodedata.category(chr(cp)).startswith("M")]
-    check(not off, f"no spacing character is a GDEF mark ({len(off)}: {off[:5]})")
+    # every class-3 glyph, not only the cmapped ones: a shaper zeroes
+    # the advance of any of them, and the ligature glyphs and the
+    # variants carry no codepoint to be asked about (round 11)
+    marks = set()
+    for _i, kind, subs, _t in _pos_lookups(tf):
+        for sub in subs:
+            if kind == 4:
+                marks |= set(sub.MarkCoverage.glyphs)
+            elif kind == 6:
+                marks |= set(sub.Mark1Coverage.glyphs) | set(sub.Mark2Coverage.glyphs)
+    rev = {g: cp for cp, g in cmap.items()}
+    off = []
+    for g, cls in sorted(classes.items()):
+        if cls != 3 or hmtx.get(g, (0,))[0] <= 0 or g in marks:
+            continue
+        cp = rev.get(g)
+        if cp is not None and unicodedata.category(chr(cp)).startswith("M"):
+            continue
+        off.append(f"U+{cp:04X}" if cp is not None else g)
+    check(not off, f"no spacing glyph is a GDEF mark ({len(off)}: {off[:5]})")
 
 
 # the GPOS lookup kinds a grid font is built from: single adjustment
@@ -2283,6 +2292,27 @@ def check_gdef_classes(tf, check):
 POSITIONING_KINDS = frozenset({1, 2, 4, 6, 8})
 
 
+def _pos_tags(tf):
+    """{lookup index: the feature tags that reach it}, through the
+    chain contexts as well as directly -- a lookup a context calls
+    carries no tag of its own, and "no tag" passed every rule written
+    as "the tags it has are allowed" (round 11)."""
+    tags = {}
+    for i, _kind, _subs, direct in _pos_lookups(tf):
+        tags[i] = set(direct)
+    changed = True
+    while changed:
+        changed = False
+        for i, _kind, subs, _ in _pos_lookups(tf):
+            for sub in subs:
+                for rec in build._lookup_records(sub):
+                    j = rec.LookupListIndex
+                    if j in tags and not tags[i] <= tags[j]:
+                        tags[j] |= tags[i]
+                        changed = True
+    return tags
+
+
 def check_pair_positioning(tf, check, allowed=("vkrn",)):
     """The positioning surface: only POSITIONING_KINDS, and pair
     positioning only under `allowed` -- the build drops kern, palt and
@@ -2291,8 +2321,10 @@ def check_pair_positioning(tf, check, allowed=("vkrn",)):
     J46). Source Han Sans's vertical kerning stays, opt-in. What a
     chain context calls is read by check_run_identity, which shapes the
     runs it fires on."""
+    reached = _pos_tags(tf)
     off = []
-    for i, kind, _subs, tags in _pos_lookups(tf):
+    for i, kind, _subs, _direct in _pos_lookups(tf):
+        tags = reached[i]
         if kind not in POSITIONING_KINDS:
             off.append((i, "type", kind, sorted(tags)))
         elif kind == 2 and not tags <= set(allowed):
@@ -2455,7 +2487,7 @@ def check_family_cmap(tf, check, reference):
     that adds to it, contains it. A codepoint dropped from one face
     passed its own repertoire floor (round 10, mutant G9)."""
     if reference is None:
-        check(True, "family cmap (no sibling beside the face to compare)")
+        check(None, "family cmap: no sibling beside the face to compare")
         return
     mine, theirs = set(tf.getBestCmap()), set(reference.getBestCmap())
     missing = sorted(theirs - mine)

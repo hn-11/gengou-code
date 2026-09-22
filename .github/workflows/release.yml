@@ -54,21 +54,27 @@ jobs:
     timeout-minutes: 15
     strategy:
       fail-fast: false
+      # by style, not by family: each job builds a weight's faces in
+      # BOTH families, so every Term face has the JP face it is widened
+      # from beside it and verify.check_term_sibling runs (a
+      # family-split matrix never gave it a sibling, so it reported
+      # "skipped" on every release; round 11). Six jobs and twenty
+      # faces either way -- four, four and two per style.
       matrix:
-        family: [base, Term]
+        style: [Upright, Italic]
         weights: [Light Regular, Medium SemiBold, Bold]
         include:
-          - family: base
+          - style: Upright
             latin_nf: Upright
-          - family: Term
+          - style: Italic
             latin_nf: Italic
-          - family: base
+          - style: Upright
             weights: Bold
             variable: upright
-          - family: Term
+          - style: Italic
             weights: Bold
             variable: italic
-    name: faces (${{ matrix.family }} ${{ matrix.weights }})
+    name: faces (${{ matrix.style }} ${{ matrix.weights }})
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/setup-build
@@ -79,7 +85,7 @@ jobs:
           LATIN_NF: ${{ matrix.latin_nf }}
         run: |
           # this job's share of the Gengou grafts: its weights' uprights
-          # (base) or italics (Term)
+          # or italics, the style this job builds
           faces=""
           for w in ${{ matrix.weights }}; do
             case "$LATIN_NF" in
@@ -96,7 +102,7 @@ jobs:
           # step down before the background one is waited on: its log
           # lives only here
           jp=0
-          python scripts/build.py "${{ matrix.weights }} ${{ matrix.family }}" \
+          python scripts/build.py "${{ matrix.weights }} ${{ matrix.style }} base Term" \
             && python scripts/nerdpatch.py dist/*.otf || jp=$?
           wait $latin || { cat nerd-latin.log; exit 1; }
           cat nerd-latin.log
@@ -111,7 +117,7 @@ jobs:
           'dist/*.otf' 'dist/nerd/*.otf' 'dist/latin/Gengou-*.otf' 'dist/nerd/latin/*.otf'
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: faces-${{ matrix.family }}-${{ strategy.job-index }}
+          name: faces-${{ matrix.style }}-${{ strategy.job-index }}
           path: |
             dist/*.otf
             dist/latin/*.otf
