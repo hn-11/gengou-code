@@ -51,6 +51,7 @@ from verifylib import (  # noqa: E402
     check_zones,
     family_reference,
     glyph_has_hint,
+    glyph_shape,
     hmtx_mismatches,
     ink_spill,
     is_italic,
@@ -204,7 +205,64 @@ def check_width_forms(tf, check, shape):
                               f"({probed} probed; off: {off})")
 
 
+# how far a glyph's shape may drift from the donor's: measured 2e-12
+# on every kana and ideograph of all twenty JP and Term faces
+_DONOR_SHAPE = 1e-6
+
 VORG_DEFAULT = 880    # Source Han Sans's vertical origin, kept as is
+
+
+# the kana and the ideographs, which the build takes from the donor
+# as drawn (the Term face moves them, and moving is invisible to
+# glyph_shape) -- 13,944 characters of a JP face
+DONOR_AS_DRAWN = ((0x3040, 0x30FF), (0x31F0, 0x31FF), (0x3400, 0x4DBF),
+                  (0x4E00, 0x9FFF), (0xF900, 0xFAFF), (0x20000, 0x2FFFF))
+
+
+def source_han_sans(tf, check):
+    """This face's own Source Han Sans weight, opened, or None -- with
+    the gate that says SHS_DIR has to name it."""
+    from fontTools.ttLib import TTFont
+    weight = weight_name(subfamily_name(tf))
+    donor = dict(build.FACES).get(weight)
+    root = os.environ.get("SHS_DIR")
+    path = Path(root) / donor if root and donor else None
+    if not check(bool(path and path.is_file()),
+                 f"SHS_DIR points at Source Han Sans ({donor} for {weight})"):
+        return None
+    return TTFont(str(path))
+
+
+def check_donor_shapes(tf, check):
+    """Every kana and every ideograph is drawn the way Source Han Sans
+    draws it -- four fifths of the font, and nothing read a single one
+    of those outlines before.
+
+    Held by glyph_shape, which divides out size and position, so the
+    Term face's 100-unit shift and any refitting are invisible and the
+    comparison is exact: 13,944 characters on all twenty JP and Term
+    faces, worst difference 2e-12. A kana mirrored inside its own box
+    keeps its advance, its bounding box, its ink area and its cmap
+    entry, so every other gate passes it (round 12, mutant W3); this
+    reads 1.03."""
+    theirs = source_han_sans(tf, check)
+    if theirs is None:
+        return
+    cmap, their_cmap = tf.getBestCmap(), theirs.getBestCmap()
+    gs, their_gs = tf.getGlyphSet(), theirs.getGlyphSet()
+    off, n = {}, 0
+    for cp, g in sorted(cmap.items()):
+        if cp not in their_cmap or not any(lo <= cp <= hi for lo, hi in DONOR_AS_DRAWN):
+            continue
+        mine, theirs_shape = glyph_shape(gs, g), glyph_shape(their_gs, their_cmap[cp])
+        if mine is None or theirs_shape is None:
+            continue
+        n += 1
+        drift = max(abs(a - b) for a, b in zip(mine, theirs_shape))
+        if drift > _DONOR_SHAPE:
+            off[chr(cp)] = round(drift, 4)
+    check(n and not off, f"every kana and ideograph is drawn as Source Han Sans draws it "
+                         f"({n} characters; off: {dict(list(off.items())[:5])})")
 
 
 def check_vertical_origins(tf, check, full):
@@ -220,17 +278,23 @@ def check_vertical_origins(tf, check, full):
 
     Source Han Sans is required, as the Symbols font is for a Nerd Font
     face: a donor-less run would be a gate that reads nothing."""
-    from fontTools.ttLib import TTFont
-    weight = weight_name(subfamily_name(tf))
-    donor = dict(build.FACES).get(weight)
-    root = os.environ.get("SHS_DIR")
-    path = Path(root) / donor if root and donor else None
-    if not check(bool(path and path.is_file()),
-                 f"SHS_DIR points at Source Han Sans ({donor} for {weight})"):
+    theirs = source_han_sans(tf, check)
+    if theirs is None:
         return
-    theirs = TTFont(str(path))
     their_vorg, their_cmap = theirs["VORG"], theirs.getBestCmap()
     ours, cmap = tf["VORG"], tf.getBestCmap()
+    # and while the donor is open: it is a floor under the JP families
+    # the way Source Code Pro is under the Latin layer (16,742
+    # codepoints, all 40 JP faces cover them). check_family_cmap cannot
+    # see this -- a family's own reference face is compared with
+    # nothing, and its siblings still contain the reduced reference --
+    # so 356 kanji deleted from GengouJP-Regular passed every gate
+    # (round 12, mutant F1); they would draw .notdef boxes at the
+    # half-width advance, moving the column as well
+    missing = sorted(set(their_cmap) - set(cmap))
+    check(not missing, f"every character Source Han Sans draws, this face draws "
+                       f"({len(their_cmap)} codepoints; missing {len(missing)}: "
+                       f"{[hex(cp) for cp in missing[:5]]})")
     check(ours.defaultVertOriginY == their_vorg.defaultVertOriginY,
           f"the default vertical origin is the donor's "
           f"({ours.defaultVertOriginY} vs {their_vorg.defaultVertOriginY})")
@@ -267,6 +331,7 @@ def check_vertical_layout(tf, check, shape, full):
     vorg = tf["VORG"]
     em = tf["head"].unitsPerEm
     check_vertical_origins(tf, check, full)
+    check_donor_shapes(tf, check)
     check(vorg.defaultVertOriginY == VORG_DEFAULT,
           f"VORG default {vorg.defaultVertOriginY} (want {VORG_DEFAULT})")
     # (the two-em repeat marks 〱〲 and the Bopomofo letters, which

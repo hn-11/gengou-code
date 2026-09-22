@@ -2228,6 +2228,45 @@ def check_cells(tf, check, shape, gs, cell, full=None, label=""):
     check_letter_glyphs(tf, check, gs, label)
 
 
+def check_mkmk_anchors(tf, check, label=""):
+    """A mark stacks by the same anchor it attaches by: every anchor a
+    mark carries in a mark-to-mark subtable is one it also carries in a
+    mark-to-base one.
+
+    That is an equality, not a band, and it is the rule round 11 looked
+    for and did not find. Lowering every mkmk anchor 150 units leaves
+    the second accent of a stack sitting in the first (round 11, mutant
+    C3), and the gap it opens runs from -158 to 96 across the weights
+    with its median from -109 at Light to +25 at Bold, so no band
+    catches it without failing Light -- while this catches it exactly,
+    77 of 77 anchors on the JP Regular and 81 of 81 on Light Italic,
+    and holds on all 62 faces as built. The anchors are the same
+    because they mean the same thing: where this mark's own ink wants
+    to meet whatever is under it.
+
+    A mark with no mark-to-base anchor at all is the same failure from
+    the other side -- it stacks by an anchor nothing else uses."""
+    base = {}
+    for _, sub in _mark_base_subtables(tf):
+        for gn, rec in zip(sub.MarkCoverage.glyphs, sub.MarkArray.MarkRecord):
+            if rec.MarkAnchor is not None:
+                base.setdefault(gn, set()).add(
+                    (rec.MarkAnchor.XCoordinate, rec.MarkAnchor.YCoordinate))
+    off, n = {}, 0
+    for i, sub in _mark_mark_subtables(tf):
+        for gn, rec in zip(sub.Mark1Coverage.glyphs, sub.Mark1Array.MarkRecord):
+            if rec.MarkAnchor is None:
+                continue
+            n += 1
+            mine = (rec.MarkAnchor.XCoordinate, rec.MarkAnchor.YCoordinate)
+            if mine not in base.get(gn, set()):
+                off.setdefault(i, []).append(
+                    (gn, mine, sorted(base.get(gn, ()))[:2] or "no base anchor"))
+    shown = {i: (len(v), v[:2]) for i, v in list(off.items())[:2]}
+    check(n and not off, f"every mark stacks by the anchor it attaches by{label} "
+                         f"({n} anchors; off by lookup: {shown})")
+
+
 def check_marks(tf, check, shape, gs, label=""):
     """Every mark gate, in the order they build on each other: the
     features and classes, the lookups' reachability, the language
@@ -2239,6 +2278,7 @@ def check_marks(tf, check, shape, gs, label=""):
     check_tone_lookups(tf, check, label)
     check_langsys_parity(tf, check, label)
     check_anchor_placement(tf, check, gs, label)
+    check_mkmk_anchors(tf, check, label)
     check_anchor_coverage(tf, check, gs, label)
     check_marks_attach(tf, shape, check, label)
     check_marks_stack(tf, shape, check, label)
@@ -2500,6 +2540,38 @@ def check_cases(tf, shape, check, label=""):
         check(got == want, f"{text!r}: {got} glyphs (want {want}){label}")
 
 
+# the least of a ligature's declared width, and of its parts' ink
+# height, that its own ink covers: measured 0.512 and 0.627
+_LIG_FILL = (0.40, 0.45)
+
+
+def glyph_shape(gs, name):
+    """A glyph's shape with its size and its place divided out: where
+    the ink's centre of mass sits inside the glyph's own box, how far
+    it spreads each way, and which way it leans (the correlation --
+    what tells a mirror image from the glyph itself).
+
+    Two drawings of the same outline give the same five numbers however
+    they are moved or scaled, which is what lets a face be held against
+    the donor it was cut from: the Term face shifts every ideograph 100
+    units right and reads identical here. None where the glyph draws
+    nothing."""
+    from fontTools.pens.statisticsPen import StatisticsPen
+    pen = StatisticsPen(glyphset=gs)
+    try:
+        gs[name].draw(pen)
+    except Exception:
+        return None
+    box = build._bounds(gs, name)
+    if not pen.area or not box:
+        return None
+    w, h = box[2] - box[0], box[3] - box[1]
+    if w <= 0 or h <= 0:
+        return None
+    return ((pen.meanX - box[0]) / w, (pen.meanY - box[1]) / h,
+            pen.stddevX / w, pen.stddevY / h, pen.correlation)
+
+
 def check_ligatures_fire(tf, shape, check, gs, cell, label=""):
     """Every declared ligature fires, at the width the build declared
     it, and draws. The sequence is padded -- "a <seq> b", so calt sees
@@ -2520,7 +2592,7 @@ def check_ligatures_fire(tf, shape, check, gs, cell, label=""):
     order = tf.getGlyphOrder()
     if any(ord(c) not in cmap for c in "ab "):
         return                      # nothing to pad the sequence with
-    off, n = {}, 0
+    off, n, seen = {}, 0, {}
     for seq, spec in build.LIGATURES.items():
         if any(ord(c) not in cmap for c in seq):
             continue
@@ -2529,12 +2601,45 @@ def check_ligatures_fire(tf, shape, check, gs, cell, label=""):
         glyphs = [order[i.codepoint] for i in infos]
         if len(infos) != 5:
             off[seq] = ("glyphs", glyphs)
-        elif positions[2].x_advance != spec["cells"] * cell:
+            continue
+        lig = glyphs[2]
+        box = build._bounds(gs, lig)
+        parts = [build._bounds(gs, cmap[ord(c)]) for c in seq]
+        if positions[2].x_advance != spec["cells"] * cell:
             off[seq] = ("advance", positions[2].x_advance, spec["cells"] * cell)
-        elif build._bounds(gs, glyphs[2]) is None:
+        elif (positions[2].x_offset, positions[2].y_offset) != (0, 0):
+            # a ligature is a glyph in its cells, not a glyph pushed
+            # into them: all 61 shape at (0, 0) on every face, and a
+            # SinglePos under calt moving them 90 units each way read
+            # as a clean advance (round 12, mutant L2)
+            off[seq] = ("moved", positions[2].x_offset, positions[2].y_offset)
+        elif box is None:
             # and it has to draw: a build that emptied all 61 set them
             # as whitespace and passed on the count and the advance
             off[seq] = "blank"
+        elif all(parts):
+            # and it fills the cells it took. Every ligature is at
+            # least 0.512 of its declared width and 0.627 of its
+            # parts' ink height on every face (worst: Light Italic's
+            # '||' and '.='), so a floor well under those catches the
+            # 61 redrawn at 0.45 of their size -- a speck between two
+            # empty cells (round 12, mutant L3) -- and fails none
+            lo, hi = min(q[1] for q in parts), max(q[3] for q in parts)
+            wide = (box[2] - box[0]) / (spec["cells"] * cell)
+            tall = (box[3] - box[1]) / (hi - lo) if hi > lo else 1.0
+            if wide < _LIG_FILL[0] or tall < _LIG_FILL[1]:
+                off[seq] = ("fills", round(wide, 3), round(tall, 3))
+        seen.setdefault(lig, []).append(seq)
+    # no two of them are the same glyph: rewriting the '->' rule to
+    # output the '<-' glyph left every arrow pointing the wrong way
+    # with the count, the advance and the ink all in order (round 12,
+    # mutant L1). A permutation of the 61 would still read as distinct;
+    # telling which glyph is which needs the Monaspace donor, and the
+    # centroid-in-box against it is within 0.053 on every face where
+    # L1's reversed arrow is 0.246
+    for g, seqs in seen.items():
+        if len(seqs) > 1:
+            off[tuple(seqs)] = ("one glyph", g)
     check(n and not off, f"every declared ligature fires at its width{label} "
                          f"({n} ligatures; off: {dict(list(off.items())[:5])})")
 
