@@ -300,6 +300,11 @@ def check_style_bits(tf, check, subfamily, italic):
 # fontconfig all prefer 16), so holding 1 to this bound costs nothing.
 # It is the Nerd Fonts marker that pushes against it: nerdpatch splices
 # the abbreviation into 1 and the full words into 16.
+# the characters the Latin donor draws and the build does not
+# redraw: the operators are Monaspace's, so they are not asked
+DONOR_LETTERS = tuple(range(0x30, 0x3A)) + tuple(range(0x41, 0x5B)) \
+    + tuple(range(0x61, 0x7B))
+
 LFFACENAME_MAX = 31
 
 
@@ -2545,6 +2550,11 @@ def check_cases(tf, shape, check, label=""):
 _LIG_FILL = (0.40, 0.45)
 
 
+# the least of its own box a glyph's ink must cover for its
+# moments to mean anything
+_SHAPE_AREA_FLOOR = 0.01
+
+
 def glyph_shape(gs, name):
     """A glyph's shape with its size and its place divided out: where
     the ink's centre of mass sits inside the glyph's own box, how far
@@ -2566,10 +2576,74 @@ def glyph_shape(gs, name):
     if not pen.area or not box:
         return None
     w, h = box[2] - box[0], box[3] - box[1]
-    if w <= 0 or h <= 0:
+    if w <= 0 or h <= 0 or abs(pen.area) < _SHAPE_AREA_FLOOR * w * h:
+        # a glyph whose contours all but cancel -- 785 of the Nerd Fonts
+        # icons wind both ways over nearly the same ink -- divides by a
+        # signed area near zero and the moments run to six figures.
+        # Unreadable, so unread
         return None
     return ((pen.meanX - box[0]) / w, (pen.meanY - box[1]) / h,
             pen.stddevX / w, pen.stddevY / h, pen.correlation)
+
+
+# how far a letter may sit from the Latin donor: the ink box's size in
+# units (measured 1.0 at worst over every letter and digit of the ten
+# statics; a slashed zero swapped for a capital O is 23.5) and
+# glyph_shape's five numbers (measured 0.037, worst the Bold '4'; a
+# Light 'e' in a Bold face is 0.327)
+_DONOR_BOX, _DONOR_LETTER = 3.0, 0.08
+
+
+def check_donor_letters(tf, check, gs, wght=None, label=""):
+    """Every letter and digit is Source Code Pro's own glyph, held to
+    it by the size of its ink box and by glyph_shape.
+
+    The Latin layer is fitted into the 600 cell -- moved, and condensed
+    where it will not fit -- so the box's PLACE is the build's to
+    choose and its size is the donor's. Nothing read these outlines:
+    an 'e' redrawn at another weight, or a zero and a capital O
+    swapped, keeps its advance, its cmap entry and its cell (round 12,
+    mutants G10 and W2). The two readings catch different things --
+    the swap is 0.013 to glyph_shape and 23.5 units to the box, the
+    wrong weight is 0.9 units to the box and 0.327 to glyph_shape --
+    so both are asked.
+
+    SCP_VF_U / SCP_VF_I name the donor; without them the gate reads
+    nothing and says so."""
+    from fontTools.ttLib import TTFont
+    path = os.environ.get("SCP_VF_I" if is_italic(tf) else "SCP_VF_U")
+    if not (path and Path(path).is_file()):
+        check(None, f"every letter is Source Code Pro's own{label}: "
+                    f"SCP_VF_U / SCP_VF_I unset")
+        return
+    if wght is None:
+        weight = weight_name(tf["name"].getDebugName(17)
+                             or tf["name"].getDebugName(2) or "")
+        wght = build.WEIGHT_CLASS.get(weight)
+        if wght is None:
+            check(None, f"every letter is Source Code Pro's own{label}: "
+                        f"unknown weight {weight!r}")
+            return
+    scp = TTFont(path)
+    dgs, dcmap = scp.getGlyphSet(location={"wght": wght}), scp.getBestCmap()
+    cmap = tf.getBestCmap()
+    off, n = {}, 0
+    for cp in DONOR_LETTERS:
+        if cp not in cmap or cp not in dcmap:
+            continue
+        mine, theirs = build._bounds(gs, cmap[cp]), build._bounds(dgs, dcmap[cp])
+        if not mine or not theirs:
+            continue
+        n += 1
+        box = max(abs((mine[2] - mine[0]) - (theirs[2] - theirs[0])),
+                  abs((mine[3] - mine[1]) - (theirs[3] - theirs[1])))
+        a, b = glyph_shape(gs, cmap[cp]), glyph_shape(dgs, dcmap[cp])
+        shape = max(abs(x - y) for x, y in zip(a, b)) if a and b else 0.0
+        if box > _DONOR_BOX or shape > _DONOR_LETTER:
+            off[chr(cp)] = (round(box, 2), round(shape, 4))
+    check(n and not off, f"every letter and digit is Source Code Pro's own{label} "
+                         f"({n} of them at wght {wght:g}; off (box, shape): "
+                         f"{dict(list(off.items())[:5])})")
 
 
 def check_ligatures_fire(tf, shape, check, gs, cell, label=""):

@@ -27,6 +27,7 @@ from verifylib import (  # noqa: E402
     check_cases,
     check_cells,
     check_coverage_order,
+    check_donor_letters,
     check_donor_repertoire,
     check_family_cmap,
     check_features_work,
@@ -702,6 +703,8 @@ def main():
     # here too -- and the JP faces are where a dropped codepoint would
     # otherwise hide, their own repertoire being ten times the donor's
     check_donor_repertoire(check, cmap)
+    # the Latin layer is the same glyphs here as in dist/latin
+    check_donor_letters(tf, check, tf.getGlyphSet())
     check_width_forms(tf, check, shape_infos)
     check_term_sibling(tf, check, exp_full)
     check_ligature_cells(tf, shape_infos, check, tf.getGlyphSet(), exp_half)

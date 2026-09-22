@@ -24,6 +24,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import build  # noqa: E402
 import build_latin_vf  # noqa: E402
 from verifylib import (  # noqa: E402
+    DONOR_LETTERS,
     Checker,
     check_blank_glyphs,
     check_cells,
@@ -486,10 +487,22 @@ def main():
             s = to_scp(u)
             gs = tf.getGlyphSet(location={"wght": u})
             ref = scp.getGlyphSet(location={"wght": s})
-            for ch in "AlHm¾":     # SCP-only glyphs ('=' is Monaspace's)
+            # every letter and digit, not five of them: scaling the
+            # default 'o' to 0.8 about its own centre kept its advance,
+            # its cell and its cmap entry, and five probe glyphs looked
+            # away (round 12, mutant V12). The operators are Monaspace's
+            # and are not SCP's to answer for
+            off = {}
+            for cp in DONOR_LETTERS:
+                ch = chr(cp)
+                if cp not in cmap or cp not in scp_cmap:
+                    continue
                 bi, br = bounds(gs, cmap, ch), bounds(ref, scp_cmap, ch)
-                check(close(bi, br, 1), f"[wght {u} = SCP {s:.1f}] {ch!r} bounds {bi} vs "
-                                        f"SCP {br} (want within 1u)")
+                if not close(bi, br, 1):
+                    off[ch] = (tuple(round(v, 1) for v in bi),
+                               tuple(round(v, 1) for v in br))
+            check(not off, f"[wght {u} = SCP {s:.1f}] every letter and digit is "
+                           f"SCP's own to 1u (off: {dict(list(off.items())[:3])})")
     else:
         print("  (skip SCP exactness check: set SCP_VF_U / SCP_VF_I)")
 

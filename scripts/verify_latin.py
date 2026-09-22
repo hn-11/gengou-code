@@ -19,6 +19,7 @@ from verifylib import (  # noqa: E402
     check_cases,
     check_cells,
     check_coverage_order,
+    check_donor_letters,
     check_donor_repertoire,
     check_family_cmap,
     check_features_work,
@@ -181,6 +182,7 @@ def main():
     check_zones(tf, check, cmap)
     check_features_work(shape, check, cmap)
     check_cases(tf, shape, check)
+    check_donor_letters(tf, check, gs)
     off = {"calt": False, "liga": False}
     check(len(shape("a -> b", off)[0]) == 6, "calt/liga off leaves '->' plain")
     check(len(shape("a -> b", dict(off, ss02=True))[0]) == 5, "ss02 alone ligates '->'")
