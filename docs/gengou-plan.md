@@ -787,11 +787,27 @@ JP はピン留めなので引数で外す）。定義だけで呼ばれてい�
 `check_letter_glyphs` は `check_cells` から全面で走る。CI の
 `lint_workflows.py` ステップはテストと重複していたので削除。
 
+round 11 で廃止したもの: `scripts/lint_workflows.py` 本体とその
+テスト 5 本（CI から外れたあと、唯一の呼び手が自分のテストだった。
+本当に効いていた守り「`.github/` の YAML が GitHub に読めるか」だけを
+`tests/test_workflows_parse.py` の 1 本に残した）。`verify_many.py` と
+「パスに latin が含まれるか」で門番を選ぶ規則も廃止し、
+`scripts/verify.py` を唯一の入口に統合した。どの門番に掛けるかは
+フォント自身が答える（`fvar` があれば可変、`あ` を持てば JP、
+それ以外は欧文）ので、`dist/nerd/latin/` が偶然動いていたことも、
+可変フォントだけ別ステップで名指ししていたことも無くなる
+（dist の 62 面で旧規則と完全一致: JP 40・欧文 20・可変 2）。
+併せて、実在するパスはパターンより先に「そのファイル」として扱う
+ようにした——`Gengou[wght].otf` の角括弧は何にも一致しない文字
+クラスなので、名指ししても黙って 0 面しか検証されていなかった。
+全ドライバが投げるテキスト `CASES` は、それを読む門番の隣
+（verifylib）へ移した。旧 `verify.py` は `verify_jp.py`。
+
 build.py に残る処理（`build_face` の順）: SHS の読み込み、Gengou からの
 グリフ・GSUB・GPOS の取り込み（`graft_halfwidth` / `latin_ligatures` /
 `import_scp_variants` / `import_scp_locl` / `import_scp_marks` /
 `import_scp_ccmp`。グリフ名を CID に付け替え、lookup と feature を SHS の
-テーブルにマージ）、`narrow_halfwidth` / `narrow_letters` と `fit_to_grid`、
+テーブルにマージ）、`narrow_halfwidth` と `fit_to_grid`、
 `widen_fullwidth`（Term）、`stretch_arrows` と `add_width_alternates`
 （`fwid`）、`notdef_to_cell`、名前・STAT・メタデータ、`drop_features` と
 `prune_orphan_lookups`、`add_latin_fd` とヒント付け。NF パッチは
