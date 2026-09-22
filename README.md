@@ -1,11 +1,11 @@
-# Gengou JP
+# Gengou Code JP
 
 英語圏のターミナルフォントの流儀で組んだ、日本語入りのプログラミング
 フォント。欧文は [Source Code Pro](https://github.com/adobe-fonts/source-code-pro)
 （原寸・原太、名前付きインスタンスそのまま）に
 [Monaspace](https://github.com/githubnext/monaspace) の記号と合字 61 種を
-載せた **Gengou**、和文は [Source Han Sans](https://github.com/adobe-fonts/source-han-sans)
-JP を、Gengou の太さに合う面から取る。基準は欧文側で、セル幅（600）、
+載せた **Gengou Code**、和文は [Source Han Sans](https://github.com/adobe-fonts/source-han-sans)
+JP を、Gengou Code の太さに合う面から取る。基準は欧文側で、セル幅（600）、
 ウェイト（Light / Regular / Medium / SemiBold / Bold）、行間
 （984 / −273 = 1.257 em）はすべて Source Code Pro のもの。和文がそれに
 従う。CI で合成し、上流の新リリースにも追従する。
@@ -14,9 +14,9 @@ JP を、Gengou の太さに合う面から取る。基準は欧文側で、セ�
 
 | ファミリー | 半角:全角 | 用途 |
 |-----------|-----------|------|
-| Gengou JP | 600:1000 (3:5) | エディタ。和文は Source Han Sans の送りのまま |
-| Gengou JP Term | 600:1200 (1:2) | ターミナルのグリッドに乗せたい非グリッドのアプリ向け。全角の送りを 2 セルに広げてグリフを中央配置 |
-| Gengou | 600 | 欧文のみ（可変フォント） |
+| Gengou Code JP | 600:1000 (3:5) | エディタ。和文は Source Han Sans の送りのまま |
+| Gengou Code JP Term | 600:1200 (1:2) | ターミナルのグリッドに乗せたい非グリッドのアプリ向け。全角の送りを 2 セルに広げてグリフを中央配置 |
+| Gengou Code | 600 | 欧文のみ（可変フォント） |
 
 ターミナルの中では JP と Term は同じに描かれる（全角は 2 セルに置かれる）。
 違うのは全角の送り幅だけで、Latin・記号・幅の方針は共通。
@@ -52,7 +52,7 @@ Source Han Sans 自身も 288 のまま同じ字形を出荷している。
 
 ## 幅の方針
 
-**Gengou が持つ文字はすべて 1 セル**。Latin、ギリシャ、キリル、
+**Gengou Code が持つ文字はすべて 1 セル**。Latin、ギリシャ、キリル、
 アクセント付き文字、罫線素片、`←` `→` `↑` `↓` `⇐` `⇒` `⇔` `≠` `≤` `≥` `…`
 も 1 セルで、英語のターミナルフォントと同じ。Source Han Sans にしかない
 文字（漢字・かな・`①` `※` など）は Source Han Sans の全角のまま。
@@ -136,11 +136,11 @@ Source Code Pro のまま。
 差。`-` は `=` より 110u 短いが、これは Monaspace 自身がそういう字形の
 ため。SCP の `cv14`/`cv15`/`cv16`（タイポグラフィックなハイフン・
 アスタリスク・スラッシュ付きドル記号）を有効にすると、`-` `*` `$` は
-SCP の字形に戻る。なお欧文単独ファミリー（Gengou）でハイフンを
+SCP の字形に戻る。なお欧文単独ファミリー（Gengou Code）でハイフンを
 差し替える `cv14`（および `salt` `ss11`）を有効にすると、`->` `<-`
 `-->` `<--` `<->` `<-->` `<!--` `-~` `~-` の 9 つの合字は出なくなる
 ——ドナー自身の異体字ルックアップが合字の連鎖より前に並ぶため。
-和文ファミリー（Gengou JP / JP Term）では
+和文ファミリー（Gengou Code JP / JP Term）では
 `import_scp_variants` が後ろに足すので合字が残り、両者の挙動は
 ここだけ食い違う。
 
@@ -201,22 +201,18 @@ stylistic set も同じ挙動なので許容している。グループを跨い
 ## Nerd Fonts 版
 
 全面に Nerd Fonts のアイコングリフを追加した変種も生成する。アイコンは
-1 セルに収めるので、Nerd Fonts 本家の命名では **Mono** に当たり、
-ファミリー名は `Gengou JP Nerd Font Mono` / `Gengou JP Term Nerd
-Font Mono` / `Gengou Nerd Font Mono`（PostScript 名 `GengouJPNFM-*`
-など。`JetBrainsMono Nerd Font Mono` と同じ流儀）。
+1 セルに収める。ファミリー名は `Gengou Code JP NF` / `Gengou Code JP Term NF` /
+`Gengou Code NF`（PostScript 名 `GengouCodeJPNF-*` など。`Cascadia Mono NF` と
+同じ流儀）。
 
-ただし綴ったままだと Windows GDI の `LOGFONT.lfFaceName`（31 文字）に
-入らない面が出る（非 RIBBI は名前にウェイト名が付くので
-`Gengou JP Term Nerd Font Mono SemiBold` で 38 文字）。そこで
-**nameID 1 だけ `NFM` に略してある**——`Gengou JP NFM` /
-`Gengou JP Term NFM` / `Gengou NFM`（最長 `Gengou JP Term NFM
-SemiBold` で 27 文字）。nameID 16 / 4 は綴ったままなので、
-Windows Terminal・VS Code・macOS・Linux のピッカーには
-`Gengou JP Term Nerd Font Mono` が出て、**旧 conhost・メモ帳・Office の
-GDI 経路にだけ略称 `Gengou JP Term NFM` が出る**。指定するときは
-その環境のピッカーに出ているほうの名前を使う。本家 font-patcher の
-`--windows` と同じ手。
+本家の命名（`Gengou Code JP Term Nerd Font Mono`）にしないのは、Windows GDI の
+`LOGFONT.lfFaceName`（31 文字）に入らない面が出るため（ファミリー名だけで
+34 文字、非 RIBBI は名前にウェイト名が付くので
+`Gengou Code JP Term Nerd Font Mono SemiBold` で 43 文字）。`NF` なら最長 `Gengou Code JP Term NF SemiBold` で 31 文字ちょうどに収まり、
+Windows Terminal・VS Code・macOS・Linux のピッカーにも、旧 conhost・
+メモ帳・Office の GDI 経路にも同じ名前が出る。本家の命名では `NF` は
+アイコンがセルからはみ出してよい変種を指すが、このフォントの Nerd Fonts
+版はこれ一つで、アイコンはすべて 1 セル。
 
 アイコンは font-patcher で掛けるのではなく、Nerd Fonts が配っている記号
 だけのフォント `Symbols Nerd Font Mono`（各リリースの
@@ -244,9 +240,9 @@ font-patcher の `xy-ratio`（0.7 など）で頭打ちになった幅（2048 �
 として同梱する。各アイコンセットのライセンスは Nerd Fonts のリポジトリに
 あり、zip には入らない。
 
-## Gengou（欧文のみ）
+## Gengou Code（欧文のみ）
 
-Gengou JP が使う欧文レイヤーを、VF から直接組み上げた和文なしの
+Gengou Code JP が使う欧文レイヤーを、VF から直接組み上げた和文なしの
 単独フォント。JP 側（`build.py`）はこのフォントを Source Han Sans に
 そのまま接ぎ木するだけになっており、欧文の設計判断は 1 か所に集まっている。
 
@@ -273,9 +269,9 @@ SCP Italic VF のグリフ数が少ないぶんの差で、ギリシャ・キリ
 基準に、OS/2 の typo を hhea と同値にして `USE_TYPO_METRICS` を立て、win
 はファミリー全面のバウンディングボックスを覆う値（1060 / 454）。
 
-**可変フォント**: 配布する Gengou は `scripts/build_latin_vf.py` が
-同じレシピを CFF2 可変フォントとして組んだ `Gengou[wght].otf`
-（Upright）と `Gengou-Italic[wght].otf`（Italic）。wght 軸は
+**可変フォント**: 配布する Gengou Code は `scripts/build_latin_vf.py` が
+同じレシピを CFF2 可変フォントとして組んだ `GengouCode[wght].otf`
+（Upright）と `GengouCode-Italic[wght].otf`（Italic）。wght 軸は
 usWeightClass の値で、名前付きインスタンスは静的面と同じ 300 / 400 /
 500 / 600 / 700、既定値 400 = Regular。ユーザー wght は SCP の wght
 そのもの（SCP のユーザー wght が usWeightClass）で、その間は SCP 自身の
@@ -309,17 +305,17 @@ Nerd Fonts 版の入力で、単体では配布しない。
 [Releases](../../releases) から用途に応じてアセットを選ぶ。いずれの zip にも
 OFL のライセンス全文（LICENSE）を同梱している。
 
-- **`GengouJP.zip` / `GengouJPTerm.zip`**: ファミリーごとの zip
+- **`GengouCodeJP.zip` / `GengouCodeJPTerm.zip`**: ファミリーごとの zip
   （5 ウェイト × 2 スタイルの 10 面、面ごとの OTF）。使うファミリーだけ
   落として、必要な面だけ入れる（TTC は配らない: リリースの単位は
   インストールするファイルの単位）。
-- **`GengouJP-NerdFont.zip` / `GengouJPTerm-NerdFont.zip`**: 同じ
-  ファミリー分けの Nerd Fonts 版（ファミリー名 `Gengou JP Nerd Font
+- **`GengouCodeJP-NerdFont.zip` / `GengouCodeJPTerm-NerdFont.zip`**: 同じ
+  ファミリー分けの Nerd Fonts 版（ファミリー名 `Gengou Code JP Nerd Font
   Mono` など）。ターミナルのプロンプト装飾（アイコン表示）に使う場合は
   こちら。
-- **`Gengou.zip`**: 和文を含まない欧文のみの Gengou。可変フォント
-  2面（`Gengou[wght].otf` / `Gengou-Italic[wght].otf`）。
-- **`Gengou-NerdFont.zip`**: Gengou の Nerd Fonts 版（`Gengou Nerd
+- **`GengouCode.zip`**: 和文を含まない欧文のみの Gengou Code。可変フォント
+  2面（`GengouCode[wght].otf` / `GengouCode-Italic[wght].otf`）。
+- **`GengouCode-NerdFont.zip`**: Gengou Code の Nerd Fonts 版（`Gengou Code Nerd
   Font Mono`）。可変フォントには接ぎ木しないので、こちらは 5 ウェイト ×
   2 スタイルの静的 10 面。
 
@@ -327,7 +323,7 @@ OFL のライセンス全文（LICENSE）を同梱している。
 
 ```jsonc
 {
-  "editor.fontFamily": "Gengou JP",
+  "editor.fontFamily": "Gengou Code JP",
   "editor.fontLigatures": true
 }
 ```
@@ -350,20 +346,20 @@ v5.0.0 までの `Sumi Moji JP`（v4.0.0 までは 2:3 の基本ファミリー�
 4つの上流（Source Han Sans JP / Source Code Pro VF / Source Sans 3 VF /
 Monaspace VF）と、Nerd Fonts 版のための `Symbols Nerd Font Mono` を
 取得して環境変数で場所を渡す。ビルドは2段階: まず `scripts/build_latin.py`
-が VF から Gengou（`dist/latin`）を組み、その完成品を `scripts/build.py`
+が VF から Gengou Code（`dist/latin`）を組み、その完成品を `scripts/build.py`
 が Source Han Sans に接ぎ木する。具体的なコマンドは
 `.github/workflows/ci.yml` の手順がそのまま実行可能なリファレンス。
 
 ```sh
 pip install -r requirements.txt
 export SCP_VF_U=... SCP_VF_I=... SS_VF_I=... MONA_VF=... SHS_DIR=...
-python scripts/build_latin.py           # dist/latin/Gengou-*.otf（10 面）
-python scripts/build_latin_vf.py        # dist/latin/Gengou[wght].otf, -Italic[wght].otf
+python scripts/build_latin.py           # dist/latin/GengouCode-*.otf（10 面）
+python scripts/build_latin_vf.py        # dist/latin/GengouCode[wght].otf, -Italic[wght].otf
 python scripts/build.py                 # 両ファミリー（JP / Term × 10 面）
 python scripts/build.py "Regular"       # Regular系のみ（動作確認用）
-python scripts/verify.py dist/GengouJP-Regular.otf          # 回帰テスト（面ごと）
+python scripts/verify.py dist/GengouCodeJP-Regular.otf          # 回帰テスト（面ごと）
 python scripts/verify.py 'dist/*.otf' 'dist/latin/*.otf'   # まとめて
-python scripts/verify.py "dist/latin/Gengou[wght].otf"     # 可変版（SCP と突き合わせ）
+python scripts/verify.py "dist/latin/GengouCode[wght].otf"     # 可変版（SCP と突き合わせ）
 python scripts/golden.py <前の dist> dist                  # 2つのビルド出力の比較
 NF_SYMBOLS=... python scripts/nerdpatch.py                 # Nerd Fonts 版
 ```
@@ -393,16 +389,16 @@ Source Code Pro VF / Source Sans 3 VF / Monaspace VF の Releases から
 
 ## 仕組み
 
-- 欧文レイヤーは Gengou（`scripts/build_latin.py`、VF から先に組んで
+- 欧文レイヤーは Gengou Code（`scripts/build_latin.py`、VF から先に組んで
   `dist/latin` に出力）から来る。Source Han Sans JP（CID-keyed CFF）を
-  土台に、Gengou が持つ全コードポイント（Regular で 1,335）へその
+  土台に、Gengou Code が持つ全コードポイント（Regular で 1,335）へその
   グリフを 1 セルで接ぎ木し cmap を差し替える。Source Han Sans が持って
   いた全角グリフは `fwid` の代替として残す。追加 CID は疎な空間の空きを
   昇順割当（サブセット OTF の CID は不連続なため）
-- 太さの一致は Gengou 側（`build_latin.py`）で完結している——各面は
+- 太さの一致は Gengou Code 側（`build_latin.py`）で完結している——各面は
   SCP の名前付きインスタンスそのもので、その `=` バー厚に Monaspace VF の
   wght を二分探索で合わせ、Italic は SCP Italic VF + slnt 追随。`build.py`
-  は Gengou を無変換で載せ、和文はバーの合う Source Han Sans の面を
+  は Gengou Code を無変換で載せ、和文はバーの合う Source Han Sans の面を
   使う（`build.FACES`）
 - 合字は LigatureSubst。`calt`/`liga` は結合ルックアップ1つ＋文脈ガード
   （各合字の入力列全体をカバーするトリガールールを最長一致順に並べる。
@@ -435,4 +431,4 @@ Source Code Pro VF / Source Sans 3 VF / Monaspace VF の Releases から
 ## ライセンス
 
 フォント本体は上流と同じ [SIL OFL 1.1](https://github.com/adobe-fonts/source-han-sans/blob/master/LICENSE.txt)。
-OFL の Reserved Font Name 規定に基づき、ファミリー名は `Source` も `Monaspace` も含まない `Gengou JP` / `Gengou`（v5.0.0 までは `Sumi Moji JP` / `Sumi Moji`、v3.2.0 までは `Shoyu Code Pro JP`）。
+OFL の Reserved Font Name 規定に基づき、ファミリー名は `Source` も `Monaspace` も含まない `Gengou Code JP` / `Gengou Code`（v5.0.0 までは `Sumi Moji JP` / `Sumi Moji`、v3.2.0 までは `Shoyu Code Pro JP`）。

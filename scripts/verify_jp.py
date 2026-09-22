@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The JP faces' gates (dist/GengouJP*.otf, patched or not):
+"""The JP faces' gates (dist/GengouCodeJP*.otf, patched or not):
 every ligature fires, == stays untouched, the Term face is its
 sibling widened, and the vertical layout is Source Han Sans's own.
 Reached through scripts/verify.py, which picks the gate set a font
@@ -80,7 +80,7 @@ from verifylib import (  # noqa: E402
 )
 
 FONT = Path(sys.argv[1]) if len(sys.argv) > 1 else (
-    ROOT / "dist" / "GengouJP-Regular.otf"
+    ROOT / "dist" / "GengouCodeJP-Regular.otf"
 )
 with open(ROOT / "data" / "mona_ligs.json") as _f:
     LIGATURES = json.load(_f)
@@ -177,7 +177,7 @@ def subfamily_name(tf):
 def expected_metrics(tf):
     fam = family_name(tf)
     # whole-token match: "Term" is a separate word in the family name
-    # ("Gengou JP Term"), never a substring of another word
+    # ("Gengou Code JP Term"), never a substring of another word
     for suffix, pair in FAMILY_METRICS.items():
         if suffix in fam.split(" "):
             return pair
@@ -308,7 +308,7 @@ def check_vertical_origins(tf, check, full):
     # codepoints, all 40 JP faces cover them). check_family_cmap cannot
     # see this -- a family's own reference face is compared with
     # nothing, and its siblings still contain the reduced reference --
-    # so 356 kanji deleted from GengouJP-Regular passed every gate
+    # so 356 kanji deleted from GengouCodeJP-Regular passed every gate
     # (round 12, mutant F1); they would draw .notdef boxes at the
     # half-width advance, moving the column as well
     missing = sorted(set(their_cmap) - set(cmap))
@@ -514,7 +514,7 @@ def check_advances(face, check):
 
 def check_width_policy(face, check):
     cmap, hmtx, exp_half, exp_full = face.cmap, face.hmtx, face.exp_half, face.exp_full
-    # every codepoint Gengou has is one cell in both families — the
+    # every codepoint Gengou Code has is one cell in both families — the
     # ligature-paired arrows and operators, Greek, box drawing, SCP-only
     # Latin (ł ğ ₽), '−' — and Source Han Sans's own full-width symbols
     # (① ※) stay two cells. The italic faces' Greek comes from Source
@@ -586,12 +586,12 @@ def check_advance_grid(face, check):
 
 def check_names(face, check):
     tf, exp_full = face.tf, face.exp_full
-    # the names the face ships under -- GengouJP.zip carries these
+    # the names the face ships under -- GengouCodeJP.zip carries these
     # faces. The family pair and the weight are the gates verify_latin.py
     # asks of its own faces
     term = exp_full > 1000
-    check_family_names(tf, check, "Gengou JP" + (" Term" if term else ""),
-                       "GengouJP" + ("Term" if term else ""))
+    is_nf = check_family_names(tf, check, "Gengou Code JP" + (" Term" if term else ""),
+                       "GengouCodeJP" + ("Term" if term else ""))
     n0 = tf["name"].getDebugName(0) or ""
     for donor in ("Source Han Sans", "Source Code Pro", "Monaspace"):
         check(donor in n0, f"nameID 0 credits {donor}")
@@ -602,6 +602,7 @@ def check_names(face, check):
     # that
     check_version_stamp(tf, check, unique_id=True)
     check_weight_class(tf, check, face.sub)
+    return is_nf
 
 
 def check_jp_tables(face, check):
@@ -688,7 +689,7 @@ def check_repertoire_draws(face, check):
     # all Japanese as whitespace and passed every gate. `bounds` holds
     # the glyphs that draw (hmtx_mismatches skips a blank one), so this
     # counts ink. The face maps 17,355 codepoints — Source Han Sans
-    # JP's 16,742 and Gengou's 1,335 — 12,746 of them kanji in the
+    # JP's 16,742 and Gengou Code's 1,335 — 12,746 of them kanji in the
     # unified block; the floors sit well under that, because a subset that
     # shrank on purpose is a decision and one that shrank by accident is
     # this
@@ -1404,7 +1405,7 @@ def check_mark_after_ligature(face, check):
         # U+F120 is a Nerd Fonts icon: one cell, and appended to the
         # face AFTER the widening, so it was in no backtrack coverage
         # and every one of the 10,402 icons kept the -100 in the Term
-        # NFM faces (U+F120 + U+20DD drew the ring at -465..465 where
+        # NF faces (U+F120 + U+20DD drew the ring at -465..465 where
         # the same one-cell base gives -365..565)
         for seq in ("==", "===", "!==", "::", "=>", "...", "\uf120"):
             if any(ord(c) not in cmap for c in seq):
@@ -1874,7 +1875,7 @@ def main():
     # (build.narrow_halfwidth) -- asked again, cmap-wide, by
     # check_cells -> check_widths_by_class below
     check_advance_grid(face, check)
-    check_names(face, check)
+    is_nf = check_names(face, check)
 
     check_coverage_order(tf, check)
     # the Latin layer's anchors survive the graft into this face, so
@@ -1964,7 +1965,10 @@ def main():
     check_monospace_metadata(tf, check, win_covers_bbox=False)
     check_heights(tf, check, tf.getGlyphSet(), cmap)
     check_win_metrics(face, check)
-    if "Nerd Font" in face.fam:
+    # keyed on the name check_names read, not on a spelling of its own:
+    # tested as `"Nerd Font" in fam`, this skipped all twenty JP Nerd
+    # Fonts faces once their marker became "NF"
+    if is_nf:
         check_nerd_font_icons(tf, check)
 
     print("FAILED" if check.failed else "all checks passed")

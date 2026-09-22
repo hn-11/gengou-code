@@ -1,6 +1,6 @@
 # Contributing
 
-Gengou JP は上流フォント（Source Han Sans JP / Source Code Pro /
+Gengou Code JP は上流フォント（Source Han Sans JP / Source Code Pro /
 Source Sans 3 / Monaspace）を CI 上で合成して作られています。ソース
 グリフを直接同梱していないため、ビルドには毎回それらの上流ファイルが
 必要です。
@@ -13,7 +13,7 @@ pip install -r requirements.txt
 
 ビルドは2段階です。まず `scripts/build_latin.py` が Source Code Pro VF・
 Monaspace VF・Source Sans 3 VF Italic（斜体のギリシャ・キリル）から
-欧文レイヤー Gengou を `dist/latin` に組み、
+欧文レイヤー Gengou Code を `dist/latin` に組み、
 次に `scripts/build.py` がそれを Source Han Sans JP に接ぎ木します
 （`build.py` は両段階の共通ヘルパーと JP の接ぎ木、`vfsource.py` は
 VF のインスタンス化と Monaspace の合成、`anchors.py` は欧文レイヤーが
@@ -47,7 +47,7 @@ PR を出して自分でマージし、そのタグで `release.yml` を叩き�
 ```sh
 # export しておく（`VAR=... \` の行継続は直後の 1 コマンドにしか効かない）
 export SCP_VF_U=... SCP_VF_I=... SS_VF_I=... MONA_VF=... SHS_DIR=...
-python scripts/build_latin.py           # dist/latin/Gengou-*.otf（10 面）
+python scripts/build_latin.py           # dist/latin/GengouCode-*.otf（10 面）
 python scripts/build_latin.py "Regular" # Regular 系のみ
 python scripts/build.py                 # 両ファミリー
 python scripts/build.py "Regular"       # Regular 系のみ（動作確認用、速い）
@@ -63,16 +63,16 @@ python scripts/build.py "Light Upright Term"   # 1 面だけ
 `"Regular"` は Regular と Regular Italic の全ファミリー、`"Light Italic"`
 はファミリーごとに 1 面、`""`（空文字列）だけなら基本ファミリーです。
 
-可変フォント版の Gengou は `python scripts/build_latin_vf.py`
-（`build_latin.py` と同じ環境変数）で `dist/latin/Gengou[wght].otf` /
-`Gengou-Italic[wght].otf` を作ります。
+可変フォント版の Gengou Code は `python scripts/build_latin_vf.py`
+（`build_latin.py` と同じ環境変数）で `dist/latin/GengouCode[wght].otf` /
+`GengouCode-Italic[wght].otf` を作ります。
 
 ## テスト・検証
 
 ```sh
 python -m pytest tests/ -q                                  # 単体テスト
-python scripts/verify.py dist/GengouJP-Regular.otf          # 面を名指し
-python scripts/verify.py "dist/latin/Gengou[wght].otf"      # 可変版も同じ入口
+python scripts/verify.py dist/GengouCodeJP-Regular.otf          # 面を名指し
+python scripts/verify.py "dist/latin/GengouCode[wght].otf"      # 可変版も同じ入口
 python scripts/verify.py 'dist/*.otf' 'dist/latin/*.otf' 'dist/nerd/*.otf'
 ```
 
@@ -93,7 +93,7 @@ name・家族の cmap、JP の縦組みと VORG（ドナーと突き合わせ）
 `Regular` 面で通ることを確認してください。CI（`.github/workflows/ci.yml`）でも push / PR 時に
 同じ検証が走ります（単体テストと lint を 1 ジョブ、Regular Upright / Regular Italic / Light Italic を
 ファミリー別に 1 ジョブずつ（Regular Upright の 2 ジョブは JP 面への Nerd
-Fonts の接ぎ木も検証）、可変フォントと Gengou への接ぎ木を 1 ジョブ、
+Fonts の接ぎ木も検証）、可変フォントと Gengou Code への接ぎ木を 1 ジョブ、
 並列に組んで 1 分程度。リリース
 `release.yml` はファミリー × ウェイト群の 6 ジョブのあと `package`
 ジョブが zip →
@@ -117,7 +117,7 @@ NF_SYMBOLS=... python scripts/nerdpatch.py [面のパス | 名前の一部]
 
 合字の定義は `data/mona_ligs.json` にあり、`scripts/build.py` の
 `load_ligatures()` が読み込みます。グリフは `build_latin.py` が
-`build.add_glyphs()` で Monaspace から Gengou に描き、`build.py` は
+`build.add_glyphs()` で Monaspace から Gengou Code に描き、`build.py` は
 その完成グリフを `latin_ligatures()` で JP 側へ写し、両方が共通の
 `add_gsub()` で calt/liga と stylistic set を組みます。1エントリの形式:
 

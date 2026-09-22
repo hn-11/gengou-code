@@ -3,7 +3,7 @@
 output printed whole once its run ends. Exits non-zero if any run did.
 
 Which gates a font gets is the font's own answer, not its path: a font
-with an fvar is the variable Gengou, a font that draws あ is a JP face,
+with an fvar is the variable Gengou Code, a font that draws あ is a JP face,
 and anything else is a Latin-only face. The rule used to be "latin
 somewhere in the path", which made dist/nerd/latin/ work by accident
 and would have handed a JP face dropped in that directory the Latin
@@ -55,7 +55,7 @@ def main():
     # one as a full pass -- which is how the release job, then naming a
     # single Nerd Fonts face, could have checked no patched face at all.
     # An existing path is taken as itself before it is read as a pattern:
-    # the variable fonts are named Gengou[wght].otf, where the brackets
+    # the variable fonts are named GengouCode[wght].otf, where the brackets
     # are a character class that matches nothing
     paths, missing = [], []
     for arg in sys.argv[1:]:

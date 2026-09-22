@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Gengou (variable): the same recipe scripts/build_latin.py uses for
+"""Gengou Code (variable): the same recipe scripts/build_latin.py uses for
 the static faces — Source Code Pro VF as the base, Monaspace VF for the
 punctuation/ligatures/one-cell arrows — but assembled as a CFF2 variable
 font instead of ten static instances. Two files come out, mirroring
 Source Code Pro's own Upright/Italic split:
 
-  dist/latin/Gengou[wght].otf         wght 200-700 (usWeightClass terms)
-  dist/latin/Gengou-Italic[wght].otf  from SCP_VF_I, Monaspace slnt +
+  dist/latin/GengouCode[wght].otf         wght 200-700 (usWeightClass terms)
+  dist/latin/GengouCode-Italic[wght].otf  from SCP_VF_I, Monaspace slnt +
                                         the residual shear mona_transform
                                         already applies for the static
                                         Italic faces
@@ -98,7 +98,7 @@ import vfsource  # noqa: E402
 
 CELL = build_latin.CELL     # 600, SCP's own advance
 MONA_K = build_latin.MONA_K  # 600/1240
-FAMILY, PS_FAMILY = build.LATIN_FAMILY   # "Gengou", "Gengou"
+FAMILY, PS_FAMILY = build.LATIN_FAMILY   # "Gengou Code", "GengouCode"
 
 STYLES = {
     # style -> (env var for the SCP VF, italic bool, output filename)
@@ -126,7 +126,7 @@ def weight_positions():
 def confirm_scp_master_wghts(vf):
     """The SCP VF's own wght master locations, read back from the CFF2
     VarStore's region peaks (on the wght axis) through avar/fvar rather
-    than assumed — the variable Gengou's masters go exactly where
+    than assumed — the variable Gengou Code's masters go exactly where
     SCP's own are, so no interpolation error is introduced on the SCP
     side; only Monaspace needs matching per master.
 
@@ -336,12 +336,12 @@ def finalize_vf_names(vf, italic, version, credits, italic_angle):
     """Name table for the merged VF: build.set_names does the heavy
     lifting (credits, version, vendor, fsSelection/macStyle, post
     italicAngle/caret) exactly as for a static face with weight="Regular"
-    (RIBBI: family "Gengou", subfamily "Regular"/"Italic") — a VF file
+    (RIBBI: family "Gengou Code", subfamily "Regular"/"Italic") — a VF file
     is not any one weight, so the weight-specific PostScript name
-    set_names computes (Gengou-Regular / Gengou-RegularItalic) is
-    wrong for it; overridden here to Gengou-Roman / Gengou-Italic
+    set_names computes (GengouCode-Regular / GengouCode-RegularItalic) is
+    wrong for it; overridden here to GengouCode-Roman / GengouCode-Italic
     (nameID 6) with a matching nameID 3 and nameID 25 (variations
-    PostScript name prefix) "Gengou". nameID 16/17 are dropped:
+    PostScript name prefix) "GengouCode". nameID 16/17 are dropped:
     Source Code Pro's own VF omits them too — with fvar+STAT already
     describing the family, and nameID 1/2 here already being the plain
     RIBBI pair (no weight suffix at the file level), they are redundant
@@ -391,8 +391,8 @@ def master_extents(font):
 
 def name_default_instance_by_font(vf):
     """fvar: the named instance sitting at the axis default (Regular /
-    Italic) takes the FONT's own PostScript name (nameID 6, Gengou-Roman
-    / Gengou-Italic) instead of a private 'Gengou-Regular' string —
+    Italic) takes the FONT's own PostScript name (nameID 6, GengouCode-Roman
+    / GengouCode-Italic) instead of a private 'GengouCode-Regular' string —
     the fvar spec says the default instance's postScriptNameID must be 6
     or a record with the same value (fontbakery
     opentype/varfont/valid_default_instance_nameids); its subfamily name

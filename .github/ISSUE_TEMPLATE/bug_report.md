@@ -20,7 +20,7 @@ labels: bug
 
 - OS:
 - フォントのバージョン（リリースタグ or コミット）:
-- 対象ファミリー（Gengou JP / Gengou JP Term / Gengou、Nerd Font Mono かどうか）:
+- 対象ファミリー（Gengou Code JP / Gengou Code JP Term / Gengou Code、NF（Nerd Fonts 版）かどうか）:
 
 ## 補足
 

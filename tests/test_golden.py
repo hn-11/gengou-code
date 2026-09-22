@@ -235,8 +235,8 @@ def test_check_metadata_catches_a_field_difference():
 
 
 def test_check_metadata_catches_a_name_table_record_difference():
-    font_g = make_font([".notdef", "a"], {97: "a"}, {"a": 600}, family="Gengou")
-    font_c = make_font([".notdef", "a"], {97: "a"}, {"a": 600}, family="Gengou JP")
+    font_g = make_font([".notdef", "a"], {97: "a"}, {"a": 600}, family="Gengou Code")
+    font_c = make_font([".notdef", "a"], {97: "a"}, {"a": 600}, family="Gengou Code JP")
 
     rep = golden.Reporter()
     golden.check_metadata(rep, font_g, font_c, ignore_names=False)

@@ -115,7 +115,7 @@ def hmtx_mismatches(font):
     (name, xMin, hmtx lsb) where the bearing is two units or more off
     the outline's xMin. Less is rounding: Source Han Sans sets a few
     bearings from the on-curve points, up to a unit right of a curve's
-    true extreme (the stale Gengou bearings this catches were tens of
+    true extreme (the stale Gengou Code bearings this catches were tens of
     units off). A blank glyph has no xMin and is left alone. Every glyph
     is drawn once, and its box comes back third, so a caller that needs
     the bounds does not draw them all over again."""
@@ -189,20 +189,23 @@ def check_version_stamp(tf, check, unique_id=False):
 # fix to one of them reached the other only when someone remembered (round 12
 # found the JP side's NF_SYMBOLS gate missing that way)
 
-NERD_FONT_MARK = " Nerd Font Mono"
+# nerdpatch.NF_MARKER, which this module cannot import (nerdpatch imports it)
+NERD_FONT_MARK = " NF"
 
 
 def check_family_names(tf, check, family, ps_family):
     """The family the face ships under and its PostScript name's
-    prefix: `family` once a Nerd Fonts marker (nerdpatch.nf_name) is
-    stripped, and `ps_family`, plus "NFM" on a patched face, before the
-    hyphen. Returns whether the face is a Nerd Fonts one."""
+    prefix: `family` once the Nerd Fonts marker (nerdpatch.nf_name) is
+    stripped, and `ps_family`, plus "NF" on a patched face, before the
+    hyphen. Returns whether the face is a Nerd Fonts one -- the answer
+    the icon gates are keyed on, so that the name they are asked of and
+    the name checked here cannot drift apart."""
     name = tf["name"]
     fam = name.getDebugName(16) or name.getDebugName(1) or ""
     is_nf = fam.endswith(NERD_FONT_MARK)
     base = fam[:-len(NERD_FONT_MARK)] if is_nf else fam
     check(base == family, f"family name {fam!r} (want {family!r})")
-    ps = ps_family + ("NFM" if is_nf else "")
+    ps = ps_family + (NERD_FONT_MARK.strip() if is_nf else "")
     check((name.getDebugName(6) or "").startswith(ps + "-"),
           f"PostScript name {name.getDebugName(6)!r} (want {ps}-...)")
     return is_nf
@@ -381,8 +384,8 @@ def check_style_bits(tf, check, subfamily, italic):
 # conhost, Notepad, or Office's GDI text path. nameID 16 carries the
 # name spelled out for everything that reads it (DirectWrite, CoreText,
 # fontconfig all prefer 16), so holding 1 to this bound costs nothing.
-# It is the Nerd Fonts marker that pushes against it: nerdpatch splices
-# the abbreviation into 1 and the full words into 16.
+# It is the Nerd Fonts marker that pushes against it, which is why
+# nerdpatch's is "NF" rather than "Nerd Font Mono".
 # the characters the Latin donor draws and the build does not
 # redraw: the operators are Monaspace's, so they are not asked
 DONOR_LETTERS = tuple(range(0x30, 0x3A)) + tuple(range(0x41, 0x5B)) \
@@ -2421,7 +2424,7 @@ def vf_region_peaks(tf, axis_tag="wght"):
 # advertised, and until now only the JP faces were asked whether any of
 # it still WORKS: the Latin faces and the variable fonts checked that
 # the tag was in the FeatureList, which a feature whose lookup list is
-# empty passes. The two variable fonts are the whole of Gengou.zip,
+# empty passes. The two variable fonts are the whole of GengouCode.zip,
 # and their GSUB is a varLib merge of the masters' — a failure mode no
 # other face shares
 SS_PROBES = (("ss01", "=="), ("ss02", "->"), ("ss03", "<>"), ("ss04", "|>"),
@@ -2852,7 +2855,7 @@ def check_blank_glyphs(tf, check, gs):
 
 def check_name_composition(tf, check):
     """nameID 4 is the family and subfamily, 6 the PostScript pair: a
-    Regular calling itself 'Gengou Bold' in 4 and 6 passed (round 10,
+    Regular calling itself 'Gengou Code Bold' in 4 and 6 passed (round 10,
     mutant G13)."""
     name = tf["name"]
     fam = name.getDebugName(16) or name.getDebugName(1)
@@ -2860,7 +2863,7 @@ def check_name_composition(tf, check):
     full, ps = name.getDebugName(4), name.getDebugName(6)
     want_full = fam if sub == "Regular" else f"{fam} {sub}"
     check(full in (want_full, f"{fam} {sub}"), f"nameID 4 is family + subfamily ({full!r})")
-    # the family half is abbreviated by design (GengouNFM for the Nerd
+    # the family half is abbreviated by design (GengouCodeNF for the Nerd
     # Fonts face); the style half is the subfamily, and there are no spaces
     want_style = sub.replace(" ", "")
     # the Regular weight keeps its name in the PostScript style
@@ -2877,7 +2880,7 @@ def family_reference(path, tf):
     the Regular of its own PostScript family AND its own style, opened,
     or None when this face is that reference or it is not there.
 
-    Both halves are measured lessons. A hard-coded GengouJP-Regular.otf
+    Both halves are measured lessons. A hard-coded GengouCodeJP-Regular.otf
     was a no-op for the Term and the Nerd Font faces, which have their
     own family (round 11); and asking an italic face for the upright
     Regular is asking for a file no job that splits its matrix by style

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Regression test for the Latin-only faces (dist/latin/Gengou-*.otf):
+"""Regression test for the Latin-only faces (dist/latin/GengouCode-*.otf):
 every ligature fires, the guards hold, everything sits on the 600 grid,
 nothing CJK or full-width is left, and the metadata is the Latin font's
-own. Usage: python scripts/verify_latin.py dist/latin/Gengou-Regular.otf"""
+own. Usage: python scripts/verify_latin.py dist/latin/GengouCode-Regular.otf"""
 
 import sys
 from pathlib import Path
@@ -57,7 +57,7 @@ from verifylib import (  # noqa: E402
 )
 
 FONT = Path(sys.argv[1]) if len(sys.argv) > 1 else (
-    ROOT / "dist" / "latin" / "Gengou-Regular.otf")
+    ROOT / "dist" / "latin" / "GengouCode-Regular.otf")
 CELL = build.CELL
 
 def main():
@@ -65,7 +65,7 @@ def main():
     check = Checker()
 
     name = tf["name"]
-    # a Nerd Fonts variant ("Gengou Nerd Font Mono", nerdpatch.nf_name)
+    # a Nerd Fonts variant ("Gengou Code NF", nerdpatch.nf_name)
     # appends Nerd Fonts' own marker after the family
     is_nf = check_family_names(tf, check, build_latin.FAMILY, build_latin.PS_FAMILY)
     subfamily = name.getDebugName(17) or name.getDebugName(2) or ""
@@ -137,8 +137,8 @@ def main():
     check_substitution_identity(tf, check)
     check_blank_glyphs(tf, check, tf.getGlyphSet())
     check_name_composition(tf, check)
-    # the Regular of THIS face's own family (GengouNFM-Regular.otf
-    # beside a Nerd Font face): a hard-coded Gengou-Regular.otf never
+    # the Regular of THIS face's own family (GengouCodeNF-Regular.otf
+    # beside a Nerd Font face): a hard-coded GengouCode-Regular.otf never
     # sits beside dist/nerd/latin, so the gate was a no-op on all ten
     # of those faces and 37 IPA letters could go (round 11, mutant B2)
     check_family_cmap(tf, check, family_reference(FONT, tf))
