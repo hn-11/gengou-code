@@ -54,7 +54,7 @@ glyph and only `--careful` keeps it. Here the face's is kept, because
 outside Powerline that overlap is not icons — it is text. The two fonts
 share exactly eight codepoints: those seven Powerline glyphs, replaced,
 and U+2665 BLACK HEART SUIT, which both donors (Source Code Pro in a
-Gengou face, Source Han Sans in a JP one) draw as the character it
+Gengou Code face, Source Han Sans in a JP one) draw as the character it
 is and Nerd Fonts draws as an Octicon. A prompt wants the
 Octicon separators; prose wants its own heart. graft_symbols pins that
 one codepoint (TEXT_OVER_ICON) and fails the build when the overlap
@@ -86,9 +86,9 @@ either).
 
 Usage:
   python scripts/nerdpatch.py [FACE.otf ... | NAME-SUBSTRING ...]
-    no argument: every JP face in dist/ and every static Gengou face
+    no argument: every JP face in dist/ and every static Gengou Code face
     in dist/latin/ (never the variable fonts). Output: dist/nerd/ for the
-    JP faces, dist/nerd/latin/ for Gengou.
+    JP faces, dist/nerd/latin/ for Gengou Code.
 Env (required): NF_SYMBOLS = path to SymbolsNerdFontMono-Regular.ttf
 """
 
@@ -135,7 +135,7 @@ PROGRESS = frozenset(range(0xEE00, 0xEE06))
 LINE_BOX = frozenset(POWERLINE) | PROGRESS
 STRETCHED = SEPARATORS | PROGRESS
 
-# Powerline aside, the codepoints Symbols Nerd Font Mono and a Gengou
+# Powerline aside, the codepoints Symbols Nerd Font Mono and a Gengou Code
 # face both draw. The face's glyph wins there (see the divergence in the
 # module docstring), so this is the set of characters an icon does NOT
 # take over. Pinned, so an upstream that widens the overlap fails the
@@ -146,18 +146,18 @@ TEXT_OVER_ICON = frozenset({0x2665})            # BLACK HEART SUIT
 # The marker is Cascadia's "NF", not Nerd Fonts' "Nerd Font Mono": GDI
 # looks a family up by nameID 1 through LOGFONT.lfFaceName, which holds
 # 31 characters and a NUL, and spelled out the marker puts the non-RIBBI
-# faces of the longest family over it ("Gengou JP Term Nerd Font Mono
-# SemiBold" is 38). Abbreviating nameID 1 alone, as font-patcher's
+# faces of the longest family over it ("Gengou Code JP Term Nerd Font Mono
+# SemiBold" is 43). Abbreviating nameID 1 alone, as font-patcher's
 # --windows does, left GDI's pickers naming the face differently from
 # every other one; "NF" in every record is one name everywhere, and
-# "Gengou JP Term NF SemiBold" is 26.
+# "Gengou Code JP Term NF SemiBold" is 31, the limit exactly.
 NF_MARKER = " NF"
 
 
 def nf_name(s, marker=NF_MARKER):
     """The Nerd Fonts name of one of our names: the marker spliced in
-    after the family, variant token included ("Gengou JP Term NF",
-    "GengouJPTermNF-Bold"). A name that already carries it comes back
+    after the family, variant token included ("Gengou Code JP Term NF",
+    "GengouCodeJPTermNF-Bold"). A name that already carries it comes back
     unchanged.
 
     The two forms are told apart by what follows the family: a
@@ -165,14 +165,14 @@ def nf_name(s, marker=NF_MARKER):
     the family and a "-" comes next; a display name never has one
     there. Reading the space inside the family instead would work only
     while the family is two words."""
-    if re.search(r"Gengou(?:JP(?:Term)?)?NF-|Gengou(?: JP(?: Term)?)?"
+    if re.search(r"GengouCode(?:JP(?:Term)?)?NF-|Gengou Code(?: JP(?: Term)?)?"
                  + re.escape(marker) + r"\b", s):   # already carries the marker
         return s
-    ps, hit = re.subn(r"(Gengou(?:JP(?:Term)?)?)(?=-)",
+    ps, hit = re.subn(r"(GengouCode(?:JP(?:Term)?)?)(?=-)",
                       r"\1" + marker.replace(" ", ""), s, count=1)
     if hit:
         return ps
-    return re.sub(r"Gengou(?: JP(?: Term)?)?", lambda m: m.group(0) + marker,
+    return re.sub(r"Gengou Code(?: JP(?: Term)?)?", lambda m: m.group(0) + marker,
                   s, count=1)
 
 
@@ -378,7 +378,7 @@ def rename(font):
     name = font["name"]
     for rec in name.names:
         s = rec.toUnicode()
-        if "Gengou" in s:
+        if "Gengou" in s:   # the display and the PostScript form
             name.setName(nf_name(s), rec.nameID, rec.platformID,
                          rec.platEncID, rec.langID)
     for nid, sep, credit in ((0, " ", NF_NOTICE), (9, "; ", NF_DESIGNER)):
@@ -604,9 +604,9 @@ def _symbols(path):
 
 def sources_for(args):
     """[(face, output dir)] for the command line: explicit paths (a JP
-    face in dist/ goes to dist/nerd/, a Gengou face in dist/latin/ to
+    face in dist/ goes to dist/nerd/, a Gengou Code face in dist/latin/ to
     dist/nerd/latin/), a name substring, or — with no argument — every
-    face in dist/ (non-recursive) plus the static Gengou faces
+    face in dist/ (non-recursive) plus the static Gengou Code faces
     specifically: never the variable fonts (a VF is not patched).
 
     An argument that names a file (a path, or anything ending .otf) and
@@ -642,7 +642,7 @@ def main():
         out_dir.mkdir(parents=True, exist_ok=True)
     if not sys.argv[1:]:
         # like build.py's: patching everything must not leave a face from
-        # an older roster (a v4 GengouNF-*.otf, say) for the release
+        # an older roster (a v4 GengouCodeNF-*.otf, say) for the release
         # zip to sweep up. A filtered run deletes nothing
         stale = sorted(OUT.glob("*.otf")) + sorted(LATIN_OUT.glob("*.otf"))
         for f in stale:
@@ -664,7 +664,7 @@ def extend_realign_bases(font, names):
     realign_halfwidth_marks freezes its backtrack at widening time — the
     glyphs the widening did not move — and nerdpatch.py then appends
     10,402 one-cell icons to the finished face. None of them were in it,
-    so in GengouJPTermNF-* a full-width mark after an icon kept the
+    so in GengouCodeJPTermNF-* a full-width mark after an icon kept the
     widening's -100: U+F120 + U+20DD drew the ring at -465..465 where
     the same one-cell base two rows up puts it at -365..565."""
     gpos = getattr(font.get("GPOS"), "table", None)

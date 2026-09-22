@@ -115,7 +115,7 @@ def hmtx_mismatches(font):
     (name, xMin, hmtx lsb) where the bearing is two units or more off
     the outline's xMin. Less is rounding: Source Han Sans sets a few
     bearings from the on-curve points, up to a unit right of a curve's
-    true extreme (the stale Gengou bearings this catches were tens of
+    true extreme (the stale Gengou Code bearings this catches were tens of
     units off). A blank glyph has no xMin and is left alone. Every glyph
     is drawn once, and its box comes back third, so a caller that needs
     the bounds does not draw them all over again."""
@@ -2338,7 +2338,7 @@ def vf_region_peaks(tf, axis_tag="wght"):
 # advertised, and until now only the JP faces were asked whether any of
 # it still WORKS: the Latin faces and the variable fonts checked that
 # the tag was in the FeatureList, which a feature whose lookup list is
-# empty passes. The two variable fonts are the whole of Gengou.zip,
+# empty passes. The two variable fonts are the whole of GengouCode.zip,
 # and their GSUB is a varLib merge of the masters' — a failure mode no
 # other face shares
 SS_PROBES = (("ss01", "=="), ("ss02", "->"), ("ss03", "<>"), ("ss04", "|>"),
@@ -2769,7 +2769,7 @@ def check_blank_glyphs(tf, check, gs):
 
 def check_name_composition(tf, check):
     """nameID 4 is the family and subfamily, 6 the PostScript pair: a
-    Regular calling itself 'Gengou Bold' in 4 and 6 passed (round 10,
+    Regular calling itself 'Gengou Code Bold' in 4 and 6 passed (round 10,
     mutant G13)."""
     name = tf["name"]
     fam = name.getDebugName(16) or name.getDebugName(1)
@@ -2777,7 +2777,7 @@ def check_name_composition(tf, check):
     full, ps = name.getDebugName(4), name.getDebugName(6)
     want_full = fam if sub == "Regular" else f"{fam} {sub}"
     check(full in (want_full, f"{fam} {sub}"), f"nameID 4 is family + subfamily ({full!r})")
-    # the family half is abbreviated by design (GengouNF for the Nerd
+    # the family half is abbreviated by design (GengouCodeNF for the Nerd
     # Fonts face); the style half is the subfamily, and there are no spaces
     want_style = sub.replace(" ", "")
     # the Regular weight keeps its name in the PostScript style
@@ -2794,7 +2794,7 @@ def family_reference(path, tf):
     the Regular of its own PostScript family AND its own style, opened,
     or None when this face is that reference or it is not there.
 
-    Both halves are measured lessons. A hard-coded GengouJP-Regular.otf
+    Both halves are measured lessons. A hard-coded GengouCodeJP-Regular.otf
     was a no-op for the Term and the Nerd Font faces, which have their
     own family (round 11); and asking an italic face for the upright
     Regular is asking for a file no job that splits its matrix by style

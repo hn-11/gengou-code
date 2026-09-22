@@ -22,15 +22,15 @@ from conftest import make_cff_font  # noqa: E402
 
 
 @pytest.mark.parametrize("name, want", [
-    ("Gengou JP", "Gengou JP NF"),
-    ("Gengou JP Term", "Gengou JP Term NF"),
-    ("Gengou JP Term SemiBold Italic", "Gengou JP Term NF SemiBold Italic"),
-    ("GengouJPTerm-BoldItalic", "GengouJPTermNF-BoldItalic"),
-    ("GengouJP-Light", "GengouJPNF-Light"),
-    ("Gengou", "Gengou NF"),
-    ("Gengou-RegularItalic", "GengouNF-RegularItalic"),
-    ("5.0.0;GNGO;GengouJP-Regular", "5.0.0;GNGO;GengouJPNF-Regular"),
-    ("Version 5.0.0;Gengou JP;SHS 2.005", "Version 5.0.0;Gengou JP NF;SHS 2.005"),
+    ("Gengou Code JP", "Gengou Code JP NF"),
+    ("Gengou Code JP Term", "Gengou Code JP Term NF"),
+    ("Gengou Code JP Term SemiBold Italic", "Gengou Code JP Term NF SemiBold Italic"),
+    ("GengouCodeJPTerm-BoldItalic", "GengouCodeJPTermNF-BoldItalic"),
+    ("GengouCodeJP-Light", "GengouCodeJPNF-Light"),
+    ("Gengou Code", "Gengou Code NF"),
+    ("GengouCode-RegularItalic", "GengouCodeNF-RegularItalic"),
+    ("5.0.0;GNGO;GengouCodeJP-Regular", "5.0.0;GNGO;GengouCodeJPNF-Regular"),
+    ("Version 5.0.0;Gengou Code JP;SHS 2.005", "Version 5.0.0;Gengou Code JP NF;SHS 2.005"),
     ("Source Han Sans", "Source Han Sans"),
 ])
 def test_nf_name(name, want):
@@ -46,7 +46,7 @@ def _rect(pen, x0, y0, x1, y1):
     pen.closePath()
 
 
-def _face(family="Gengou JP", ps="GengouJP-Regular", win=(1160, 288)):
+def _face(family="Gengou Code JP", ps="GengouCodeJP-Regular", win=(1160, 288)):
     """A plain CFF face like ours in the parts that matter: 'A' in a 600
     cell, Source Code Pro's own Powerline separator at U+E0B0 (taller
     than the line box, as Source Code Pro draws it), Source Code Pro's
@@ -259,18 +259,18 @@ def test_graft_symbols_keeps_every_glyph_on_one_vertical_origin(monkeypatch):
 
 def test_rename_splices_the_marker_and_credits_nerd_fonts():
     face = _face()
-    assert nerdpatch.rename(face) == "GengouJPNF-Regular"
+    assert nerdpatch.rename(face) == "GengouCodeJPNF-Regular"
     name = face["name"]
     assert "Nerd Fonts" in name.getDebugName(0)                 # the icons' donor
     assert "LICENSE-NerdFonts" in name.getDebugName(0)
     nerdpatch.rename(face)                                      # idempotent
     assert name.getDebugName(0).count("Nerd Fonts:") == 1
-    assert name.getDebugName(1) == "Gengou JP NF"
-    assert name.getDebugName(3) == "5.0.0;GNGO;GengouJPNF-Regular"
-    assert name.getDebugName(6) == "GengouJPNF-Regular"
+    assert name.getDebugName(1) == "Gengou Code JP NF"
+    assert name.getDebugName(3) == "5.0.0;GNGO;GengouCodeJPNF-Regular"
+    assert name.getDebugName(6) == "GengouCodeJPNF-Regular"
     cff = face["CFF "].cff
-    assert cff.fontNames[0] == "GengouJPNF-Regular"
-    assert cff["GengouJPNF-Regular"].FullName == "Gengou JP NF"
+    assert cff.fontNames[0] == "GengouCodeJPNF-Regular"
+    assert cff["GengouCodeJPNF-Regular"].FullName == "Gengou Code JP NF"
 
 
 def test_rename_gives_nameid_1_and_16_the_same_marker():
@@ -278,18 +278,18 @@ def test_rename_gives_nameid_1_and_16_the_same_marker():
     so no picker names the face differently from another."""
     face = _face()
     name = face["name"]
-    for nid, val in ((16, "Gengou JP Term"), (17, "SemiBold Italic"),
-                     (1, "Gengou JP Term SemiBold")):
+    for nid, val in ((16, "Gengou Code JP Term"), (17, "SemiBold Italic"),
+                     (1, "Gengou Code JP Term SemiBold")):
         # every platform the fixture wrote, or the Mac record keeps the
         # old family and getDebugName reads that one back
         for plat, enc, lang in ((3, 1, 0x409), (1, 0, 0)):
             name.setName(val, nid, plat, enc, lang)
     nerdpatch.rename(face)
-    assert name.getDebugName(1) == "Gengou JP Term NF SemiBold"
-    assert name.getDebugName(16) == "Gengou JP Term NF"
+    assert name.getDebugName(1) == "Gengou Code JP Term NF SemiBold"
+    assert name.getDebugName(16) == "Gengou Code JP Term NF"
     assert len(name.getDebugName(1)) <= verifylib.LFFACENAME_MAX
     # spelled out it would not have fitted -- that is why the marker is short
-    assert len("Gengou JP Term Nerd Font Mono SemiBold") > verifylib.LFFACENAME_MAX
+    assert len("Gengou Code JP Term Nerd Font Mono SemiBold") > verifylib.LFFACENAME_MAX
 
 
 def test_every_shipped_family_keeps_nameid_1_inside_gdi_s_limit():
@@ -298,7 +298,7 @@ def test_every_shipped_family_keeps_nameid_1_inside_gdi_s_limit():
     that. A longer family name would silently push the heaviest
     combinations out of GDI again, which is how the limit was breached
     before."""
-    for base in ("Gengou", "Gengou JP", "Gengou JP Term"):
+    for base in ("Gengou Code", "Gengou Code JP", "Gengou Code JP Term"):
         for weight in ("Light", "Regular", "Medium", "SemiBold", "Bold"):
             family = base if weight in ("Regular", "Bold") else f"{base} {weight}"
             got = nerdpatch.nf_name(family)
@@ -309,9 +309,9 @@ def test_sources_for_paths_names_and_everything(tmp_path, monkeypatch):
     dist = tmp_path / "dist"
     latin = dist / "latin"
     latin.mkdir(parents=True)
-    for name in ("GengouJP-Light.otf", "GengouJPTerm-Light.otf"):
+    for name in ("GengouCodeJP-Light.otf", "GengouCodeJPTerm-Light.otf"):
         (dist / name).write_bytes(b"")
-    for name in ("Gengou-Light.otf", "Gengou-LightItalic.otf", "Gengou[wght].otf"):
+    for name in ("GengouCode-Light.otf", "GengouCode-LightItalic.otf", "GengouCode[wght].otf"):
         (latin / name).write_bytes(b"")
     monkeypatch.setattr(nerdpatch, "DIST", dist)
     monkeypatch.setattr(nerdpatch, "LATIN_DIR", latin)
@@ -320,16 +320,16 @@ def test_sources_for_paths_names_and_everything(tmp_path, monkeypatch):
 
     everything = nerdpatch.sources_for([])
     assert [p.name for p, _ in everything] == [
-        "GengouJP-Light.otf", "GengouJPTerm-Light.otf",
-        "Gengou-Light.otf", "Gengou-LightItalic.otf"]      # no VF
+        "GengouCodeJP-Light.otf", "GengouCodeJPTerm-Light.otf",
+        "GengouCode-Light.otf", "GengouCode-LightItalic.otf"]      # no VF
     assert [out.name for _, out in everything] == ["nerd", "nerd", "latin", "latin"]
-    assert [p.name for p, _ in nerdpatch.sources_for(["Term"])] == ["GengouJPTerm-Light.otf"]
+    assert [p.name for p, _ in nerdpatch.sources_for(["Term"])] == ["GengouCodeJPTerm-Light.otf"]
     assert [p.name for p, _ in nerdpatch.sources_for(["Term", "Italic"])] == [
-        "GengouJPTerm-Light.otf", "Gengou-LightItalic.otf"]
-    explicit = nerdpatch.sources_for([str(latin / "Gengou-Light.otf"),
-                                      str(dist / "GengouJP-Light.otf")])
+        "GengouCodeJPTerm-Light.otf", "GengouCode-LightItalic.otf"]
+    explicit = nerdpatch.sources_for([str(latin / "GengouCode-Light.otf"),
+                                      str(dist / "GengouCodeJP-Light.otf")])
     assert [(p.name, out.name) for p, out in explicit] == [
-        ("Gengou-Light.otf", "latin"), ("GengouJP-Light.otf", "nerd")]
+        ("GengouCode-Light.otf", "latin"), ("GengouCodeJP-Light.otf", "nerd")]
     assert nerdpatch.sources_for(["nothing-like-this"]) == []
 
 
@@ -337,7 +337,7 @@ def test_sources_for_resolves_a_relative_path_before_routing(tmp_path, monkeypat
     """The explicit-path branch keys the LATIN_OUT/OUT choice off
     `p.resolve().parent == LATIN_DIR.resolve()`, not off the string the
     caller passed -- a relative path has to route the same as the
-    absolute one above (a Gengou face under dist/latin/ out to
+    absolute one above (a Gengou Code face under dist/latin/ out to
     dist/nerd/latin/, a JP face straight in dist/ out to dist/nerd/), or
     a plain relative command-line argument would silently fall through
     to OUT because its own (relative) parent never equals the
@@ -345,19 +345,19 @@ def test_sources_for_resolves_a_relative_path_before_routing(tmp_path, monkeypat
     dist = tmp_path / "dist"
     latin = dist / "latin"
     latin.mkdir(parents=True)
-    (dist / "GengouJP-Light.otf").write_bytes(b"")
-    (latin / "Gengou-Light.otf").write_bytes(b"")
+    (dist / "GengouCodeJP-Light.otf").write_bytes(b"")
+    (latin / "GengouCode-Light.otf").write_bytes(b"")
     monkeypatch.setattr(nerdpatch, "DIST", dist)
     monkeypatch.setattr(nerdpatch, "LATIN_DIR", latin)
     monkeypatch.setattr(nerdpatch, "OUT", dist / "nerd")
     monkeypatch.setattr(nerdpatch, "LATIN_OUT", dist / "nerd" / "latin")
     monkeypatch.chdir(dist)
 
-    got = nerdpatch.sources_for(["latin/Gengou-Light.otf", "GengouJP-Light.otf"])
+    got = nerdpatch.sources_for(["latin/GengouCode-Light.otf", "GengouCodeJP-Light.otf"])
 
     assert [(p.name, out) for p, out in got] == [
-        ("Gengou-Light.otf", dist / "nerd" / "latin"),
-        ("GengouJP-Light.otf", dist / "nerd")]
+        ("GengouCode-Light.otf", dist / "nerd" / "latin"),
+        ("GengouCodeJP-Light.otf", dist / "nerd")]
 
 
 def test_powerline_range_is_the_two_powerline_blocks():

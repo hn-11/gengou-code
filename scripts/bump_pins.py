@@ -37,7 +37,7 @@ ACTION = Path(".github/actions/fetch-upstreams/action.yml")
 # a PATCH bump of the newest tag, which is right for an upstream refresh
 # -- newer sources, nothing in this repo changed but the pins -- and
 # wrong the first time after a release that changes what the fonts ARE.
-# v5.0.0 shipped the family as Sumi Moji; this code ships it as Gengou,
+# v5.0.0 shipped the family as Sumi Moji; this code ships it as Gengou Code,
 # with different family names, PostScript names and vendor ID, so the
 # next tag is a major one and a human has to cut it. Raise this whenever
 # a release changes something a patch bump would misrepresent.

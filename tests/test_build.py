@@ -56,7 +56,7 @@ def test_group_names_all_remap_nontrivially():
     an SCP font happened to carry a feature under one of our own tags
     (ss01-ss08, cv99), _remap_scp_tag alone would NOT filter it out: it
     would be remapped/kept just like any other SCP feature and collide
-    with the glyph variants Gengou itself authors under that tag. That
+    with the glyph variants Gengou Code itself authors under that tag. That
     is exactly why import_scp_variants must skip fr.FeatureTag in
     GROUP_NAMES explicitly, before ever calling _remap_scp_tag."""
     for tag in build.GROUP_NAMES:
@@ -67,12 +67,12 @@ def test_group_names_all_remap_nontrivially():
 
 def test_latin_face_path_regular_upright():
     got = build.latin_face_path("dist/latin", "Regular", False)
-    assert got == Path("dist/latin") / "Gengou-Regular.otf"
+    assert got == Path("dist/latin") / "GengouCode-Regular.otf"
 
 
 def test_latin_face_path_bold_italic():
     got = build.latin_face_path("dist/latin", "Bold", True)
-    assert got == Path("dist/latin") / "Gengou-BoldItalic.otf"
+    assert got == Path("dist/latin") / "GengouCode-BoldItalic.otf"
 
 
 # --- the weight roster ----------------------------------------------------
@@ -1356,7 +1356,7 @@ def test_set_names():
                          credits=[("Monaspace", "Copyright GitHub",
                                   "Lettermatic")])
 
-    assert ps == "GengouJPTerm-Bold"
+    assert ps == "GengouCodeJPTerm-Bold"
     copyright_ = name.getDebugName(0)
     assert build.PROJECT_COPYRIGHT in copyright_
     assert "© Adobe" in copyright_
@@ -1366,8 +1366,8 @@ def test_set_names():
     assert "Lettermatic" in designer
     assert name.getDebugName(8) == "hn-11"
     assert name.getDebugName(11) == build.PROJECT_URL
-    assert name.getDebugName(3).endswith(";GNGO;GengouJPTerm-Bold")
-    assert name.getDebugName(6) == "GengouJPTerm-Bold"
+    assert name.getDebugName(3).endswith(";GNGO;GengouCodeJPTerm-Bold")
+    assert name.getDebugName(6) == "GengouCodeJPTerm-Bold"
 
     os2 = font["OS/2"]
     assert os2.achVendID == "GNGO"
@@ -1380,20 +1380,20 @@ def test_set_names():
 
 def test_set_names_credits_the_face_own_family_not_the_base():
     """nameID 0 and 5 name the family the face is actually in. A Term
-    face saying "Gengou JP" filed it under a family it is not in, and
+    face saying "Gengou Code JP" filed it under a family it is not in, and
     nerdpatch.rename marks whatever it finds -- so the Nerd Fonts Term
     face's version string named the non-Term Nerd Fonts family."""
     font = _cff_font()
     build.set_names(font, "Term", "SemiBold", False, version="6.0.0")
     name = font["name"]
-    assert name.getDebugName(1) == "Gengou JP Term SemiBold"
-    assert name.getDebugName(0).startswith("Gengou JP Term:")
-    assert name.getDebugName(5).startswith("Version 6.0.0;Gengou JP Term")
+    assert name.getDebugName(1) == "Gengou Code JP Term SemiBold"
+    assert name.getDebugName(0).startswith("Gengou Code JP Term:")
+    assert name.getDebugName(5).startswith("Version 6.0.0;Gengou Code JP Term")
     # and the base family keeps naming itself
     plain = _cff_font()
     build.set_names(plain, "", "SemiBold", False, version="6.0.0")
-    assert plain["name"].getDebugName(0).startswith("Gengou JP:")
-    assert plain["name"].getDebugName(5).startswith("Version 6.0.0;Gengou JP;")
+    assert plain["name"].getDebugName(0).startswith("Gengou Code JP:")
+    assert plain["name"].getDebugName(5).startswith("Version 6.0.0;Gengou Code JP;")
 
 
 # --- donor_credits (Latin donor's own composed name IDs 0 / 9) -----------
@@ -1401,7 +1401,7 @@ def test_set_names_credits_the_face_own_family_not_the_base():
 def test_donor_credits_parses_scp_and_monaspace_in_order():
     font = _tt_font([".notdef", "A"], {ord("A"): "A"}, {"A": 600})
     font["name"].setName(
-        "Gengou: Copyright 2026 hn-11 (https://x). "
+        "Gengou Code: Copyright 2026 hn-11 (https://x). "
         "Source Code Pro: © 2023 Adobe (http://www.adobe.com/), with "
         "Reserved Font Name ‘Source’. "
         "Monaspace: Copyright 2023 GitHub, Inc. "
@@ -1429,7 +1429,7 @@ def test_donor_credits_parses_scp_and_monaspace_in_order():
 def test_donor_credits_designers_none_when_name_id_9_absent():
     font = _tt_font([".notdef", "A"], {ord("A"): "A"}, {"A": 600})
     font["name"].setName(
-        "Gengou: Copyright 2026 hn-11 (https://x). "
+        "Gengou Code: Copyright 2026 hn-11 (https://x). "
         "Source Code Pro: © 2023 Adobe (http://www.adobe.com/), with "
         "Reserved Font Name ‘Source’. "
         "Monaspace: Copyright 2023 GitHub, Inc. "

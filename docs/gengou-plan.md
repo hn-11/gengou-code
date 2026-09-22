@@ -1,15 +1,15 @@
-# Gengou — 欧文中間フォント計画
+# Gengou Code — 欧文中間フォント計画
 
 状態: 段階 1（1a・1b とも）・段階 2（VF 化）とも実装済み。v5.0.0 で
 基準を英語圏のターミナルフォントに置き換えた（下の「v5」節）。
 `scripts/build_latin.py` が Source Code Pro VF + Monaspace VF から直接
-Gengou（`dist/latin`）を組み、`scripts/build.py` はそれを Source Han
+Gengou Code（`dist/latin`）を組み、`scripts/build.py` はそれを Source Han
 Sans に接ぎ木する側になった（VF には直接触れない）。
 `scripts/build_latin_vf.py` が同じレシピを CFF2 可変フォントとして組む
-（`dist/latin/Gengou[wght].otf` / `Gengou-Italic[wght].otf`）。
-`Gengou.zip` は VF 2 面（静的 10 面は JP 面のドナー・NF パッチの入力・
-VF の検証に使い、配布しない）。名前は **Gengou**（源合）で確定し、
-和文入りは **Gengou JP**（v3.2.0 までの Shoyu Code Pro JP、v5.0.0 までの
+（`dist/latin/GengouCode[wght].otf` / `GengouCode-Italic[wght].otf`）。
+`GengouCode.zip` は VF 2 面（静的 10 面は JP 面のドナー・NF パッチの入力・
+VF の検証に使い、配布しない）。名前は **Gengou Code**（源合）で確定し、
+和文入りは **Gengou Code JP**（v3.2.0 までの Shoyu Code Pro JP、v5.0.0 までの
 Sumi Moji JP からの二度目の改名。由来と衝突調査は 2 節）。
 
 ## v5: 基準を英語圏のターミナルフォントに
@@ -19,7 +19,7 @@ v4.0.0 までは Source Han Code JP（SHCJ）が基準だった: 2:3 の比率�
 半角/全角の割り当て。v5.0.0 で基準を欧文側（Source Code Pro）に置き換え、
 SHCJ は上流から外れた。
 
-- **セルは 600、既定は 3:5**。Gengou（SCP 原寸）に Source Han Sans を
+- **セルは 600、既定は 3:5**。Gengou Code（SCP 原寸）に Source Han Sans を
   そのまま載せる。2:3（旧基本ファミリー）と 35 は廃止、Term（1:2）は
   全角の送りを 2 セルに広げるだけの変種として残す。
 - **行間は SCP の 984 / −273（1.257 em）**。hhea = typo、
@@ -30,7 +30,7 @@ SHCJ は上流から外れた。
   `＝` のバーが合う Source Han Sans の面を実測で選ぶ（ExtraLight / Normal /
   Regular / Medium / Bold）。Normal と Heavy は消え、ウェイト名は英語
   フォントの体系になった。VF の wght 軸は SCP の wght と一致（恒等写像）。
-- **幅の方針**: Gengou が持つ文字はすべて 1 セル（ギリシャ・キリル・
+- **幅の方針**: Gengou Code が持つ文字はすべて 1 セル（ギリシャ・キリル・
   罫線・矢印 7 種と `≠ ≤ ≥ …` も）。JIS 流の全角字形は `fwid` で戻す
   （矢印は合字から切り出した全角版、その他は Source Han Sans の全角
   グリフか同フォントの `fwid` 形）。自前の `hwid` / `ss09` の幅切り替えは
@@ -56,20 +56,22 @@ SHCJ は上流から外れた。
   重なりの総量は変わらない——**この 120 字余りは縮小しない限り直らない**のに、
   v5 はその縮小を廃止した。上流に従って全角のままにする。
 - ~~**NF 版のファミリー名が GDI の 31 文字に収まらない**~~ **解決**
-  （マーカーを全レコードで `NF` にする。`nerdpatch.NF_MARKER`）。綴ったままだと
-  `Gengou JP Term Nerd Font Mono` 自体は 29 文字で収まるが、非 RIBBI は
-  nameID 1 にウェイト名が付くので `... Nerd Font Mono SemiBold` が
-  38 文字になり、JP の NF 20 面のうち 8 面（Term の Light / Medium /
-  SemiBold 各 2 面と、基本ファミリーの SemiBold 2 面）が
-  `LOGFONT.lfFaceName`（31 文字）に入らなかった（欧文の 10 面は全部収まる。
-  v5.0.0 の `Sumi Moji` では Term の RIBBI が 32 文字で、JP 16 面・
-  欧文 2 面が入らなかった）。最初は本家 font-patcher の `--windows` と
-  同じく nameID 1 だけ `NFM` に略し、16 / 4 は `Nerd Font Mono` と
-  綴る分割で解決したが、GDI 系のピッカーにだけ別の名前が出るうえ、
+  （マーカーを全レコードで `NF` にする。`nerdpatch.NF_MARKER`）。
+  非 RIBBI は nameID 1 にウェイト名が付く。`Gengou` の名前のころ、綴った
+  ままの `Gengou JP Term Nerd Font Mono SemiBold` は 38 文字で、JP の NF
+  20 面のうち 8 面が `LOGFONT.lfFaceName`（31 文字）に入らなかった
+  （v5.0.0 の `Sumi Moji` では Term の RIBBI が 32 文字で、JP 16 面・
+  欧文 2 面が入らなかった）。`Gengou Code` では `Gengou Code JP Term
+  Nerd Font Mono` 自体が 34 文字で、最長は SemiBold の 43 文字。JP 20 面の
+  うち 16 面、欧文 10 面のうち 6 面が入らない。最初は本家 font-patcher の
+  `--windows` と同じく nameID 1 だけ `NFM` に略し、16 / 4 は
+  `Nerd Font Mono` と綴る分割で解決したが（`Gengou Code` では
+  `Gengou Code JP Term NFM SemiBold` が 32 文字で、これも入らない）、
+  GDI 系のピッカーにだけ別の名前が出るうえ、
   NF 面の nameID 4 が nameID 1 で始まらなくなる（fontbakery の
   `opentype/name/match_familyname_fullfontname` が落とす）。
   Cascadia Code（`Cascadia Mono NF`）と同じく全レコードを `NF` に
-  そろえて、最長 `Gengou JP Term NF SemiBold`（26 文字）。どの環境の
+  そろえて、最長 `Gengou Code JP Term NF SemiBold`（31 文字ちょうど）。どの環境の
   ピッカーにも同じ名前が出る。`verifylib.check_gdi_family_name` が
   31 文字を全面で門番している。本家の命名では `NF` はアイコンがセルから
   はみ出してよい変種を指すが、このフォントに 1 セルに収めない版は
@@ -349,7 +351,7 @@ SHCJ は上流から外れた。
   置換の同一性は 4 型すべて（ウクライナ語の `ї` を点無し i に分解するのは
   ドナーの設計として名指し）、JP は VORG を**ドナーと突き合わせ**
   （全角で描く 15,778 字。`SHS_DIR` 必須）、家族 cmap の参照は自分の
-  ファミリーの Regular（`GengouNF-Regular.otf`）。
+  ファミリーの Regular（`GengouCodeNF-Regular.otf`）。
 - ~~**静的面に Source Code Pro の重なった輪郭が残る**~~ **解決**
   （`build_latin.round_outlines` が `draw_clean` を通す）。VF のマスターは
   補間のために重なりを残し、Adobe の静的版は除去しているが、当方の静的面は
@@ -572,7 +574,7 @@ SHCJ は上流から外れた。
   替える取引になる。異体字を持たないことのほうが一貫している
 - **SHCJ 依存の解消**: バーの目標値（Latin が固定なので不要）、半角カナ
   のドナー（Source Han Sans 自身の 500 幅を中央配置）、行間（SCP）、
-  半角の集合（Gengou の cmap）。`SHCJ_TTC` と `SHCJ_TAG` は消えた。
+  半角の集合（Gengou Code の cmap）。`SHCJ_TTC` と `SHCJ_TAG` は消えた。
 
 英語フォント基準で判断した残りの課題（優先順）: README の見本画像、
 fontbakery を CI に、VS Code 統合ターミナル（xterm.js）の合字、Homebrew
@@ -583,7 +585,7 @@ cask / Scoop、リポジトリ名と `PROJECT_URL` の改名。合字なし変�
 
 ## 1. 目的
 
-Gengou JP の欧文層（Source Code Pro の文字 + Monaspace の記号・合字）を
+Gengou Code JP の欧文層（Source Code Pro の文字 + Monaspace の記号・合字）を
 **独立した欧文フォントとして先に完成させ**、JP はそれを Source Han Sans に
 載せるだけの工程にする。
 
@@ -601,16 +603,16 @@ Gengou JP の欧文層（Source Code Pro の文字 + Monaspace の記号・合�
 
 | 用途 | ファミリー名 | PostScript 名 |
 |---|---|---|
-| 欧文のみ | Gengou | Gengou-Regular など |
-| 欧文のみ NF | Gengou NF | GengouNF-Regular |
-| 和文入り | Gengou JP / Gengou JP Term | GengouJP-Regular, GengouJPTerm-Regular |
-| 和文入り NF | Gengou JP NF など | GengouJPNF-Regular など |
+| 欧文のみ | Gengou Code | GengouCode-Regular など |
+| 欧文のみ NF | Gengou Code NF | GengouCodeNF-Regular |
+| 和文入り | Gengou Code JP / Gengou Code JP Term | GengouCodeJP-Regular, GengouCodeJPTerm-Regular |
+| 和文入り NF | Gengou Code JP NF など | GengouCodeJPNF-Regular など |
 
 NF 版は nameID 1 / 4 / 16 のどれも `NF`（上の GDI の項）なので、
 GDI 系（旧 conhost・メモ帳・Office）のピッカーにも同じ名前が出る。
 
 リブランディングで名前を変えた箇所（Shoyu Code Pro JP → Sumi Moji JP →
-Gengou JP の二度の改名とも同じ箇所を触っている。リポジトリ名と
+Gengou Code JP の二度の改名とも同じ箇所を触っている。リポジトリ名と
 `PROJECT_URL` だけ未実施: リポジトリを改名すると GitHub は旧 URL を転送
 するので、フォントの name テーブルに焼く URL は改名を見てから差し替える。
 先に新 URL を書くと、改名までのあいだ 404 を焼いたフォントが出る）:
@@ -627,7 +629,7 @@ Gengou JP の二度の改名とも同じ箇所を触っている。リポジト�
 
 - OFL の Reserved Font Name により `Source` と `Monaspace` はフォント名に
   使えない。OFL FAQ 5.4 は「RFN の単語全体は不可、単語の一部は可だが非推奨」
-  で、`Monasource` は `Source` を丸ごと含むため不可側。`Gengou` は
+  で、`Monasource` は `Source` を丸ごと含むため不可側。`Gengou Code` は
   どちらの RFN も含まない
 - 名前の由来: **源合**（げんごう）。**源**は Source Code Pro と源ノ角
   ゴシック（Source Han Sans JP）が共有する `Source` の訳字で、RFN が英語の
@@ -637,11 +639,18 @@ Gengou JP の二度の改名とも同じ箇所を触っている。リポジト�
 - v5.0.0 までの `Sumi Moji`（墨文字）からの改名: 筆致も滲みも抑揚もない
   角ゴシックに墨の名前は合っていなかった。命名時の判定が衝突調査だけで、
   字面と名前が合っているかを見ていなかったのが原因
-- 衝突調査: フォント名 `Gengou` は既存なし。長音なしの `Gengo` は翻訳
+- 衝突調査: フォント名 `Gengou` は既存なし（`Gengou Code` の組み合わせは
+  未調査）。長音なしの `Gengo` は翻訳
   プラットフォーム Gengo（Lionbridge）と Go のコード生成ライブラリ
   kubernetes/gengo に当たり、`Gen Go Code` は英語で「generate Go code」と
   読めるので、どちらも採らなかった。源◯の二字（源真・源柔・源界・源暎・
   源泉・源流・源雲）は既存の派生フォント群で埋まっている
+- `Code` はファミリーの一部: Source Code Pro・Cascadia Code・Fira Code と
+  同じく、プログラミング用であることを英語名だけで示す。代わりに名前が
+  5 文字長くなり、NF 版の nameID 1 は最長の `Gengou Code JP Term NF
+  SemiBold` が GDI の 31 文字ちょうど（上の GDI の項）。ファミリーを
+  これより長くすると溢れるので、`test_nerdpatch` の全ファミリー × 全
+  ウェイトの検査と `verifylib.check_gdi_family_name` が落とす
 - name ID 0 / 9 のドナー表記、achVendID `GNGO`、STAT、WWS は JP と同じ規約
 
 ## 3. 仕様
@@ -712,14 +721,14 @@ Gengou JP の二度の改名とも同じ箇所を触っている。リポジト�
 
 ```
 scripts/build_latin.py     # SCP VF + Monaspace VF + SS3 VF Italic
-                            #   -> dist/latin/Gengou-*.otf（JP 面のドナー・
+                            #   -> dist/latin/GengouCode-*.otf（JP 面のドナー・
                             #      NF パッチの入力・VF の検証に使う 10 面。
                             #      単体では配布しない）
 scripts/build_latin_vf.py  # 同じマスターを varLib で合成
-                            #   -> dist/latin/Gengou[wght].otf
-                            #      dist/latin/Gengou-Italic[wght].otf
+                            #   -> dist/latin/GengouCode[wght].otf
+                            #      dist/latin/GengouCode-Italic[wght].otf
 scripts/build.py           # SHS + dist/latin
-                            #   -> dist/GengouJP*.otf（JP / JP Term の 20 面）
+                            #   -> dist/GengouCodeJP*.otf（JP / JP Term の 20 面）
 scripts/nerdpatch.py       # Nerd Fonts の記号フォントを接ぎ木
                             #   -> dist/nerd{,/latin}/*NF-*.otf
 scripts/verify.py          # 回帰テストの唯一の入口。名前と glob を取り、
@@ -799,7 +808,7 @@ round 11 で廃止したもの: `scripts/lint_workflows.py` 本体とその
 可変フォントだけ別ステップで名指ししていたことも無くなる
 （dist の 62 面で旧規則と完全一致: JP 40・欧文 20・可変 2）。
 併せて、実在するパスはパターンより先に「そのファイル」として扱う
-ようにした——`Gengou[wght].otf` の角括弧は何にも一致しない文字
+ようにした——`GengouCode[wght].otf` の角括弧は何にも一致しない文字
 クラスなので、名指ししても黙って 0 面しか検証されていなかった。
 全ドライバが投げるテキスト `CASES` は、それを読む門番の隣
 （verifylib）へ移した。旧 `verify.py` は `verify_jp.py`。
@@ -925,7 +934,7 @@ round 12 で廃止・統合したもの: 東アジア文字幅 Wide の例外ブ
 `check_cases` 1 つに（欧文側の `0x2FFF` という上限は「その面が全文字を
 cmap に持つか」に置き換え）。`family_reference` も 3 実装から 1 つへ。
 
-build.py に残る処理（`build_face` の順）: SHS の読み込み、Gengou からの
+build.py に残る処理（`build_face` の順）: SHS の読み込み、Gengou Code からの
 グリフ・GSUB・GPOS の取り込み（`graft_halfwidth` / `latin_ligatures` /
 `import_scp_variants` / `import_scp_locl` / `import_scp_marks` /
 `import_scp_ccmp`。グリフ名を CID に付け替え、lookup と feature を SHS の
@@ -944,10 +953,10 @@ cmap・GSUB の shaping 結果が roundoff（±1〜2ユニット）を除いて�
 
 ### 段階 1a: 35 から切り出し（実装済み、のち段階 1b で置き換え）
 
-最初の実装。`build_latin.py` を切り出し、`dist/GengouJP35-*.otf`
+最初の実装。`build_latin.py` を切り出し、`dist/GengouCodeJP35-*.otf`
 （`build.py` が既にビルドした 35 面）から `dist/latin/` に
-`Gengou-*.otf` 12 面を出す中間形態だった。`verify_latin.py` と
-`Gengou.zip` のリリース資産化はこの段階で入り、以降も引き継がれている。
+`GengouCode-*.otf` 12 面を出す中間形態だった。`verify_latin.py` と
+`GengouCode.zip` のリリース資産化はこの段階で入り、以降も引き継がれている。
 段階 1b の実装により、35 の完成品 OTF を経由する経路そのものは
 置き換わっている。
 
@@ -1010,11 +1019,11 @@ cmap・GSUB の shaping 結果が roundoff（±1〜2ユニット）を除いて�
    写像に含めるので、名前付きインスタンスの間でも SCP と厳密に一致
    する——`verify_latin_vf.py` が SCP_VF_U/I を指す環境で検証）。
    name テーブルは SCP VF 自身の慣習（`SourceCodeVF-Upright.otf` /
-   `-Italic.otf`）に倣い nameID 6 に `Gengou-Roman` /
-   `Gengou-Italic`、nameID 25 に `Gengou`、nameID 16/17 は省略
+   `-Italic.otf`）に倣い nameID 6 に `GengouCode-Roman` /
+   `GengouCode-Italic`、nameID 25 に `Gengou Code`、nameID 16/17 は省略
 4. 未着手: JP 側 (`scripts/build.py`) を「欧文 VF をそのまま
    `VFSource.matched` でインスタンス化して使う」側へ切り替える作業。
-   今回追加したのは Gengou 単体の VF（配布物）のみで、JP 側は
+   今回追加したのは Gengou Code 単体の VF（配布物）のみで、JP 側は
    引き続き `dist/latin` の静的 OTF（`build_latin.py` の出力）を
    接ぎ木している
 5. 未着手: JP 側 12 面を、今回の VF からインスタンス化して作る経路
@@ -1055,7 +1064,7 @@ cmap・GSUB の shaping 結果が roundoff（±1〜2ユニット）を除いて�
 - **Italic**: SCP Italic は −11°（`post.italicAngle`、実測ステム角
   11.38°）で Monaspace の slnt の下限と一致するため、シアーは掛からない
   ——コード中の −12° は角度を申告しないドナーへのフォールバック
-- **名前**: Gengou / Gengou JP で確定。商標（USPTO / J-PlatPat）は
+- **名前**: Gengou Code / Gengou Code JP で確定。商標（USPTO / J-PlatPat）は
   この環境から未確認。変更箇所の一覧は 2 節
 - **バージョン**: JP と同じタグで同時にリリースする（別バージョン番号を
   持たない）

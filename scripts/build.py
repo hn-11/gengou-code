@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
-"""Assemble Gengou JP from live upstreams.
+"""Assemble Gengou Code JP from live upstreams.
 
-Gengou JP is an English terminal font with Japanese: the Latin layer
-is Gengou (dist/latin, scripts/build_latin.py — Source Code Pro's
+Gengou Code JP is an English terminal font with Japanese: the Latin layer
+is Gengou Code (dist/latin, scripts/build_latin.py — Source Code Pro's
 named instances with Monaspace's punctuation and ligatures), taken as
-it is, and Source Han Sans JP supplies everything Gengou does not
+it is, and Source Han Sans JP supplies everything Gengou Code does not
 have. Source Code Pro sets the terms: the 600 cell, the stroke weight of
 each named weight (the Japanese face is the Source Han Sans weight whose
 strokes match), and the line metrics (984 / -273: the line pitch of an
 English terminal font, not a Japanese one).
 
-  - Half-width layer:  every codepoint Gengou covers gets its one-cell
+  - Half-width layer:  every codepoint Gengou Code covers gets its one-cell
                        glyph — Latin, Greek, Cyrillic, box drawing, the
                        ligature-paired arrows and operators included. The
                        two-cell forms Source Han Sans had for some of
                        them (JIS-style → α ─) stay reachable under fwid.
   - Full-width layer:  Source Han Sans JP, untouched: kanji, kana, the
-                       full-width symbols Gengou has no glyph for (① ※
+                       full-width symbols Gengou Code has no glyph for (① ※
                        ...). Its proportional leftovers (half-width kana
                        at 500, Hangul jamo at 920, ﬀ ...) are centred on
                        the grid (fit_to_grid).
@@ -26,10 +26,10 @@ English terminal font, not a Japanese one).
                        static whose '=' bar matches that instance's
                        (FACES).
 
-Italic faces take the Gengou Italic + upright Japanese.
+Italic faces take the Gengou Code Italic + upright Japanese.
 
 Families (suffix -> full-width advance):
-  ""     1000  3:5 — Gengou plus Japanese at Source Han Sans's own
+  ""     1000  3:5 — Gengou Code plus Japanese at Source Han Sans's own
                advance; the natural setting for editors
   "Term" 1200  1:2 — full-width widened to two cells (widen_fullwidth) so
                a non-grid application lays Japanese out on the terminal
@@ -45,7 +45,7 @@ Usage:
   family, "Light Italic" one face per family, "Light Upright Term" one
   face, "Light Regular base" four (the release builds a family's two
   weights per job). Whole words, never a substring match (face_matches).
-  With no FILTER, dist/GengouJP*.otf is cleared before building, so a
+  With no FILTER, dist/GengouCodeJP*.otf is cleared before building, so a
   full build never leaves faces from an older roster behind. A filtered run
   never deletes anything.
 
@@ -91,7 +91,7 @@ from fontTools.ttLib.tables import otTables
 
 ROOT = Path(__file__).resolve().parent.parent
 # the half-width cell: Source Code Pro's own advance (upm 1000), which
-# Gengou keeps as it is — one number, since v5 rescales nothing
+# Gengou Code keeps as it is — one number, since v5 rescales nothing
 CELL = 600
 FULLWIDTH = 1000    # full-width advance of the CJK layer (upm 1000)
 MONA_CELL = 1240    # Monaspace advance (upm 2000)
@@ -124,8 +124,8 @@ WEIGHT_CLASS = {"Light": 300, "Regular": 400, "Medium": 500,
 
 
 # The Latin donor faces scripts/build_latin.py writes under LATIN_DIR:
-# (family name, PostScript family). The released Gengou, exactly.
-LATIN_FAMILY = ("Gengou", "Gengou")
+# (family name, PostScript family). The released Gengou Code, exactly.
+LATIN_FAMILY = ("Gengou Code", "GengouCode")
 
 
 def latin_face_path(latin_dir, weight, italic):
@@ -135,7 +135,7 @@ def latin_face_path(latin_dir, weight, italic):
 
 # {family suffix: widen the full-width advances to two cells}
 VARIANTS = {
-    "": False,      # 3:5 — Gengou plus Japanese at 1000
+    "": False,      # 3:5 — Gengou Code plus Japanese at 1000
     "Term": True,   # 1:2 terminal grid (600:1200), widen_fullwidth
 }
 
@@ -450,7 +450,7 @@ def append_context(font):
 
     A plain CFF has no FDSelect at all: the index is None and the Private
     dict the top dict's own. Every face this repo builds is CID-keyed,
-    Gengou included; the branch is for a caller handed something else
+    Gengou Code included; the branch is for a caller handed something else
     (the unit tests' fixtures). A face with no vmtx has no donor
     either."""
     cff = font["CFF "].cff
@@ -509,7 +509,7 @@ def set_cmap(font, mapping, add_new=False):
 
 def graft_halfwidth(base, latin):
     """Give `base` (Source Han Sans JP) its half-width layer: every
-    codepoint the Latin donor (Gengou, dist/latin) has gets the
+    codepoint the Latin donor (Gengou Code, dist/latin) has gets the
     donor's one-cell glyph, at the donor's own size — Latin, Greek,
     Cyrillic, box drawing, the ligature-paired arrows and operators,
     everything an English terminal font sets in one cell. The glyph
@@ -546,7 +546,7 @@ def graft_halfwidth(base, latin):
         key = (src, is_mark)
         if key not in made:
             # the donor's own advance, not an assumed cell: every glyph
-            # Gengou cmaps is one cell today, and a two-cell one it
+            # Gengou Code cmaps is one cell today, and a two-cell one it
             # ever adds must be grafted two cells wide, not overprinted
             width = 0 if is_mark else latin["hmtx"][src][0]
             name = graft_outline(base, ctx, [(scp_gs, src, (1, 0, 0, 1, -CELL if is_mark else 0, 0))],
@@ -575,7 +575,7 @@ def graft_halfwidth(base, latin):
 def _remap_scp_tag(tag):
     """SCP feature tags, shifted around our own: ss01-ss10 -> ss11-ss20
     because ss01-ss08 are the ligature groups; ss11 and up are already
-    shifted (Gengou carries them that way); cv/zero/salt keep their
+    shifted (Gengou Code carries them that way); cv/zero/salt keep their
     names. Everything else (case, frac, sups...) is not a glyph variant
     we mount."""
     if tag in ("zero", "salt") or tag.startswith("cv"):
@@ -722,7 +722,7 @@ def import_scp_variants(base, scp, default_map, marks):
     tag_maps = {}
     tag_names = {}
     for fr in gsub.FeatureList.FeatureRecord:
-        if fr.FeatureTag in GROUP_NAMES:   # Gengou's own ss01-ss08 / cv99
+        if fr.FeatureTag in GROUP_NAMES:   # Gengou Code's own ss01-ss08 / cv99
             continue
         tag = _remap_scp_tag(fr.FeatureTag)
         if tag is None:
@@ -1513,7 +1513,7 @@ def copy_line_metrics(base, latin):
     """The line pitch of an English terminal font: hhea and typo ascender
     / descender / line gap from the Latin donor (Source Code Pro's 984 /
     -273 / 0, hhea and typo alike, USE_TYPO_METRICS set), so a line of
-    Gengou JP is as tall as a line of Source Code Pro, not of Source
+    Gengou Code JP is as tall as a line of Source Code Pro, not of Source
     Han Sans (1160 / -288, 15% more). Source Han Sans's own kanji body
     (880 / -120) sits inside.
 
@@ -1579,7 +1579,7 @@ def recalc_codepage_range(font):
 
 
 # The symbols that pair with a ligature take Monaspace's one-cell glyph
-# rather than SCP's (in Gengou, build_latin.py), so '←' beside '<-'
+# rather than SCP's (in Gengou Code, build_latin.py), so '←' beside '<-'
 # (and ≠ / !=, ≤ / <=, … / ...) shares its stroke weight and arrowhead.
 # Their two-cell forms live under fwid (stretch_arrows for the arrows).
 MONA_AMBIGUOUS = "←→↑↓⇐⇒⇔≠≤≥…"
@@ -2693,7 +2693,7 @@ OWNED_NAME_IDS = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 16, 17, 25)
 
 
 def set_names(font, suffix, weight, italic, italic_angle=-12.0, version=None,
-              credits=(), family_base="Gengou JP", ps_base="GengouJP",
+              credits=(), family_base="Gengou Code JP", ps_base="GengouCodeJP",
               base_credit="Source Han Sans"):
     """Rewrite the family-identifying names, preserve the legal ones.
 
@@ -2743,10 +2743,10 @@ def set_names(font, suffix, weight, italic, italic_angle=-12.0, version=None,
         version_str = f"Version {shs_rev:.3f};{base_family}"
         unique_version = cff_version
     # base_family, not family_base: a Term face's own family carries the
-    # suffix, and naming it "Gengou JP" here left nameID 0 and 5 pointing
+    # suffix, and naming it "Gengou Code JP" here left nameID 0 and 5 pointing
     # at a family the face is not in -- which nerdpatch.rename then
-    # marked, giving a Gengou JP Term NF face a version
-    # string reading "Gengou JP NF"
+    # marked, giving a Gengou Code JP Term NF face a version
+    # string reading "Gengou Code JP NF"
     copyright_parts = [f"{base_family}: {PROJECT_COPYRIGHT}."]
     designer_parts = []
     if base_credit:
@@ -3454,13 +3454,13 @@ def fullwidth_forms(font, replaced):
 
 def repoint_features(font, replaced, tags=("vert", "vrt2")):
     """Source Han Sans's own features substitute FROM the glyphs the
-    graft replaced, so once the cmap points at Gengou's they never
+    graft replaced, so once the cmap points at Gengou Code's they never
     fire. Re-point each of `tags` at the grafted glyph, the way
     add_width_alternates does for fwid, so a vertical run still gets the
-    rotated forms of what Gengou took over.
+    rotated forms of what Gengou Code took over.
 
     Only the vertical features: 'locl' is on by default, and re-pointing
-    it would swap Gengou's own design for Source Han Sans's in
+    it would swap Gengou Code's own design for Source Han Sans's in
     ordinary horizontal text (its JP locale form of '…' is full width).
     Returns the number re-pointed."""
     if "GSUB" not in font:
@@ -3491,7 +3491,7 @@ def repoint_features(font, replaced, tags=("vert", "vrt2")):
 def add_width_alternates(font, fwid):
     """Wire the full-width forms into GSUB's fwid: {default one-cell
     glyph: full-width glyph} — Source Han Sans's own two-cell form of a
-    character Gengou sets in one cell (Greek, box drawing, ≠ ≤ ≥ …),
+    character Gengou Code sets in one cell (Greek, box drawing, ≠ ≤ ≥ …),
     or the arrow redrawn from the ligatures (stretch_arrows). fwid
     already exists in the Source Han Sans base; the new lookup is merged
     into that record. Runs after add_gsub, so it re-sorts."""
@@ -4115,7 +4115,7 @@ def main():
     if only is None:
         # a full build must not leave faces from an older roster (e.g. the
         # a weight dropped from FACES) for the release zip to pick up
-        stale = sorted(out_dir.glob("GengouJP*.otf"))
+        stale = sorted(out_dir.glob("GengouCodeJP*.otf"))
         for f in stale:
             f.unlink()
         if stale:

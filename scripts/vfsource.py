@@ -42,7 +42,7 @@ def unrounded_cff2_instancing():
     renders the VF there, 'm' up to 10u off, and two instances drift
     differently. With rounding off the outlines keep the VF's exact blend
     (fixed 16.16 operands, a CFF2 charstring's native precision): the
-    variable Gengou's masters are built that way and interpolate SCP
+    variable Gengou Code's masters are built that way and interpolate SCP
     exactly (build_latin_vf.py), and the static faces round the blend
     afterwards, point by point (build_latin.round_outlines)."""
     orig = instancer.instantiateCFF2

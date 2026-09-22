@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Gengou: the Latin-only font, assembled straight from the variable
+"""Gengou Code: the Latin-only font, assembled straight from the variable
 fonts — Source Code Pro VF as the base, Monaspace VF for the punctuation,
 the ligatures and the one-cell arrows.
 
-This is the Latin layer every Gengou JP family carries, built once
+This is the Latin layer every Gengou Code JP family carries, built once
 and on its own (docs/gengou-plan.md): build.py grafts these faces
 into Source Han Sans as they are. Each face is one of Source Code Pro's
 own named instances — Light 300 / Regular 400 / Medium 500 / SemiBold
@@ -49,7 +49,7 @@ from verifylib import static_faces  # noqa: E402
 CELL = build.CELL   # 600
 MONA_K = CELL / build.MONA_CELL
 
-FAMILY, PS_FAMILY = build.LATIN_FAMILY   # "Gengou", "Gengou"
+FAMILY, PS_FAMILY = build.LATIN_FAMILY   # "Gengou Code", "GengouCode"
 
 
 def static_base(scp):
@@ -114,7 +114,7 @@ def fix_zone_order(font):
 
     The blend also leaves them fractional, and the spec stores them as
     integer deltas: eight of the ten static faces shipped values like
-    733.9999999 and 671.9999999 (Gengou-BoldItalic had nine, and
+    733.9999999 and 671.9999999 (GengouCode-BoldItalic had nine, and
     StdHW 115.33964), which a reader that truncates rather than rounds
     reads a unit low — the zone then sits under the overshoot it is
     there to suppress. Only Regular and Regular Italic were integral,

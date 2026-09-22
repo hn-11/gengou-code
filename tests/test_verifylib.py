@@ -12,15 +12,15 @@ import verifylib  # noqa: E402
 
 
 def test_static_faces_skips_variable_fonts_and_sorts(tmp_path):
-    for name in ("Gengou-Regular.otf", "Gengou-Italic[wght].otf", "Gengou[wght].otf",
-                 "Gengou-Bold.otf", "GengouTerm-Regular.otf", "Other-Regular.otf"):
+    for name in ("GengouCode-Regular.otf", "GengouCode-Italic[wght].otf", "GengouCode[wght].otf",
+                 "GengouCode-Bold.otf", "GengouCodeTerm-Regular.otf", "Other-Regular.otf"):
         (tmp_path / name).write_bytes(b"")
-    got = [p.name for p in verifylib.static_faces(tmp_path, "Gengou")]
-    assert got == ["Gengou-Bold.otf", "Gengou-Regular.otf"]
+    got = [p.name for p in verifylib.static_faces(tmp_path, "GengouCode")]
+    assert got == ["GengouCode-Bold.otf", "GengouCode-Regular.otf"]
 
 
 def test_static_faces_empty_dir(tmp_path):
-    assert verifylib.static_faces(tmp_path, "Gengou") == []
+    assert verifylib.static_faces(tmp_path, "GengouCode") == []
 
 
 def test_checker_tallies_and_prints(capsys):
@@ -259,8 +259,8 @@ class _Name:
 def test_check_gdi_family_name_bounds_nameid_1():
     at_limit = "G" * verifylib.LFFACENAME_MAX
     for family, want in ((at_limit, True), (at_limit + "G", False),
-                         ("Gengou JP Term NF SemiBold", True),
-                         ("Gengou JP Term Nerd Font Mono SemiBold", False),
+                         ("Gengou Code JP Term NF SemiBold", True),
+                         ("Gengou Code JP Term Nerd Font Mono SemiBold", False),
                          (None, True)):                      # absent reads as empty
         check = verifylib.Checker()
         verifylib.check_gdi_family_name({"name": _Name(family)}, check)
@@ -1505,7 +1505,7 @@ def test_check_blank_glyphs_wants_notdef_inked_and_spaces_blank():
 
 def test_check_name_composition_wants_full_and_postscript_to_match_family_and_style():
     """nameID 4 is the family and subfamily, 6 the PostScript pair: a
-    Regular calling itself 'Gengou Bold' in both passed (round 10,
+    Regular calling itself 'Gengou Code Bold' in both passed (round 10,
     mutant G13)."""
     font = _metadata_font()
     font["name"].setName("Test", 4, 3, 1, 0x409)
