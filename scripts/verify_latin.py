@@ -18,10 +18,12 @@ from verifylib import (  # noqa: E402
     check_blank_glyphs,
     check_cases,
     check_cells,
+    check_charstring_metrics,
     check_coverage_order,
     check_donor_letters,
     check_donor_repertoire,
     check_family_cmap,
+    check_family_names,
     check_features_work,
     check_font_matrix,
     check_gdef_classes,
@@ -29,6 +31,7 @@ from verifylib import (  # noqa: E402
     check_gdi_family_name,
     check_grid,
     check_heights,
+    check_ink_inside,
     check_latin_repertoire,
     check_ligature_cells,
     check_line_metrics,
@@ -37,6 +40,7 @@ from verifylib import (  # noqa: E402
     check_monospace_metadata,
     check_name_composition,
     check_name_ids,
+    check_nerd_font_icons,
     check_pair_positioning,
     check_private,
     check_stat,
@@ -44,13 +48,12 @@ from verifylib import (  # noqa: E402
     check_substitution_identity,
     check_tables,
     check_version_stamp,
+    check_weight_class,
     check_zones,
     family_reference,
     glyph_has_hint,
     hmtx_mismatches,
-    ink_spill,
     make_shaper,
-    weight_name,
 )
 
 FONT = Path(sys.argv[1]) if len(sys.argv) > 1 else (
@@ -62,30 +65,16 @@ def main():
     check = Checker()
 
     name = tf["name"]
-    fam = name.getDebugName(16) or name.getDebugName(1)
     # a Nerd Fonts variant ("Gengou Code NF", nerdpatch.nf_name)
-    # appends Nerd Fonts' own marker after the family — strip it before
-    # matching against the family name.
-    is_nf = bool(fam) and fam.endswith(" NF")
-    base_fam = fam[:-len(" NF")] if is_nf else (fam or "")
-    check(base_fam == build_latin.FAMILY, f"family name {fam!r}")
-    ps_family = build_latin.PS_FAMILY + ("NF" if is_nf else "")
-    check((name.getDebugName(6) or "").startswith(ps_family + "-"),
-          f"PostScript name {name.getDebugName(6)!r}")
+    # appends Nerd Fonts' own marker after the family
+    is_nf = check_family_names(tf, check, build_latin.FAMILY, build_latin.PS_FAMILY)
     subfamily = name.getDebugName(17) or name.getDebugName(2) or ""
     italic = "Italic" in subfamily
     check_style_bits(tf, check, name.getDebugName(2) or "", italic)
     check_gdi_family_name(tf, check)
     check_name_ids(tf, check, (1, 2, 3, 4, 5, 6, 8, 9, 11, 13, 14))
-    # the weight the face calls ITSELF, in the number Windows sorts by:
-    # the PANOSE check below derives what it wants FROM usWeightClass,
-    # so the pair stayed self-consistent at any value — a Regular
-    # stamped 700 passed, and it is build.set_names' single line
-    weight = weight_name(subfamily)
-    if check(weight in build.WEIGHT_CLASS, f"subfamily names a weight ({weight!r})"):
-        check(tf["OS/2"].usWeightClass == build.WEIGHT_CLASS[weight],
-              f"OS/2 usWeightClass {tf['OS/2'].usWeightClass} "
-              f"(want {build.WEIGHT_CLASS[weight]} for {weight})")
+    weight = check_weight_class(tf, check, subfamily)
+    if weight:
         check_stat(tf, check, weight, italic)
     check_version_stamp(tf, check)
     n0 = name.getDebugName(0) or ""
@@ -99,21 +88,14 @@ def main():
     check_donor_repertoire(check, cmap)
     check_grid(check, hmtx.metrics, CELL)
     widths, bearings, bounds = hmtx_mismatches(tf)
-    check(not widths, f"CFF charstring widths agree with hmtx ({widths[:3]})")
+    check_charstring_metrics(tf, check, widths, bearings)
     check_tables(tf, check, bounds, tf["hmtx"].metrics, cmap, codepages=True)
-    check(not bearings, f"hmtx bearings are the outlines' xMin ({len(bearings)} off, "
-                        f"e.g. {bearings[:3]})")
 
-    # WHERE the ink lands, not just how wide it is (verify.py has the same
-    # two; ink_spill says what the bound is): every check above holds on
-    # a face whose glyphs are all blank, or all drawn one cell to the
-    # right, so 'e' would sit wholly in its neighbour's column and the
-    # release would ship it. `bounds` holds only the glyphs that draw —
-    # hmtx_mismatches skips a blank one — so the count below is ink, not
-    # cmap entries
-    spill = ink_spill(bounds, lambda g: hmtx[g][0], cmap, CELL)
-    check(not spill, f"every glyph's ink is inside its advance, give or take "
-                     f"the lean ({len(spill)} are not, e.g. {spill[:3]})")
+    # every check above holds on a face whose glyphs are all blank, or
+    # all drawn one cell to the right. `bounds` holds only the glyphs
+    # that draw -- hmtx_mismatches skips a blank one -- so the count
+    # below is ink, not cmap entries
+    check_ink_inside(check, bounds, hmtx, cmap, CELL)
     inked = sum(1 for g in cmap.values() if g in bounds)
     check(inked >= 700, f"{inked} of {len(cmap)} mapped codepoints draw ink")
     # and where inside the advance: half a cell of lean lets a quarter-
@@ -188,14 +170,7 @@ def main():
     check(len(shape("a -> b", dict(off, ss02=True))[0]) == 5, "ss02 alone ligates '->'")
 
     if is_nf:
-        import nerdpatch
-        symbols = nerdpatch.symbols_for_checks()
-        # the icon gates without the donor keep a tenth of the cell of
-        # slack, and a separator 50 units short of the line passed that
-        # way (round 10, mutant N9): the release builds have the donor
-        check(symbols is not None, "NF_SYMBOLS points at the Symbols donor")
-        for ok, msg in nerdpatch.icon_checks(tf, symbols):
-            check(ok, msg)
+        check_nerd_font_icons(tf, check)
 
     print("FAILED" if check.failed else "all checks passed")
     sys.exit(check.exit_code())

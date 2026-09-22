@@ -325,7 +325,13 @@ def _mark_font(anchors, heights=None, advance=600, cmap_extra=(), width=100,
 
 def _gate(fn, font, *args):
     out = []
-    fn(font, *args, lambda ok, msg: None if ok else out.append(msg))
+
+    def check(ok, msg):
+        # answers as Checker does: a gate may go on only if a check held
+        if not ok:
+            out.append(msg)
+        return ok
+    fn(font, *args, check)
     return out
 
 
@@ -818,6 +824,87 @@ def test_check_version_stamp_holds_head_and_the_names_to_the_env(monkeypatch, ca
     monkeypatch.delenv("GENGOU_VERSION")
     assert _gate(stamp(True), font) == []
     assert "skip" in capsys.readouterr().out
+
+
+def _named_font(family, ps, style="Regular"):
+    font = _metadata_font(style=style)
+    font["name"].setName(family, 16, 3, 1, 0x409)
+    font["name"].setName(f"{ps}-{style}", 6, 3, 1, 0x409)
+    return font
+
+
+def test_check_family_names_strips_the_nerd_font_mark_and_wants_nf():
+    gate = lambda fam, ps: (  # noqa: E731
+        lambda f, chk: verifylib.check_family_names(f, chk, fam, ps))
+    assert _gate(gate("Gengou Code", "GengouCode"), _named_font("Gengou Code", "GengouCode")) == []
+    patched = _named_font("Gengou Code NF", "GengouCodeNF")
+    assert _gate(gate("Gengou Code", "GengouCode"), patched) == []
+    # a patched face that kept the plain PostScript name
+    unmarked = _named_font("Gengou Code NF", "GengouCode")
+    assert _gate(gate("Gengou Code", "GengouCode"), unmarked) == [
+        "PostScript name 'GengouCode-Regular' (want GengouCodeNF-...)"]
+    assert _gate(gate("Gengou Code JP", "GengouCodeJP"), _named_font("Gengou Code", "GengouCode")) == [
+        "family name 'Gengou Code' (want 'Gengou Code JP')",
+        "PostScript name 'GengouCode-Regular' (want GengouCodeJP-...)"]
+
+
+def test_check_family_names_says_whether_the_face_is_patched():
+    ask = lambda font: verifylib.check_family_names(  # noqa: E731
+        font, lambda ok, msg: ok, "Gengou Code", "GengouCode")
+    assert ask(_named_font("Gengou Code NF", "GengouCodeNF")) is True
+    assert ask(_named_font("Gengou Code", "GengouCode")) is False
+
+
+
+def test_the_nerd_font_mark_is_the_one_nerdpatch_writes():
+    # the icon gates run only on a face whose name carries this mark:
+    # when nerdpatch's changed and the JP driver's spelling did not, the
+    # gates skipped every JP Nerd Fonts face without a word
+    import nerdpatch
+    assert verifylib.NERD_FONT_MARK == nerdpatch.NF_MARKER
+    assert nerdpatch.nf_name("Gengou Code JP Term").endswith(verifylib.NERD_FONT_MARK)
+
+def test_check_weight_class_holds_the_number_to_the_name():
+    font = _metadata_font()
+    font["OS/2"].usWeightClass = verifylib.build.WEIGHT_CLASS["Regular"]
+    gate = lambda sub: lambda f, chk: verifylib.check_weight_class(f, chk, sub)  # noqa: E731
+    assert _gate(gate("Regular"), font) == []
+    # the italic Regular is plain "Italic" (weight_name)
+    assert _gate(gate("Italic"), font) == []
+    font["OS/2"].usWeightClass = 700
+    assert _gate(gate("Regular"), font) == [
+        f"OS/2 usWeightClass 700 (want {verifylib.build.WEIGHT_CLASS['Regular']} for Regular)"]
+    # a subfamily that names no weight is one FAIL, not two
+    assert _gate(gate("Hairline"), font) == [
+        "subfamily 'Hairline' names a weight ('Hairline')"]
+
+
+def test_check_weight_class_returns_the_weight_only_when_named():
+    font = _metadata_font()
+    font["OS/2"].usWeightClass = verifylib.build.WEIGHT_CLASS["Bold"]
+    ask = lambda sub: verifylib.check_weight_class(font, lambda ok, msg: ok, sub)  # noqa: E731
+    assert ask("Bold Italic") == "Bold"
+    assert ask("Hairline") is None
+
+
+def test_check_charstring_metrics_reports_each_list():
+    font = _metadata_font()
+    gate = lambda w, b: lambda f, chk: verifylib.check_charstring_metrics(f, chk, w, b)  # noqa: E731
+    assert _gate(gate([], []), font) == []
+    got = _gate(gate([("a", 500, 600)], [("b", 12, 0)]), font)
+    assert got == ["CFF charstring widths agree with hmtx (3 glyphs, 1 off: [('a', 500, 600)])",
+                   "hmtx bearings are the outlines' xMin (1 off: [('b', 12, 0)])"]
+
+
+def test_check_ink_inside_fails_a_glyph_drawn_into_the_next_cell():
+    cmap = {0x61: "a"}
+    hmtx = {"a": (600, 0)}
+
+    def gate(box):
+        return _gate(lambda f, chk: verifylib.check_ink_inside(
+            chk, {"a": box}, hmtx, cmap, 600), None)
+    assert gate((50, 0, 550, 500)) == []
+    assert len(gate((650, 0, 1150, 500))) == 1
 
 
 def test_check_monospace_metadata_asks_all_four():

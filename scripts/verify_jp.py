@@ -14,27 +14,45 @@ from pathlib import Path
 import pathops
 from fontTools.pens.boundsPen import BoundsPen
 from fontTools.pens.transformPen import TransformPen
+from fontTools.ttLib import TTFont
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 import anchors  # noqa: E402
 import build  # noqa: E402
-from build import FULLWIDTH, _unwrap, _unwrap_pos  # noqa: E402
+from build import (  # noqa: E402
+    ARROW_SOURCE,
+    ARROWS_H,
+    ARROWS_V,
+    FULLWIDTH,
+    MONA_AMBIGUOUS,
+    MONA_STANDALONE,
+    WEIGHT_CLASS,
+    _unwrap,
+    _unwrap_pos,
+    bar_thickness,
+    contour_boxes,
+    highest_cid,
+    tiling_glyphs,
+)
 from verifylib import (  # noqa: E402
     WIDE_IN_ONE_CELL,
     Checker,
     check_blank_glyphs,
     check_cases,
     check_cells,
+    check_charstring_metrics,
     check_coverage_order,
     check_donor_letters,
     check_donor_repertoire,
     check_family_cmap,
+    check_family_names,
     check_features_work,
     check_font_matrix,
     check_gdef_classes,
     check_gdi_family_name,
     check_heights,
+    check_ink_inside,
     check_ligature_cells,
     check_line_metrics,
     check_mark_class_closure,
@@ -42,6 +60,7 @@ from verifylib import (  # noqa: E402
     check_monospace_metadata,
     check_name_composition,
     check_name_ids,
+    check_nerd_font_icons,
     check_pair_positioning,
     check_private,
     check_stat,
@@ -49,12 +68,12 @@ from verifylib import (  # noqa: E402
     check_substitution_identity,
     check_tables,
     check_version_stamp,
+    check_weight_class,
     check_zones,
     family_reference,
     glyph_has_hint,
     glyph_shape,
     hmtx_mismatches,
-    ink_spill,
     is_italic,
     make_shaper,
     weight_name,
@@ -407,17 +426,85 @@ def check_term_sibling(tf, check, full):
                          f"({n} glyphs; off: {dict(list(off.items())[:4])})")
 
 
-def main():
-    from fontTools.ttLib import TTFont
-    check = Checker()          # every check reports; none aborts the rest
-    tf = TTFont(str(FONT))
-    cmap = tf.getBestCmap()
-    hmtx = tf["hmtx"]
-    a_adv = hmtx[cmap[ord("a")]][0] if ord("a") in cmap else 0
-    cjk_adv = hmtx[cmap[0x65E5]][0] if 0x65E5 in cmap else 0
-    fam = family_name(tf)
-    italic = is_italic(tf)
-    exp_half, exp_full = expected_metrics(tf)
+
+
+class Face:
+    """The face every gate below reads, opened once, with what they all
+    need measured once: its advances, its outlines' boxes, a shaper.
+    main() used to hold these as locals across 1,400 lines, and each
+    gate there could read any of the others' as well."""
+
+    def __init__(self, path):
+        self.tf = tf = TTFont(str(path))
+        self.cmap = cmap = tf.getBestCmap()
+        self.hmtx = hmtx = tf["hmtx"]
+        self.hhea = tf["hhea"]
+        self.a_adv = hmtx[cmap[ord("a")]][0] if ord("a") in cmap else 0
+        self.cjk_adv = hmtx[cmap[0x65E5]][0] if 0x65E5 in cmap else 0
+        self.fam = family_name(tf)
+        self.sub = subfamily_name(tf)
+        self.italic = is_italic(tf)
+        self.exp_half, self.exp_full = expected_metrics(tf)
+        self.order = tf.getGlyphOrder()
+        self.gs = tf.getGlyphSet()
+        self.tags = {fr.FeatureTag for fr in tf["GSUB"].table.FeatureList.FeatureRecord}
+        # bounds holds the glyphs that draw: hmtx_mismatches skips a blank one
+        self.widths, self.bearings, self.bounds = hmtx_mismatches(tf)
+        self.shape = make_shaper(path)
+
+
+# the two double-span marks straddle the pair they join: Source
+# Code Pro pulls them half a cell left in GPOS, and dropping that
+# with the advance beside it centred the tie on the first letter —
+# or, with no placement at all, 154 units left of where the line
+# starts
+def placed(face, text, feats=None):
+    """[(xMin, xMax), ...] where a run's ink actually lands: the
+    pen's own advance, plus what GPOS moves each glyph by."""
+    infos, positions = face.shape(text, feats or {})
+    out, pen_x = [], 0
+    for info, pos in zip(infos, positions):
+        pen = BoundsPen(face.gs)
+        face.gs[face.order[info.codepoint]].draw(pen)
+        out.append(None if pen.bounds is None else
+                   (pen.bounds[0] + pen_x + pos.x_offset,
+                    pen.bounds[2] + pen_x + pos.x_offset))
+        pen_x += pos.x_advance
+    return out
+
+
+def y_rows(face, gname):
+    """(yMin, yMax) of each contour of `gname`, bottom first."""
+    return sorted((round(b[1]), round(b[3])) for b in contour_boxes(face.tf, gname))
+
+
+def lig_glyph(face, text):
+    """The ligature glyph "a <op> b" shapes its operator into."""
+    infos, _ = face.shape(text, {"calt": True, "liga": True})
+    return face.order[infos[2].codepoint]
+
+
+def ink_overlap(face, text):
+    """The ink two shaped glyphs share, in square units (0 unless
+    `text` shapes to exactly two)."""
+    paths, pen_x = [], 0
+    infos, positions = face.shape(text, {})
+    if len(infos) != 2:
+        return 0
+    for info, pos in zip(infos, positions):
+        path = pathops.Path()
+        face.gs[face.order[info.codepoint]].draw(path.getPen())
+        moved = pathops.Path()
+        path.draw(TransformPen(moved.getPen(),
+                               (1, 0, 0, 1, pen_x + pos.x_offset, pos.y_offset)))
+        paths.append(moved)
+        pen_x += pos.x_advance
+    return abs(pathops.op(paths[0], paths[1], pathops.PathOp.INTERSECTION).area)
+
+
+def check_advances(face, check):
+    a_adv, cjk_adv, fam, italic, exp_half, exp_full = (
+        face.a_adv, face.cjk_adv, face.fam, face.italic, face.exp_half, face.exp_full)
     ratio = f"{cjk_adv / a_adv:.3f}" if a_adv else "?"
     print(f"family={fam!r} italic={italic} half={a_adv} full={cjk_adv} ratio={ratio}")
     check((a_adv, cjk_adv) == (exp_half, exp_full),
@@ -425,6 +512,8 @@ def main():
           f"got ({a_adv}, {cjk_adv})")
 
 
+def check_width_policy(face, check):
+    cmap, hmtx, exp_half, exp_full = face.cmap, face.hmtx, face.exp_half, face.exp_full
     # every codepoint Gengou Code has is one cell in both families — the
     # ligature-paired arrows and operators, Greek, box drawing, SCP-only
     # Latin (ł ğ ₽), '−' — and Source Han Sans's own full-width symbols
@@ -446,6 +535,9 @@ def main():
             off_policy[ch] = got
     check(not off_policy, f"width policy ({len(policy)} probes; off: {off_policy})")
 
+
+def check_greek_cyrillic_cells(face, check):
+    cmap, hmtx, exp_half = face.cmap, face.hmtx, face.exp_half
     # and every Greek and Cyrillic letter, whichever donor drew it:
     # both scripts are East_Asian_Width A, so every terminal
     # allots them one column, and a full width would paint over the
@@ -457,6 +549,9 @@ def main():
                     f"({len(greek_cyrillic)} of them; off: "
                     f"{sorted(hex(c) for c in full)})")
 
+
+def check_pinned_wide(face, check):
+    cmap = face.cmap
     # the exception to the policy: characters both donors draw one cell
     # wide although Unicode calls them Wide, so a terminal reserves two
     # columns and the glyph sits in the left one. check_widths_by_class
@@ -472,12 +567,9 @@ def main():
     check(not gone, f"the {len(pinned)} pinned East-Asian-Wide characters are "
                     f"still mapped (gone: {gone})")
 
-    # and the other direction: Unicode's Halfwidth block is one column in
-    # every terminal's width table, whatever the donor draws it at
-    # (build.narrow_halfwidth) -- asked again, cmap-wide, by
-    # check_cells -> check_widths_by_class below (check_cells(tf, check,
-    # shape_infos, tf.getGlyphSet(), exp_half, exp_full))
 
+def check_advance_grid(face, check):
+    hmtx, exp_half, exp_full = face.hmtx, face.exp_half, face.exp_full
     # nothing anywhere in the font is off the grid, cmap'd or not: a
     # feature on by default (locl, ccmp) can put a glyph on the page
     # that no codepoint reaches (fit_to_grid). Not verifylib.check_grid
@@ -491,20 +583,16 @@ def main():
           f"every advance in the font is on the grid ({len(hmtx.metrics)} glyphs; "
           f"off: {[(n, hmtx[n][0]) for n in off_grid[:5]]})")
 
-    # the names the face ships under. verify_latin.py checks its side;
-    # nothing checked this one, and the JP faces are what GengouCodeJP.zip
-    # carries
-    name = tf["name"]
-    fam = family_name(tf)
-    is_nf = fam.endswith(" NF")
-    base_fam = fam[:-len(" NF")] if is_nf else fam
-    want_fam = "Gengou Code JP" + (" Term" if exp_full > 1000 else "")
-    check(base_fam == want_fam, f"family name {fam!r} (want {want_fam!r})")
-    ps_family = "GengouCodeJP" + ("Term" if exp_full > 1000 else "") \
-        + ("NF" if is_nf else "")
-    check((name.getDebugName(6) or "").startswith(ps_family + "-"),
-          f"PostScript name {name.getDebugName(6)!r} (want {ps_family}-...)")
-    n0 = name.getDebugName(0) or ""
+
+def check_names(face, check):
+    tf, exp_full = face.tf, face.exp_full
+    # the names the face ships under -- GengouCodeJP.zip carries these
+    # faces. The family pair and the weight are the gates verify_latin.py
+    # asks of its own faces
+    term = exp_full > 1000
+    is_nf = check_family_names(tf, check, "Gengou Code JP" + (" Term" if term else ""),
+                       "GengouCodeJP" + ("Term" if term else ""))
+    n0 = tf["name"].getDebugName(0) or ""
     for donor in ("Source Han Sans", "Source Code Pro", "Monaspace"):
         check(donor in n0, f"nameID 0 credits {donor}")
     check_name_ids(tf, check, (1, 2, 3, 4, 5, 6, 8, 9, 11, 13, 14, 16, 17))
@@ -513,48 +601,12 @@ def main():
     # gate, and a release step that misses GENGOU_VERSION makes exactly
     # that
     check_version_stamp(tf, check, unique_id=True)
-    # the weight the face calls itself, in the number Windows sorts by
-    weight = weight_name(subfamily_name(tf))
-    if check(weight in build.WEIGHT_CLASS,
-             f"subfamily {subfamily_name(tf)!r} names a weight ({weight!r})"):
-        check(tf["OS/2"].usWeightClass == build.WEIGHT_CLASS[weight],
-              f"OS/2 usWeightClass {tf['OS/2'].usWeightClass} "
-              f"(want {build.WEIGHT_CLASS[weight]} for {weight})")
+    check_weight_class(tf, check, face.sub)
+    return is_nf
 
-    check_coverage_order(tf, check)
-    # the Latin layer's anchors survive the graft into this face, so
-    # they are worth asserting here as well as on the face they came
-    # from: import_scp_marks moves every one of them by a cell, and the
-    # exact-attachment check is what says the moved anchor and the moved
-    # mark still meet
-    check_mark_class_closure(tf, check)
-    check_private(tf, check)
 
-    check_line_metrics(tf, check)
-    hhea = tf["hhea"]
-    check_font_matrix(tf, check)
-    check_gdef_classes(tf, check)
-    check_pair_positioning(tf, check)
-    check_substitution_identity(tf, check)
-    check_blank_glyphs(tf, check, tf.getGlyphSet())
-    check_name_composition(tf, check)
-    check_family_cmap(tf, check, family_reference(FONT, tf))
-
-    # every charstring's own width (encoded against its FD's nominalWidthX)
-    # must agree with hmtx: a glyph appended under one FD and re-homed to
-    # another (add_latin_fd) would carry a stale width — invisible to
-    # renderers, which read hmtx, but wrong for anything reading the CFF
-    # (a TTFont glyph set's .width is hmtx's; the charstring's own decoded
-    # width is what has to be compared)
-    # -- and the left side bearing must be the outline's xMin (a CFF
-    # font's lsb is nothing fontTools maintains: the Latin donors used to
-    # carry SCP's default-master bearings at every weight)
-    widths, bearings, bounds = hmtx_mismatches(tf)
-    check(not widths, f"CFF charstring widths agree with hmtx "
-                      f"({len(tf.getGlyphOrder())} glyphs, {len(widths)} off: {widths[:5]})")
-    check(not bearings, f"hmtx bearings are the outlines' xMin "
-                        f"({len(bearings)} off: {bearings[:5]})")
-
+def check_jp_tables(face, check):
+    tf, cmap, hmtx, bounds = face.tf, face.cmap, face.hmtx, face.bounds
     check_tables(tf, check, bounds, hmtx, cmap, codepages=True)
     # the tables a JP face is not a JP face without. Both sets were
     # behind an `if`: deleting vhea, vmtx and VORG dropped five checks
@@ -595,18 +647,13 @@ def main():
                   f"vhea {label} is the outlines' ({got} vs {round(want)})")
 
 
+def check_ink_placement(face, check):
+    cmap, hmtx, exp_half, bounds = face.cmap, face.hmtx, face.exp_half, face.bounds
     # and nothing paints a whole cell past its own advance: an italic
     # overhangs by design (up to 138u in the Latin layer), a glyph put on
     # a step too small for its ink would not (grid_step). The boxes are
     # the pass above's, not a second one
-    # WHERE the ink lands, not just how wide it is: a width test says
-    # nothing about position, and translating every kanji a whole column
-    # to the right left it reporting a clean face (ink_spill says what
-    # the bound is)
-    spill = ink_spill(bounds, lambda name: hmtx[name][0], cmap, exp_half)
-    check(not spill, f"every glyph's ink is inside its advance, give or "
-                     f"take the lean ({len(spill)} are not, "
-                     f"e.g. {spill[:3]})")
+    check_ink_inside(check, bounds, hmtx, cmap, exp_half)
 
     # and, for the glyphs that fill their advance, WHERE inside it: the
     # bound above is half a cell, which a quarter-cell mistranslation
@@ -632,6 +679,9 @@ def main():
           f"offset {', '.join(f'{k} {v:+.1f}u' for k, v in centred.items())}; "
           f"bound 25u)")
 
+
+def check_repertoire_draws(face, check):
+    cmap, bounds = face.cmap, face.bounds
     # the repertoire, and DRAWN, not merely mapped: nothing here counted
     # what the face covers, so one that lost 25,000 cmap entries — or
     # kept every one of them and emptied the outlines — was a
@@ -652,6 +702,9 @@ def main():
           f"the Japanese repertoire is there and draws ({len(cmap)} "
           f"codepoints; {kanji} kanji, {kana} kana, {latin} Latin with ink)")
 
+
+def check_vertical_metrics(face, check):
+    tf, cmap, hmtx, bounds = face.tf, face.cmap, face.hmtx, face.bounds
     # the vertical origin, stated twice: CFF gives it outright in VORG,
     # and vmtx gives it as a bearing DOWN from each glyph's own yMax.
     # They must agree, or a vertical run sits at one height under a
@@ -689,27 +742,9 @@ def main():
         check(not moved, f"no kana or ideograph moves its vertical origin "
                          f"({len(moved)} off, e.g. {list(moved.items())[:3]})")
 
-    sub = subfamily_name(tf)
-    check_style_bits(tf, check, sub, italic)
-    check_gdi_family_name(tf, check)
 
-    shape_infos = make_shaper(FONT)
-    # the exact-attachment half of the mark gates (the anchor half runs
-    # above, before a shaper exists): the moved anchor and the moved
-    # mark still meet
-    check_marks(tf, check, shape_infos, tf.getGlyphSet())
-    check_cells(tf, check, shape_infos, tf.getGlyphSet(), exp_half, exp_full)
-    # the Latin layer is grafted whole, so the donor's cmap is a floor
-    # here too -- and the JP faces are where a dropped codepoint would
-    # otherwise hide, their own repertoire being ten times the donor's
-    check_donor_repertoire(check, cmap)
-    # the Latin layer is the same glyphs here as in dist/latin
-    check_donor_letters(tf, check, tf.getGlyphSet())
-    check_width_forms(tf, check, shape_infos)
-    check_term_sibling(tf, check, exp_full)
-    check_ligature_cells(tf, shape_infos, check, tf.getGlyphSet(), exp_half)
-    check_vertical_layout(tf, check, shape_infos, exp_full)
-
+def check_hints(face, check):
+    tf, cmap, shape_infos = face.tf, face.cmap, face.shape
     # the hinting the build spends a minute a face on: nothing here read
     # it, and a face whose autohint pass silently did nothing — which is
     # what an empty BuildState.redrawn produces — passed every check
@@ -735,6 +770,8 @@ def main():
     check_zones(tf, check, cmap)
 
 
+def check_fwid_forms(face, check):
+    exp_full, shape_infos = face.exp_full, face.shape
     # the two-cell forms under fwid: the arrow redrawn from the ligature,
     # ≠ and ─ from Source Han Sans, Ａ through Source Han Sans's own fwid
     # form of the proportional A the one-cell A replaced
@@ -749,28 +786,21 @@ def main():
                         f"({len(fwid_probes)} probes; off: {off_fwid})")
 
 
-    def shape_len(text, feats):
-        return len(shape_infos(text, feats)[0])
-
-    check_cases(tf, shape_infos, check)
-
-    check_features_work(shape_infos, check, cmap)
-    # a combining mark's variant (cv11: the Cyrillic breve for U+0306, in
-    # the upright faces) must stay a 0-advance mark, not become a spacing
-    # glyph that takes a cell when selected
-    tags = {fr.FeatureTag for fr in tf["GSUB"].table.FeatureList.FeatureRecord}
-
+def check_cid_count(face, check):
+    tf = face.tf
     # a CID-keyed font's CIDCount must cover every CID it uses: cffsubr
     # takes it from the last charset entry, and Source Han Sans's space
     # is sparse (build.restore_cid_count)
     cff = tf["CFF "].cff
     td = cff[cff.fontNames[0]]
     if hasattr(td, "ROS"):      # ROS is what makes a CFF CID-keyed
-        from build import highest_cid
         top = highest_cid(td)
         check(td.CIDCount > top,
               f"CFF CIDCount {td.CIDCount} covers every CID (highest {top})")
 
+
+def check_feature_set(face, check):
+    tf, exp_full, shape_infos, tags = face.tf, face.exp_full, face.shape, face.tags
     # nothing may move a glyph off the horizontal cell: 'kern' is on by
     # default in every horizontal shaper and Source Han Sans kerns あ+て
     # 20u tighter than the cell; 'halt' and 'palt' are alternate
@@ -809,6 +839,13 @@ def main():
         check(positions[0].x_advance == want,
               f"{text!r} shapes on the grid ({positions[0].x_advance}u, want {want})")
 
+
+def check_cv11(face, check):
+    # a combining mark's variant (cv11: the Cyrillic breve for U+0306, in
+    # the upright faces) must stay a 0-advance mark, not become a spacing
+    # glyph that takes a cell when selected
+    shape_infos = face.shape
+    tags = face.tags
     if "cv11" in tags:
         # 'x' + U+0306 has no precomposed form, so HarfBuzz cannot fold
         # the pair into one glyph ('a' + U+0306 becomes U+0103 ă)
@@ -822,6 +859,9 @@ def main():
         check(None not in mark_gids and mark_gids[0] != mark_gids[1],
               "cv11 swaps the combining breve")
 
+
+def check_standalone_operators(face, check):
+    cmap = face.cmap
     # standalone operators redrawn from Monaspace must match the ligatures
     # cut from the same instance: every contour of the lone glyph has a
     # counterpart in the ligature at the same y extent (ligatures span
@@ -829,38 +869,25 @@ def main():
     # ';;' repeat the glyph outright; '~' ('~>' is a fused wave-arrow),
     # ':' ('::' is the raised colon.case) and '&' (no '&&' ligature) have
     # no such ligature and are not checked.
-    from build import (
-        MONA_STANDALONE,
-        WEIGHT_CLASS,
-        bar_thickness,
-        contour_boxes,
-    )
-    glyph_order = tf.getGlyphOrder()
-
-    def y_rows(gname):
-        return sorted((round(b[1]), round(b[3])) for b in contour_boxes(tf, gname))
-
-    def lig_glyph(text):
-        infos, _ = shape_infos(text, {"calt": True, "liga": True})
-        return glyph_order[infos[2].codepoint]
-
     pairs = {"=": "a == b", "<": "a << b", ">": "a >> b", "|": "a || b",
              ".": "a .. b", "!": "a !! b", ";": "a ;; b"}
     for ch in MONA_STANDALONE:
         if ch not in pairs:
             continue
-        rows_ch, rows_lig = y_rows(cmap[ord(ch)]), y_rows(lig_glyph(pairs[ch]))
+        rows_ch, rows_lig = y_rows(face, cmap[ord(ch)]), y_rows(face, lig_glyph(face, pairs[ch]))
         ok = bool(rows_ch) and all(
             any(abs(a - c) <= 2 and abs(b - d) <= 2 for c, d in rows_lig)
             for a, b in rows_ch)
         check(ok, f"{ch!r} rows {rows_ch} "
                   f"found in {pairs[ch].split()[1]!r} {rows_lig}")
 
+
+def check_ambiguous_symbols(face, check):
+    tf, a_adv, shape_infos = face.tf, face.a_adv, face.shape
     # the ligature-paired symbols (← → ≠ … etc.): one cell by default in
     # both families, the full-width form under fwid; the full-width
     # horizontal arrows are cut from the ligature they pair with
     # (ARROW_SOURCE): same vertical extent, within 2u
-    from build import ARROW_SOURCE, ARROWS_H, ARROWS_V, MONA_AMBIGUOUS
 
     def advance_of(text, feats):
         _, positions = shape_infos(text, feats)
@@ -873,6 +900,9 @@ def main():
               f"{ch!r} default {got_default} (want {a_adv}), "
               f"fwid {got_alt} (want {full_adv})")
 
+
+def check_arrows(face, check):
+    tf, shape_infos, glyph_order, gs = face.tf, face.shape, face.order, face.gs
     def extent(rows):
         # a blank glyph has no rows: report it, do not abort the rest
         if not rows:
@@ -880,9 +910,9 @@ def main():
         return min(a for a, _ in rows), max(b for _, b in rows)
     for ch in ARROWS_H:
         seq = ARROW_SOURCE[ch][0]
-        lig_ymin, lig_ymax = extent(y_rows(lig_glyph(f"a {seq} b")))
+        lig_ymin, lig_ymax = extent(y_rows(face, lig_glyph(face, f"a {seq} b")))
         infos, _ = shape_infos(ch, {"fwid": True})
-        ymin, ymax = extent(y_rows(glyph_order[infos[0].codepoint]))
+        ymin, ymax = extent(y_rows(face, glyph_order[infos[0].codepoint]))
         ok = (None not in (ymin, lig_ymin)
               and abs(ymin - lig_ymin) <= 2 and abs(ymax - lig_ymax) <= 2)
         check(ok, f"{ch!r} (fwid) y extent {ymin}..{ymax} "
@@ -893,14 +923,14 @@ def main():
     # box of a sheared shape is not the shear of its box: in the italic
     # faces every arrow came out tan(11°) of its own height to the right
     # — 67u off centre, ⇐ 56u into the next cell, ↑ 72u away from ↓
-    arrow_gs = tf.getGlyphSet()
+    gs = tf.getGlyphSet()
     off_centre = {}
     for ch in ARROWS_H + ARROWS_V:
         infos, _ = shape_infos(ch, {"fwid": True})
         name = glyph_order[infos[0].codepoint]
         adv = tf["hmtx"][name][0]
-        pen = BoundsPen(arrow_gs)
-        arrow_gs[name].draw(pen)
+        pen = BoundsPen(gs)
+        gs[name].draw(pen)
         box = pen.bounds
         if box is None:
             off_centre[ch] = "blank"
@@ -910,6 +940,9 @@ def main():
     check(not off_centre, f"every fwid arrow is centred inside its advance "
                           f"({len(ARROWS_H + ARROWS_V)} probes; off: {off_centre})")
 
+
+def check_tiling(face, check):
+    tf, shape_infos, glyph_order, gs = face.tf, face.shape, face.order, face.gs
     # characters drawn to TILE: a run of them must show no seam, in
     # either family and at either width. Term widens a full width from
     # 1000 to 1200, and centring the outline there left 100u of white at
@@ -921,8 +954,8 @@ def main():
             infos, _ = shape_infos(ch, feats)
             name = glyph_order[infos[0].codepoint]
             adv = tf["hmtx"][name][0]
-            pen = BoundsPen(arrow_gs)
-            arrow_gs[name].draw(pen)
+            pen = BoundsPen(gs)
+            gs[name].draw(pen)
             box = pen.bounds
             if box is None or box[0] > 2 or box[2] < adv - 2:
                 seam[ch, bool(feats)] = None if box is None else (
@@ -930,6 +963,9 @@ def main():
     check(not seam, f"every tiling character spans its whole advance "
                     f"({2 * len(TILING)} probes; off: {seam})")
 
+
+def check_box_drawing_draws(face, check):
+    cmap, bounds, shape_infos, glyph_order = face.cmap, face.bounds, face.shape, face.order
     # every box-drawing and block character draws: the probes below
     # name fourteen of them, and a build that emptied any of the other
     # 146 — or their full-width forms — shipped a font that set a
@@ -945,6 +981,10 @@ def main():
     check(not blank, f"every box-drawing and block glyph draws "
                      f"({2 * 160} probes; blank: {blank[:6]})")
 
+
+def check_dashed_rules(face, check):
+    cmap, hmtx, hhea, shape_infos, glyph_order, gs = (
+        face.cmap, face.hmtx, face.hhea, face.shape, face.order, face.gs)
     # a dashed rule's pattern must not break where two of them meet:
     # the gap across the join has to be the gap inside the glyph. Such
     # a rule is never faulted by the span test above — by construction
@@ -955,7 +995,7 @@ def main():
         """[(lo, hi)] of each piece of `name` along `axis` (0 = x)."""
         import pathops
         path = pathops.Path()
-        arrow_gs[name].draw(path.getPen())
+        gs[name].draw(path.getPen())
         return sorted((c.bounds[axis], c.bounds[axis + 2])
                       for c in path.contours)
 
@@ -987,6 +1027,9 @@ def main():
     check(not pattern, f"a dashed rule keeps its pattern across the join "
                        f"(inside vs across: {pattern})")
 
+
+def check_vertical_rules(face, check):
+    hhea, shape_infos, glyph_order, gs = face.hhea, face.shape, face.order, face.gs
     # and the same thing DOWN the page. A line is 1257 units tall here
     # (Source Code Pro's metrics on a face whose Japanese is drawn to a
     # 1000-unit em), so a full-width rule that stops at its own em
@@ -1001,8 +1044,8 @@ def main():
     for ch in VTILING:
         for feats in ({}, {"fwid": True}):
             infos, _ = shape_infos(ch, feats)
-            pen = BoundsPen(arrow_gs)
-            arrow_gs[glyph_order[infos[0].codepoint]].draw(pen)
+            pen = BoundsPen(gs)
+            gs[glyph_order[infos[0].codepoint]].draw(pen)
             if not spans_line(pen.bounds):
                 vseam[ch, bool(feats)] = None if pen.bounds is None else (
                     round(pen.bounds[1]), round(pen.bounds[3]))
@@ -1010,6 +1053,10 @@ def main():
                      f"({hhea.ascent}..{hhea.descent}; "
                      f"{2 * len(VTILING)} probes; off: {vseam})")
 
+
+def check_line_edges(face, check):
+    cmap, hhea, shape_infos, glyph_order, gs = (
+        face.cmap, face.hhea, face.shape, face.order, face.gs)
     # not only those four, and edge by edge: over the whole box-drawing
     # and block range, a character whose one-cell default reaches the
     # top or the bottom of the line must have a full-width form that
@@ -1021,14 +1068,14 @@ def main():
     for cp in range(0x2500, 0x25A0):
         if cp not in cmap:
             continue
-        one = BoundsPen(arrow_gs)
-        arrow_gs[cmap[cp]].draw(one)
+        one = BoundsPen(gs)
+        gs[cmap[cp]].draw(one)
         infos, _ = shape_infos(chr(cp), {"fwid": True})
         full = glyph_order[infos[0].codepoint]
         if one.bounds is None or full == cmap[cp]:
             continue          # blank, or no separate full-width form
-        wide = BoundsPen(arrow_gs)
-        arrow_gs[full].draw(wide)
+        wide = BoundsPen(gs)
+        gs[full].draw(wide)
         pairs += 1
         if wide.bounds is None or (
                 one.bounds[1] <= hhea.descent < wide.bounds[1]
@@ -1039,6 +1086,9 @@ def main():
                      f"wherever its one-cell default does ({pairs} pairs; "
                      f"off: {short})")
 
+
+def check_rounded_corners(face, check):
+    cmap, shape_infos, glyph_order, gs = face.cmap, face.shape, face.order, face.gs
     # and a rounded corner is the same corner: Source Han Sans draws ╭
     # on exactly ┌'s bounding box, so the two must still agree once the
     # tiling passes are done. They did not — the arc's leg bends, which
@@ -1053,8 +1103,8 @@ def main():
             if ord(ch) not in cmap:
                 break
             infos, _ = shape_infos(ch, {"fwid": True})
-            pen = BoundsPen(arrow_gs)
-            arrow_gs[glyph_order[infos[0].codepoint]].draw(pen)
+            pen = BoundsPen(gs)
+            gs[glyph_order[infos[0].codepoint]].draw(pen)
             boxes.append(pen.bounds)
         if len(boxes) == 2 and (None in boxes or max(
                 abs(a - b) for a, b in zip(*boxes)) > 2):
@@ -1063,6 +1113,9 @@ def main():
     check(not corners, f"a rounded corner keeps its corner's box "
                        f"(off: {corners})")
 
+
+def check_long_dashes(face, check):
+    cmap, hmtx, gs = face.cmap, face.hmtx, face.gs
     # the dashes that exist to butt together. Source Han Sans draws ⸺
     # 1580 units of ink in a 1672 advance — a 92-unit joint — and the
     # grid step rounds that to two full widths: centred there the joint
@@ -1075,8 +1128,8 @@ def main():
             continue
         name = cmap[ord(ch)]
         adv = hmtx[name][0]
-        pen = BoundsPen(arrow_gs)
-        arrow_gs[name].draw(pen)
+        pen = BoundsPen(gs)
+        gs[name].draw(pen)
         box = pen.bounds
         joint = None if box is None else box[0] + adv - box[2]
         if joint is None or joint > adv // 16:
@@ -1084,6 +1137,9 @@ def main():
     check(not joints, f"the two-em and three-em dashes butt together "
                       f"(joint over a sixteenth of the advance: {joints})")
 
+
+def check_ccmp_composes(face, check):
+    cmap, shape_infos, glyph_order, gs = face.cmap, face.shape, face.order, face.gs
     # the Latin donor's 'ccmp' — on by default in every shaper, and
     # nothing carried it across the graft for six versions: 'i' before a
     # combining dot kept its own and drew a second one 84 units away,
@@ -1105,14 +1161,17 @@ def main():
         if len(names) == 2:
             boxes = []
             for name in names:
-                pen = BoundsPen(arrow_gs)
-                arrow_gs[name].draw(pen)
+                pen = BoundsPen(gs)
+                gs[name].draw(pen)
                 boxes.append(pen.bounds)
             if boxes[0] and boxes[1] and boxes[0][3] > boxes[1][1]:
                 ccmp[base + mark] = (round(boxes[0][3]), round(boxes[1][1]))
     check(not ccmp, f"the donor's ccmp composes ({probes} probes; "
                     f"off: {ccmp})")
 
+
+def check_ccmp_context(face, check):
+    cmap, shape_infos, glyph_order = face.cmap, face.shape, face.order
     # ... and only where the donor lets it. Its dotless i and its raised
     # accents live in lookups a chain context calls — listing those in
     # the feature as well, as the first copy did, ran them with the
@@ -1137,6 +1196,9 @@ def main():
                      f"(off: {loose})")
 
 
+def check_accent_stacking(face, check):
+    tf, cmap, italic, shape_infos, glyph_order, gs = (
+        face.tf, face.cmap, face.italic, face.shape, face.order, face.gs)
     # and a second accent is lifted clear of the first ('mkmk'). Not
     # every pair needs the lift — a flat macron under a ring keeps its
     # place in the donor too — but without the feature, or without the
@@ -1165,7 +1227,7 @@ def main():
                 above += None not in feet and feet[2] >= feet[1]
         return above, probes, lifted
 
-    above, probes, lifted = stacked(shape_infos, arrow_gs, glyph_order, cmap)
+    above, probes, lifted = stacked(shape_infos, gs, glyph_order, cmap)
     # against the DONOR at this weight, not a constant: Source Code Pro
     # leaves a flat accent over a round one where it is, and how often
     # it does that moves with the weight and the slope — 11 of 13 in the
@@ -1187,32 +1249,13 @@ def main():
           f"({above} of {probes} stacked, {lifted} of them lifted; "
           f"the donor stacks {want})")
 
-    # the lift is read through GDEF: 'mkmk' asks which marks it may
-    # stack on by the mark attachment class in its lookup flag, and a
-    # font that carries the lookup without the classes stacks nothing
-    # -- asked above, through check_marks -> verifylib.check_mark_features
-    # ("GDEF names the mark classes GPOS filters on")
 
+def check_voicing_marks(face, check):
+    cmap, shape_infos, glyph_order, gs = face.cmap, face.shape, face.order, face.gs
     # a voicing mark over a HALF-width kana must not be drawn into it.
     # The mark is registered to the cell before it, and Term widens the
     # full-width cell only — moving the mark with it put 100 units of ｶ
     # ﾈ ｳ under the dakuten (build.realign_halfwidth_marks)
-
-    def ink_overlap(text):
-        paths, pen_x = [], 0
-        infos, positions = shape_infos(text, {})
-        if len(infos) != 2:
-            return 0
-        for info, pos in zip(infos, positions):
-            path = pathops.Path()
-            arrow_gs[glyph_order[info.codepoint]].draw(path.getPen())
-            moved = pathops.Path()
-            path.draw(TransformPen(moved.getPen(),
-                                   (1, 0, 0, 1, pen_x + pos.x_offset, pos.y_offset)))
-            paths.append(moved)
-            pen_x += pos.x_advance
-        return abs(pathops.op(paths[0], paths[1],
-                              pathops.PathOp.INTERSECTION).area)
 
     # a bold stroke touches on its own: Source Han Sans Bold shares
     # 2,844 square units between ﾈ and its dakuten and 4,647 with the
@@ -1240,7 +1283,7 @@ def main():
         for mark in "\u3099\u309a":
             if ord(kana) not in cmap or ord(mark) not in cmap:
                 continue
-            area = ink_overlap(kana + mark)
+            area = ink_overlap(face, kana + mark)
             if area > budget:
                 voiced[kana + mark] = round(area)
     places = {}
@@ -1252,7 +1295,7 @@ def main():
             if len(infos) != 2:
                 continue
             pen = BoundsPen(None)
-            arrow_gs[glyph_order[infos[1].codepoint]].draw(pen)
+            gs[glyph_order[infos[1].codepoint]].draw(pen)
             if pen.bounds is None:
                 continue
             x0 = positions[0].x_advance + positions[1].x_offset
@@ -1268,6 +1311,9 @@ def main():
           f"a voicing mark clears the half-width kana it marks, at one "
           f"place (over {budget} square units of shared ink, or off: {voiced})")
 
+
+def check_language_forms(face, check):
+    cmap, italic, shape_infos, glyph_order = face.cmap, face.italic, face.shape, face.order
     # the Serbian and Northern Sami forms are copied in with the Greek;
     # Source Han Sans JP has no LangSys for either, so they were
     # unreachable until the import made one (build._new_langsys)
@@ -1301,26 +1347,9 @@ def main():
                    + (f"; known italic gaps: {sorted(known)}" if known else "")
                    + ")")
 
-    # the two double-span marks straddle the pair they join: Source
-    # Code Pro pulls them half a cell left in GPOS, and dropping that
-    # with the advance beside it centred the tie on the first letter —
-    # or, with no placement at all, 154 units left of where the line
-    # starts
-    def placed(text, feats=None):
-        """[(xMin, xMax), ...] where a run's ink actually lands: the
-        pen's own advance, plus what GPOS moves each glyph by."""
-        infos, positions = shape_infos(text, feats or {})
-        out, pen_x = [], 0
-        for info, pos in zip(infos, positions):
-            pen = BoundsPen(arrow_gs)
-            arrow_gs[glyph_order[info.codepoint]].draw(pen)
-            out.append(None if pen.bounds is None else
-                       (pen.bounds[0] + pen_x + pos.x_offset,
-                        pen.bounds[2] + pen_x + pos.x_offset))
-            pen_x += pos.x_advance
-        return out
 
-
+def check_enclosing_mark(face, check):
+    cmap = face.cmap
     # and an enclosing mark stays around the character it encloses: it
     # hangs a full width LEFT of the origin, so the Term widening has to
     # take it further left, not leave it on the 1000-unit cell
@@ -1328,7 +1357,7 @@ def main():
     for base in "\u56fd\u4e00":
         if ord(base) not in cmap or 0x20DD not in cmap:
             continue
-        boxes = placed(base + "\u20dd")
+        boxes = placed(face, base + "\u20dd")
         if len(boxes) != 2:
             continue
         if None in boxes:
@@ -1344,6 +1373,9 @@ def main():
     check(not around, f"an enclosing mark stays around its character "
                       f"(off centre: {around})")
 
+
+def check_mark_after_ligature(face, check):
+    cmap, shape_infos, glyph_order, gs = face.cmap, face.shape, face.order, face.gs
     # and it lands the same way over EVERY base the Term widening left
     # alone, not only over a one-cell one. The Latin layer owns 63
     # multi-cell ligature glyphs (== is 1200 units, === and !== 1800,
@@ -1358,8 +1390,8 @@ def main():
         """Where the last glyph's ink centre sits relative to the pen
         the base run leaves it at — GPOS placement included."""
         infos, positions = shape_infos(text, {"calt": True, "liga": True})
-        pen = BoundsPen(arrow_gs)
-        arrow_gs[glyph_order[infos[-1].codepoint]].draw(pen)
+        pen = BoundsPen(gs)
+        gs[glyph_order[infos[-1].codepoint]].draw(pen)
         if pen.bounds is None or positions[-1].x_advance:
             return None
         return round((pen.bounds[0] + pen.bounds[2]) / 2
@@ -1385,6 +1417,9 @@ def main():
                          f"multi-cell ligature as after a letter "
                          f"(off: {after_lig})")
 
+
+def check_enclosing_mark_down_a_column(face, check):
+    cmap, shape_infos, glyph_order, gs = face.cmap, face.shape, face.order, face.gs
     # and it stays around it DOWN a column too. Source Han Sans centres
     # these marks on the vertical column with a placement in 'vert',
     # measured against the outline — move the outline for Term and
@@ -1400,8 +1435,8 @@ def main():
             continue
         boxes = []
         for info, pos in zip(infos, positions):
-            pen = BoundsPen(arrow_gs)
-            arrow_gs[glyph_order[info.codepoint]].draw(pen)
+            pen = BoundsPen(gs)
+            gs[glyph_order[info.codepoint]].draw(pen)
             boxes.append(None if pen.bounds is None else
                          (pen.bounds[0] + pos.x_offset,
                           pen.bounds[2] + pos.x_offset))
@@ -1414,6 +1449,9 @@ def main():
     check(not column, f"an enclosing mark stays around its character "
                       f"down a column (off centre: {column})")
 
+
+def check_stacked_marks(face, check):
+    cmap = face.cmap
     # and where it lands must not depend on how many marks come
     # before it: the rule that gives Term's shift back over a
     # half-width base reads the glyph in front, and a mark is 0 wide,
@@ -1423,8 +1461,8 @@ def main():
         for between in ("\u3099", "\u0301", "\u3099\u0301", "\u0300\u0301"):
             if any(ord(c) not in cmap for c in base + between + "\u20dd"):
                 continue
-            alone = placed(base + "\u20dd")
-            after = placed(base + between + "\u20dd")
+            alone = placed(face, base + "\u20dd")
+            after = placed(face, base + between + "\u20dd")
             if len(alone) != 2 or None in alone or None in after:
                 continue
             if max(abs(a - b) for a, b in zip(alone[1], after[-1])) > 2:
@@ -1434,6 +1472,9 @@ def main():
     check(not stacked_marks, f"a mark lands the same behind other marks as "
                              f"behind none (off: {stacked_marks})")
 
+
+def check_marks_on_the_column(face, check):
+    cmap, shape_infos, glyph_order, gs = face.cmap, face.shape, face.order, face.gs
     # ... and a mark after a HALF-width base stays on the column too.
     # The rule that gives Term's shift back is horizontal-only ('dist'):
     # under 'mark' a shaper ran it in a vertical run as well, on top of
@@ -1447,8 +1488,8 @@ def main():
             infos, positions = shape_infos(base + mark, {}, direction="ttb")
             if len(infos) != 2:
                 continue
-            pen = BoundsPen(arrow_gs)
-            arrow_gs[glyph_order[infos[1].codepoint]].draw(pen)
+            pen = BoundsPen(gs)
+            gs[glyph_order[infos[1].codepoint]].draw(pen)
             if pen.bounds is None:
                 continue
             # the vertical column is ±500, and Source Han Sans's own
@@ -1466,6 +1507,9 @@ def main():
                        f"base (outside ±{FULLWIDTH // 2 + FULLWIDTH // 20}: "
                        f"{outside})")
 
+
+def check_alternate_marks(face, check):
+    tf = face.tf
     # every mark a feature substitutes for a positioned one is
     # positioned too: cv11's breve was grafted twice, and the copy the
     # feature selects carried none of the donor's anchors — 229 units
@@ -1493,6 +1537,9 @@ def main():
     check(not adrift, f"a mark's alternate is positioned like the mark "
                       f"({len(positioned)} positioned; adrift: {adrift[:4]})")
 
+
+def check_bopomofo_tone_marks(face, check):
+    cmap = face.cmap
     # a full-width base carries its own anchors: Source Han Sans hangs
     # the Bopomofo tone marks off ㄓ, and widening it to two cells moves
     # its ink 100u right — leave the anchor behind (shift_anchors) and
@@ -1501,7 +1548,7 @@ def main():
     for base, mark in (("\u3113", "\u02ea"), ("\u3113", "\u02eb")):
         if ord(base) not in cmap or ord(mark) not in cmap:
             continue
-        boxes = placed(base + mark)
+        boxes = placed(face, base + mark)
         if len(boxes) != 2:
             continue
         # the mark hangs off the letter's own right edge — 107 units
@@ -1514,6 +1561,9 @@ def main():
     check(not tone, f"a Bopomofo tone mark hangs off its letter's ink, "
                     f"not its cell (off: {tone})")
 
+
+def check_grafted_bopomofo_accents(face, check):
+    cmap, shape_infos = face.cmap, face.shape
     # ... and the four Source Han Sans attaches that the Latin graft
     # REPLACED hang off it too. Their mark lookups name Source Han Sans's
     # own U+0300/U+0301/U+0307/U+030C, which no codepoint reaches once
@@ -1542,8 +1592,8 @@ def main():
         # right shoulder — upstream's own centres are 6 to 326 units
         # from that edge, U+0307's the furthest — so an anchor shifted a
         # whole cell, which shares no ink either, is caught
-        area = ink_overlap(base + mark)
-        boxes = placed(base + mark)
+        area = ink_overlap(face, base + mark)
+        boxes = placed(face, base + mark)
         off = None if None in boxes else \
             (boxes[1][0] + boxes[1][1]) / 2 - boxes[0][1]
         if area > 1 or off is None or abs(off) > FULLWIDTH / 2:
@@ -1555,12 +1605,14 @@ def main():
     check(attaches == 4, f"the grafted accents reach Source Han Sans's own "
                          f"Bopomofo mark lookups ({attaches} of 4 attach)")
 
+
+def check_variants_reach_ccmp(face, check):
+    cmap, shape_infos, glyph_order, tags = face.cmap, face.shape, face.order, face.tags
     # the two imports need each other: SCP's variant features have rules
     # on what ccmp composes (cv02's single-storey g̃) and ccmp has rules
     # on what the variants draw (the ogonek under cv04's serifed i). A
     # variant that cannot reach a composed glyph leaves the default
     # design on the page with the feature on
-    tags = {fr.FeatureTag for fr in tf["GSUB"].table.FeatureList.FeatureRecord}
     missed = {}
     for text, group in (("g\u0303", ("cv02", "ss13")),
                         ("i\u0307", ("cv04", "ss14"))):
@@ -1576,6 +1628,9 @@ def main():
     check(not missed, f"a variant feature reaches what ccmp composes "
                       f"(unchanged: {missed})")
 
+
+def check_rules_not_slabs(face, check):
+    cmap, gs = face.cmap, face.gs
     # ＿ and ￣ are full width in the default too, so there is no
     # one-cell form for a full-width one to match: lengthening them down
     # the page drew the 41-unit rule as a 320-unit slab (Source Han Sans
@@ -1584,14 +1639,17 @@ def main():
     for ch in "\uFF3F\uFFE3":
         if ord(ch) not in cmap:
             continue
-        pen = BoundsPen(arrow_gs)
-        arrow_gs[cmap[ord(ch)]].draw(pen)
+        pen = BoundsPen(gs)
+        gs[cmap[ord(ch)]].draw(pen)
         box = pen.bounds
         if box is None or box[3] - box[1] > 100:
             slabs[ch] = None if box is None else round(box[3] - box[1])
     check(not slabs, f"the full-width low line and macron are rules, not "
                      f"slabs (over 100u tall: {slabs})")
 
+
+def check_block_elements(face, check):
+    hmtx, shape_infos, glyph_order, gs = face.hmtx, face.shape, face.order, face.gs
     # the block elements are fractions of the line, and under fwid they
     # are Source Han Sans's, drawn to a 1000-unit em: mapped onto the
     # 1400-unit band they keep their eighths, but EXTRUDED to it they
@@ -1599,8 +1657,8 @@ def main():
     # means an eighth
     def fwid_box(ch):
         infos, _ = shape_infos(ch, {"fwid": True})
-        pen = BoundsPen(arrow_gs)
-        arrow_gs[glyph_order[infos[0].codepoint]].draw(pen)
+        pen = BoundsPen(gs)
+        gs[glyph_order[infos[0].codepoint]].draw(pen)
         return pen.bounds
 
     ramp = {}
@@ -1651,6 +1709,9 @@ def main():
     check(not ramp, f"the fwid block elements step an eighth of the line "
                     f"at a time, from the right edge (off: {ramp})")
 
+
+def check_term_growth(face, check):
+    tf, cmap, hmtx, exp_full, bounds = face.tf, face.cmap, face.hmtx, face.exp_full, face.bounds
     # ... and nothing ELSE grew with the advance. A Source Han Sans glyph
     # is drawn inside its 1000 em, so in Term, where the advance is 1200,
     # any of them outside the tiling blocks with more than 1000 of ink
@@ -1668,7 +1729,6 @@ def main():
     # sparse and run to 65497, and a first cut that used one never
     # looked at 60% of the kanji.)
     if exp_full > 1000:
-        from build import tiling_glyphs
         tiling = tiling_glyphs(tf)
         pairs = []
         for lookup in tf["GSUB"].table.LookupList.Lookup:
@@ -1695,6 +1755,9 @@ def main():
                          f"advance ({len(reach)} reachable glyphs examined; "
                          f"{len(grown)} did, e.g. {grown[:4]})")
 
+
+def check_bar_weights(face, check):
+    tf, cmap, italic, sub = face.tf, face.cmap, face.italic, face.sub
     # stroke weight: the Latin is Source Code Pro's named instance for
     # this weight, so its '=' bar must measure the VF's at that wght
     # (SCP_VF_U / SCP_VF_I when set), and the Japanese face is the Source
@@ -1733,9 +1796,11 @@ def main():
               f"'＝' bar (Source Han Sans) {cjk:.1f}u vs {against} {ref:.1f}u: "
               f"paired within {budget}u")
 
+
+def check_overlaps(face, check):
+    cmap, shape_infos, glyph_order = face.cmap, face.shape, face.order
     # imported outlines must be overlap-free (VF instancing leaves seams)
-    gs = tf.getGlyphSet()
-    glyph_order = tf.getGlyphOrder()
+    gs = face.gs
 
     def overlap_ok(gname):
         p = pathops.Path()
@@ -1771,14 +1836,9 @@ def main():
                 check(ok, f"no overlap in ligature "
                           f"{seq!r} glyph {gname!r}")
 
-    # width metadata: declared monospaced (set_monospace_metadata — what
-    # Windows Terminal's picker and GDI's FIXED_PITCH filter read; Source
-    # Han Sans's own 0/0 hid it there), xAvgCharWidth per OS/2 v3+ (mean of every
-    # non-zero advance), x/cap height measured on the face's own glyphs.
-    check_monospace_metadata(tf, check, win_covers_bbox=False)
-    gs = tf.getGlyphSet()
-    check_heights(tf, check, gs, cmap)
 
+def check_win_metrics(face, check):
+    tf = face.tf
     # the win metrics, pinned, not merely positive (copy_line_metrics,
     # README 行の高さ). They are the GDI line height as much as a
     # clipping bound, and this family's ink reaches 1808/-1048 —
@@ -1798,18 +1858,118 @@ def main():
     # asked above, through check_cells -> verifylib.check_widths_by_class,
     # which holds .notdef to exp_half by the same policy
 
-    if "Nerd Font" in fam:
-        import nerdpatch
-        symbols = nerdpatch.symbols_for_checks()
-        # the icon gates without the donor keep a tenth of the cell of
-        # slack, and a separator 50 units short of the line passed that
-        # way (round 10, mutant N9); six of the nine skip themselves
-        # outright. The Latin driver has asked for the donor since that
-        # round and this one never did, though the JP Nerd Font faces
-        # are two of the six shipped zips (round 12)
-        check(symbols is not None, "NF_SYMBOLS points at the Symbols donor")
-        for ok, msg in nerdpatch.icon_checks(tf, symbols):
-            check(ok, msg)
+
+def main():
+    # the order below is the order the lines print in, and it is kept:
+    # a run's log diffed against the last one is how a change to these
+    # gates is shown to have changed nothing it did not mean to
+    check = Checker()          # every check reports; none aborts the rest
+    face = Face(FONT)
+    tf, cmap = face.tf, face.cmap
+    check_advances(face, check)
+    check_width_policy(face, check)
+    check_greek_cyrillic_cells(face, check)
+    check_pinned_wide(face, check)
+    # and the other direction: Unicode's Halfwidth block is one column in
+    # every terminal's width table, whatever the donor draws it at
+    # (build.narrow_halfwidth) -- asked again, cmap-wide, by
+    # check_cells -> check_widths_by_class below
+    check_advance_grid(face, check)
+    is_nf = check_names(face, check)
+
+    check_coverage_order(tf, check)
+    # the Latin layer's anchors survive the graft into this face, so
+    # they are worth asserting here as well as on the face they came
+    # from: import_scp_marks moves every one of them by a cell, and the
+    # exact-attachment check is what says the moved anchor and the moved
+    # mark still meet
+    check_mark_class_closure(tf, check)
+    check_private(tf, check)
+    check_line_metrics(tf, check)
+    check_font_matrix(tf, check)
+    check_gdef_classes(tf, check)
+    check_pair_positioning(tf, check)
+    check_substitution_identity(tf, check)
+    check_blank_glyphs(tf, check, tf.getGlyphSet())
+    check_name_composition(tf, check)
+    check_family_cmap(tf, check, family_reference(FONT, tf))
+
+    check_charstring_metrics(tf, check, face.widths, face.bearings)
+    check_jp_tables(face, check)
+    check_ink_placement(face, check)
+    check_repertoire_draws(face, check)
+    check_vertical_metrics(face, check)
+    check_style_bits(tf, check, face.sub, face.italic)
+    check_gdi_family_name(tf, check)
+
+    # the exact-attachment half of the mark gates (the anchor half runs
+    # above, before a shaper is asked): the moved anchor and the moved
+    # mark still meet
+    check_marks(tf, check, face.shape, tf.getGlyphSet())
+    check_cells(tf, check, face.shape, tf.getGlyphSet(), face.exp_half, face.exp_full)
+    # the Latin layer is grafted whole, so the donor's cmap is a floor
+    # here too -- and the JP faces are where a dropped codepoint would
+    # otherwise hide, their own repertoire being ten times the donor's
+    check_donor_repertoire(check, cmap)
+    # the Latin layer is the same glyphs here as in dist/latin
+    check_donor_letters(tf, check, tf.getGlyphSet())
+    check_width_forms(tf, check, face.shape)
+    check_term_sibling(tf, check, face.exp_full)
+    check_ligature_cells(tf, face.shape, check, tf.getGlyphSet(), face.exp_half)
+    check_vertical_layout(tf, check, face.shape, face.exp_full)
+    check_hints(face, check)
+    check_fwid_forms(face, check)
+    check_cases(tf, face.shape, check)
+    check_features_work(face.shape, check, cmap)
+    check_cid_count(face, check)
+    check_feature_set(face, check)
+    check_cv11(face, check)
+    check_standalone_operators(face, check)
+    check_ambiguous_symbols(face, check)
+    check_arrows(face, check)
+    check_tiling(face, check)
+    check_box_drawing_draws(face, check)
+    check_dashed_rules(face, check)
+    check_vertical_rules(face, check)
+    check_line_edges(face, check)
+    check_rounded_corners(face, check)
+    check_long_dashes(face, check)
+    check_ccmp_composes(face, check)
+    check_ccmp_context(face, check)
+    check_accent_stacking(face, check)
+    # the lift is read through GDEF: 'mkmk' asks which marks it may
+    # stack on by the mark attachment class in its lookup flag, and a
+    # font that carries the lookup without the classes stacks nothing
+    # -- asked above, through check_marks -> verifylib.check_mark_features
+    # ("GDEF names the mark classes GPOS filters on")
+    check_voicing_marks(face, check)
+    check_language_forms(face, check)
+    check_enclosing_mark(face, check)
+    check_mark_after_ligature(face, check)
+    check_enclosing_mark_down_a_column(face, check)
+    check_stacked_marks(face, check)
+    check_marks_on_the_column(face, check)
+    check_alternate_marks(face, check)
+    check_bopomofo_tone_marks(face, check)
+    check_grafted_bopomofo_accents(face, check)
+    check_variants_reach_ccmp(face, check)
+    check_rules_not_slabs(face, check)
+    check_block_elements(face, check)
+    check_term_growth(face, check)
+    check_bar_weights(face, check)
+    check_overlaps(face, check)
+    # width metadata: declared monospaced (set_monospace_metadata — what
+    # Windows Terminal's picker and GDI's FIXED_PITCH filter read; Source
+    # Han Sans's own 0/0 hid it there), xAvgCharWidth per OS/2 v3+ (mean of every
+    # non-zero advance), x/cap height measured on the face's own glyphs.
+    check_monospace_metadata(tf, check, win_covers_bbox=False)
+    check_heights(tf, check, tf.getGlyphSet(), cmap)
+    check_win_metrics(face, check)
+    # keyed on the name check_names read, not on a spelling of its own:
+    # tested as `"Nerd Font" in fam`, this skipped all twenty JP Nerd
+    # Fonts faces once their marker became "NF"
+    if is_nf:
+        check_nerd_font_icons(tf, check)
 
     print("FAILED" if check.failed else "all checks passed")
     sys.exit(check.exit_code())

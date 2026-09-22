@@ -184,6 +184,92 @@ def check_version_stamp(tf, check, unique_id=False):
               f"{head5!r})")
 
 
+# --- the gates verify_latin.py and verify_jp.py used to write twice ---------
+# each driver had its own copy, word for word apart from the message, and a
+# fix to one of them reached the other only when someone remembered (round 12
+# found the JP side's NF_SYMBOLS gate missing that way)
+
+# nerdpatch.NF_MARKER, which this module cannot import (nerdpatch imports it)
+NERD_FONT_MARK = " NF"
+
+
+def check_family_names(tf, check, family, ps_family):
+    """The family the face ships under and its PostScript name's
+    prefix: `family` once the Nerd Fonts marker (nerdpatch.nf_name) is
+    stripped, and `ps_family`, plus "NF" on a patched face, before the
+    hyphen. Returns whether the face is a Nerd Fonts one -- the answer
+    the icon gates are keyed on, so that the name they are asked of and
+    the name checked here cannot drift apart."""
+    name = tf["name"]
+    fam = name.getDebugName(16) or name.getDebugName(1) or ""
+    is_nf = fam.endswith(NERD_FONT_MARK)
+    base = fam[:-len(NERD_FONT_MARK)] if is_nf else fam
+    check(base == family, f"family name {fam!r} (want {family!r})")
+    ps = ps_family + (NERD_FONT_MARK.strip() if is_nf else "")
+    check((name.getDebugName(6) or "").startswith(ps + "-"),
+          f"PostScript name {name.getDebugName(6)!r} (want {ps}-...)")
+    return is_nf
+
+
+def check_weight_class(tf, check, subfamily):
+    """The weight the face calls ITSELF, in the number Windows sorts
+    by: check_monospace_metadata derives the PANOSE weight it wants
+    FROM usWeightClass, so the pair stayed self-consistent at any value
+    -- a Regular stamped 700 passed, and it is build.set_names' single
+    line. Returns the weight, or None when the subfamily names none."""
+    weight = weight_name(subfamily)
+    if not check(weight in build.WEIGHT_CLASS,
+                 f"subfamily {subfamily!r} names a weight ({weight!r})"):
+        return None
+    check(tf["OS/2"].usWeightClass == build.WEIGHT_CLASS[weight],
+          f"OS/2 usWeightClass {tf['OS/2'].usWeightClass} "
+          f"(want {build.WEIGHT_CLASS[weight]} for {weight})")
+    return weight
+
+
+def check_charstring_metrics(tf, check, widths, bearings):
+    """hmtx_mismatches' first two answers, as gates. Every charstring's
+    own width (encoded against its FD's nominalWidthX) must agree with
+    hmtx: a glyph appended under one FD and re-homed to another
+    (add_latin_fd) would carry a stale width -- invisible to renderers,
+    which read hmtx, but wrong for anything reading the CFF. And the
+    left side bearing must be the outline's xMin: a CFF font's lsb is
+    nothing fontTools maintains, and the Latin donors used to carry
+    SCP's default-master bearings at every weight."""
+    check(not widths, f"CFF charstring widths agree with hmtx "
+                      f"({len(tf.getGlyphOrder())} glyphs, {len(widths)} off: {widths[:5]})")
+    check(not bearings, f"hmtx bearings are the outlines' xMin "
+                        f"({len(bearings)} off: {bearings[:5]})")
+
+
+def check_ink_inside(check, bounds, hmtx, cmap, cell):
+    """WHERE the ink lands, not just how wide it is: every glyph's ink
+    inside its advance, give or take the lean (ink_spill says what the
+    bound is). A width test says nothing about position -- a face
+    whose glyphs were all drawn one cell to the right, 'e' wholly in
+    its neighbour's column, or every kanji a whole column over,
+    reported clean. `bounds` is hmtx_mismatches' third answer."""
+    spill = ink_spill(bounds, lambda g: hmtx[g][0], cmap, cell)
+    check(not spill, f"every glyph's ink is inside its advance, give or "
+                     f"take the lean ({len(spill)} are not, "
+                     f"e.g. {spill[:3]})")
+
+
+def check_nerd_font_icons(tf, check):
+    """nerdpatch.icon_checks, held to the Symbols donor. Without it the
+    icon gates keep a tenth of the cell of slack, and a separator 50
+    units short of the line passed that way (round 10, mutant N9); six
+    of the nine skip themselves outright. The JP driver did not ask for
+    the donor until round 12, though its faces are two of the six
+    shipped zips."""
+    # imported here: nerdpatch imports this module
+    import nerdpatch
+    symbols = nerdpatch.symbols_for_checks()
+    check(symbols is not None, "NF_SYMBOLS points at the Symbols donor")
+    for ok, msg in nerdpatch.icon_checks(tf, symbols):
+        check(ok, msg)
+
+
 def check_monospace_metadata(tf, check, win_covers_bbox=True):
     """What a font picker and GDI read to call the face monospaced, and
     the line metrics as build.set_monospace_metadata leaves them: post
