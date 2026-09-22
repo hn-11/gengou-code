@@ -229,6 +229,53 @@ def family_reference(tf):
 VORG_DEFAULT = 880    # Source Han Sans's vertical origin, kept as is
 
 
+def check_vertical_origins(tf, check, full):
+    """Every vertical origin is Source Han Sans's own. The build copies
+    VORG across and writes the default for the glyphs it appends, so
+    the donor is the answer for every record; without it the gate reads
+    each glyph's origin against itself, and 620 instead of 880 on ○ ■
+    〇 ￥ moved them 3 px up their column with every gate passing
+    (round 11, mutant B1b). The kana and the ideographs have a rule of
+    their own below -- they keep the default -- which is a third of the
+    repertoire; this is the rest of what the donor draws full width
+    (15,778 characters of a JP face).
+
+    Source Han Sans is required, as the Symbols font is for a Nerd Font
+    face: a donor-less run would be a gate that reads nothing."""
+    from fontTools.ttLib import TTFont
+    weight = weight_name(subfamily_name(tf))
+    donor = dict(build.FACES).get(weight)
+    root = os.environ.get("SHS_DIR")
+    path = Path(root) / donor if root and donor else None
+    if not check(bool(path and path.is_file()),
+                 f"SHS_DIR points at Source Han Sans ({donor} for {weight})"):
+        return
+    theirs = TTFont(str(path))
+    their_vorg, their_cmap = theirs["VORG"], theirs.getBestCmap()
+    ours, cmap = tf["VORG"], tf.getBestCmap()
+    check(ours.defaultVertOriginY == their_vorg.defaultVertOriginY,
+          f"the default vertical origin is the donor's "
+          f"({ours.defaultVertOriginY} vs {their_vorg.defaultVertOriginY})")
+    hmtx, their_hmtx = tf["hmtx"].metrics, theirs["hmtx"].metrics
+    off, n = {}, 0
+    for cp, g in sorted(cmap.items()):
+        theirs_g = their_cmap.get(cp)
+        if theirs_g is None:
+            continue                  # ours: the Latin layer has no vertical design
+        # and only where both draw the character full width: where the
+        # Latin layer supplies it (Ω, ‰, ℅ ...) ours is a cell wide and
+        # takes the default origin, which is not the donor's business
+        if hmtx[g][0] != full or their_hmtx[theirs_g][0] != theirs["head"].unitsPerEm:
+            continue
+        n += 1
+        mine = ours.VOriginRecords.get(g, ours.defaultVertOriginY)
+        want = their_vorg.VOriginRecords.get(theirs_g, their_vorg.defaultVertOriginY)
+        if mine != want:
+            off[chr(cp)] = (mine, want)
+    check(n and not off, f"every vertical origin is the donor's ({n} characters; "
+                         f"off: {dict(list(off.items())[:4])})")
+
+
 def check_vertical_layout(tf, check, shape, full):
     """Vertical text is the grid too: every full-width character shaped
     top-to-bottom advances one em, centred on the column (x offset
@@ -241,6 +288,7 @@ def check_vertical_layout(tf, check, shape, full):
     hmtx = tf["hmtx"].metrics
     vorg = tf["VORG"]
     em = tf["head"].unitsPerEm
+    check_vertical_origins(tf, check, full)
     check(vorg.defaultVertOriginY == VORG_DEFAULT,
           f"VORG default {vorg.defaultVertOriginY} (want {VORG_DEFAULT})")
     # (the two-em repeat marks 〱〲 and the Bopomofo letters, which

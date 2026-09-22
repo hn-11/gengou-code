@@ -817,6 +817,11 @@ SEAT_EDGE_LETTERS = frozenset("\u01a1\u01b0\u01a0\u01af\u0260\u03b7\u0265\u027b\
 # fail (mutant L18). The step is 0 by design, and the slant of an
 # italic leans a stacked mark about 40 units
 _STACK_DX = 80
+# and the vertical gap a stack leaves (the second mark's ink bottom
+# less the first's ink top): the marks touch or nearly touch, never
+# float. Measured -142..86 per pair, median -52 to -69 by face
+_STACK_DY = (-200, 160)
+_STACK_DY_MEDIAN = (-130, 10)
 
 # ---- one glyph in its cell (check_cells) ----
 # an advance follows the character's East Asian Width: Na and H a cell,
@@ -844,8 +849,18 @@ DEFAULT_FEATURES = frozenset({"ccmp", "locl", "liga", "clig", "calt", "rlig", "r
 # the default rules that do turn one character into another, by design:
 # i and j to the encoded dotless letters (the accent then sits on a
 # bare stem), and Source Han Sans composing the vertical repeat marks
-SUBSTITUTED_CHARACTERS = frozenset({("i", "\u0131"), ("j", "\u0237"),
-                                    ("\u3033\u3035", "\u3031"), ("\u3034\u3035", "\u3032")})
+SUBSTITUTED_CHARACTERS = frozenset(
+    (unicodedata.normalize("NFKD", a), unicodedata.normalize("NFKD", b))
+    for a, b in (
+        ("i", "\u0131"), ("j", "\u0237"),
+        ("\u3033\u3035", "\u3031"), ("\u3034\u3035", "\u3032"),
+        # and the Ukrainian ї, which both Adobe donors take apart onto
+        # the LATIN dotless i before a combining accent so the accent
+        # can stack (anchors.import_donor_decompositions); the rule
+        # carries the donor's context with it, and outside that context
+        # the letter is its own drawn glyph
+        ("\u0407", "I\u0308"), ("\u0457", "\u0131\u0308"),
+    ))
 _CENTRE_BAND = 120           # a narrow letter's or digit's ink centre from the cell's; measured 77 (V, Bold Italic)
 _BASELINE = (-20, 10)        # a digit's or capital's ink bottom; measured -12 (round overshoot) .. 0
 _IDEOGRAPH_Y = (-130, 890)   # an ideograph's or kana's ink, in Source Han Sans's em box -120..880; measured -104..872
@@ -1032,21 +1047,36 @@ def check_mark_reachability(tf, check, label=""):
     # the marks it does admit; this is what says the rest is a defect)
     gdef = getattr(tf.get("GDEF"), "table", None)
     attach = getattr(getattr(gdef, "MarkAttachClassDef", None), "classDefs", None) or {}
+    sets = getattr(getattr(gdef, "MarkGlyphSetsDef", None), "Coverage", None) or []
     silent = []
     for i, kind, subs, _ in _pos_lookups(tf):
         if kind not in (4, 6):
             continue
-        flag = tf["GPOS"].table.LookupList.Lookup[i].LookupFlag
+        lookup = tf["GPOS"].table.LookupList.Lookup[i]
+        flag = lookup.LookupFlag
         if flag & 0x8:
             silent.append((i, "IgnoreMarks"))
-            continue
-        cls = flag >> 8
-        if not cls:
             continue
         marks = set()
         for sub in subs:
             marks |= set(sub.MarkCoverage.glyphs if kind == 4 else
                          sub.Mark1Coverage.glyphs + sub.Mark2Coverage.glyphs)
+        # the two doors a lookup filters its marks through: the mark
+        # attachment class, and the filtering set (0x10), which the
+        # model mirrors as faithfully -- so a set that leaves the acute
+        # out silenced the stacking and every gate agreed (round 11,
+        # mutant C1)
+        if flag & 0x10:
+            index = getattr(lookup, "MarkFilteringSet", None)
+            named = (set(sets[index].glyphs)
+                     if index is not None and index < len(sets) else set())
+            out = sorted(marks - named)
+            if out:
+                silent.append((i, f"its filtering set leaves out {len(out)} of its "
+                                  f"own marks, e.g. {out[:3]}"))
+        cls = flag >> 8
+        if not cls:
+            continue
         out = sorted(g for g in marks if attach.get(g, 0) != cls)
         if out:
             silent.append((i, f"filters out {len(out)} of its own marks, e.g. {out[:3]}"))
@@ -1430,19 +1460,21 @@ def check_marks_attach(tf, shape, check, label=""):
 
 
 def _centres(shape, gs, order, text):
-    """The ink centre of each shaped glyph of `text`, or None if one
-    glyph has no ink or the run is not one glyph per character."""
+    """Per shaped glyph of `text`: (the ink centre, the ink bottom, the
+    ink top) where it lands. None if a glyph has no ink or the run is
+    not one glyph per character."""
     infos, positions = shape(text, {})
     if len(infos) != len(text):
         return None
-    centres, x = [], 0
+    out, x = [], 0
     for info, pos in zip(infos, positions):
         box = build._bounds(gs, order[info.codepoint])
         if box is None:
             return None
-        centres.append(x + pos.x_offset + (box[0] + box[2]) / 2)
+        out.append((x + pos.x_offset + (box[0] + box[2]) / 2,
+                    pos.y_offset + box[1], pos.y_offset + box[3]))
         x += pos.x_advance
-    return centres
+    return out
 
 
 def check_marks_stack(tf, shape, check, label=""):
@@ -1499,7 +1531,7 @@ def check_marks_stack(tf, shape, check, label=""):
         return None
 
     exact = 0
-    wrong = {}
+    wrong, gaps = {}, []
     for i, sub in model.stacks:
         ones = [g for g in sub.Mark1Coverage.glyphs if g in rev]
         twos = [g for g in sub.Mark2Coverage.glyphs if g in rev]
@@ -1525,9 +1557,22 @@ def check_marks_stack(tf, shape, check, label=""):
             alone = [_centres(shape, gs, order, chr(rev[base_g]) + chr(rev[m]))
                      for m in (m2, m1)]
             if stacked and all(alone):
-                step = (stacked[2] - stacked[1]) - (alone[1][1] - alone[0][1])
+                step = (stacked[2][0] - stacked[1][0]) - (alone[1][1][0] - alone[0][1][0])
                 if abs(step) > _STACK_DX:
                     wrong.setdefault(i, []).append((m2, m1, "ink", round(step)))
+                # and the gap it leaves: the second mark's ink begins
+                # where the first's ends. Every mkmk Mark1 anchor 150
+                # units lower left the pair 2 px apart, inside the
+                # anchor band and invisible to the sideways step
+                # (round 11, mutant C3)
+                gap = stacked[2][1] - stacked[1][2]
+                gaps.append(gap)
+                if not _STACK_DY[0] <= gap <= _STACK_DY[1]:
+                    wrong.setdefault(i, []).append((m2, m1, "gap", round(gap)))
+    if gaps:
+        median = statistics.median(gaps)
+        if not _STACK_DY_MEDIAN[0] <= median <= _STACK_DY_MEDIAN[1]:
+            wrong.setdefault("median", []).append(round(median))
     worst = {i: (len(v), v[:2]) for i, v in wrong.items()}
     check(exact and not wrong,
           f"the shaper stacks every second mark on the first{label} "
@@ -1983,6 +2028,127 @@ def check_glyph_placement(tf, check, gs, cell, full, label=""):
                          f"({n} drawn; off: {dict(list(off.items())[:5])})")
 
 
+def _run_alphabet(tf, classes, extra=40):
+    """The characters a run gate shapes: every printable ASCII one the
+    face maps, plus a spread of `extra` more from the rest of its cmap
+    (every Nth, so a JP face brings kana, kanji and the full-width
+    forms). Marks, the default-ignorables and the double diacritics are
+    left out -- what they do to a run is the mark gates' subject."""
+    cmap = tf.getBestCmap()
+
+    def plain(cp):
+        return (cp in cmap and cp not in DEFAULT_IGNORABLE and cp not in DOUBLE_SPAN
+                and classes.get(cmap[cp]) != 3
+                and not unicodedata.category(chr(cp)).startswith("M"))
+
+    ascii_ = [cp for cp in range(0x21, 0x7F) if plain(cp)]
+    rest = [cp for cp in sorted(cmap) if cp > 0x7F and plain(cp)]
+    step = max(1, len(rest) // extra)
+    return ascii_ + rest[::step][:extra]
+
+
+def check_run_identity(tf, shape, check, label=""):
+    """Ordinary text is its own characters: shaped alone and in pairs,
+    every character gives the glyph its cmap names, at the advance hmtx
+    gives it, with no offset.
+
+    The gates around this one read one thing each -- the advance
+    (check_widths_by_class), the outline (check_glyph_placement), the
+    substitution tables (check_substitution_identity) -- and a shaper
+    reads all of them at once. What slipped through (round 11): a
+    SinglePos y placement under ccmp dropping the digits 180 units
+    (they sit 3 px low beside the letters), a cursive attachment under
+    'curs' walking a word up the line, an AlternateSubst turning l into
+    1 and an uncontexted ccmp rule making every i dotless (the
+    substitution gate walks two of the four kinds and excuses the
+    dotless forms, which are meant for a letter about to take an
+    accent), and a chain-context advance that moves the rest of the
+    line (the pair gate reads type 2 only).
+
+    A pair of operator characters is left to the ligature gates, and a
+    pair that composes (NFC) to one character is nothing a run shows."""
+    cmap = tf.getBestCmap()
+    order = tf.getGlyphOrder()
+    hmtx = tf["hmtx"].metrics
+    gdef = getattr(tf.get("GDEF"), "table", None)
+    classes = getattr(getattr(gdef, "GlyphClassDef", None), "classDefs", None) or {}
+    alphabet = _run_alphabet(tf, classes)
+    operator = {c for seq in build.LIGATURES for c in seq}
+
+    def off(text):
+        """Where the run departs from the characters' own glyphs."""
+        infos, positions = shape(text, {})
+        if len(infos) != len(text):
+            return ("glyphs", [order[i.codepoint] for i in infos])
+        for ch, info, pos in zip(text, infos, positions):
+            g = cmap[ord(ch)]
+            if order[info.codepoint] != g:
+                return ("substituted", ch, order[info.codepoint])
+            if (pos.x_offset, pos.y_offset) != (0, 0):
+                return ("moved", ch, pos.x_offset, pos.y_offset)
+            if pos.x_advance != hmtx[g][0]:
+                return ("advance", ch, pos.x_advance, hmtx[g][0])
+        return None
+
+    alone, pairs, n = {}, {}, 0
+    for cp in alphabet:
+        bad = off(chr(cp))
+        if bad:
+            alone[chr(cp)] = bad
+    for a in alphabet:
+        for b in alphabet:
+            if chr(a) in operator and chr(b) in operator:
+                continue
+            text = chr(a) + chr(b)
+            if len(unicodedata.normalize("NFC", text)) != 2:
+                continue
+            n += 1
+            bad = off(text)
+            if bad:
+                pairs[text] = bad
+    check(n and not alone and not pairs,
+          f"every character is its own glyph in a run{label} "
+          f"({len(alphabet)} characters, {n} pairs; alone: "
+          f"{dict(list(alone.items())[:3])}; in pairs: {dict(list(pairs.items())[:3])})")
+
+
+def check_ligature_guards(tf, shape, check, label=""):
+    """A ligature does not fire inside a longer run of the same
+    operator characters: ':::' is three colons, not the '::' ligature
+    and one more, and '->>' is not '->' and '>'. The build writes those
+    guards (build._guard_subtables, rules a and b: the sequence
+    preceded by its own first character or followed by its own last),
+    and only verify.py's hand-written CASES list ever probed them --
+    deleting the two rules that keep '::' plain before a third colon
+    passed every gate (round 11, mutant B3)."""
+    cmap = tf.getBestCmap()
+    order = tf.getGlyphOrder()
+
+    def run(text):
+        infos, _ = shape(text, {"calt": True, "liga": True})
+        return [order[i.codepoint] for i in infos]
+
+    fired, probed = {}, 0
+    for seq in build.LIGATURES:
+        if any(ord(c) not in cmap for c in seq):
+            continue
+        glyphs = run(seq)
+        if len(glyphs) != 1:
+            continue                  # a multi-glyph ligature: no one glyph to watch
+        lig = glyphs[0]
+        for longer in (seq[0] + seq, seq + seq[-1]):
+            if longer in build.LIGATURES:
+                continue              # the longer run is a ligature of its own
+            probed += 1
+            if lig in run(longer):
+                fired[longer] = lig
+    # a face that declares no ligature has no guard to read; the
+    # ligature set itself is verify.py's "all 61 shape at their
+    # declared widths" and check_ligature_cells
+    check(not fired, f"no ligature fires inside a longer operator run{label} "
+                     f"({probed} runs; fired: {fired})")
+
+
 def check_cells(tf, check, shape, gs, cell, full=None, label=""):
     """One glyph in one cell: its advance by its width class, as
     shaped, and its ink where that class sits -- and the repertoire
@@ -1990,6 +2156,8 @@ def check_cells(tf, check, shape, gs, cell, full=None, label=""):
     defined and unit-tested but reached from no driver."""
     check_widths_by_class(tf, shape, check, cell, full, label)
     check_glyph_placement(tf, check, gs, cell, full, label)
+    check_run_identity(tf, shape, check, label)
+    check_ligature_guards(tf, shape, check, label)
     check_letter_glyphs(tf, check, gs, label)
 
 
@@ -2105,16 +2273,32 @@ def check_gdef_classes(tf, check):
     check(not off, f"no spacing character is a GDEF mark ({len(off)}: {off[:5]})")
 
 
+# the GPOS lookup kinds a grid font is built from: single adjustment
+# (the donor's), pair positioning (vertical kerning only), the two mark
+# attachments, and the chain contexts the build writes for the Term
+# dakuten. Cursive attachment (3), mark-to-ligature (5) and plain
+# contextual positioning (7) are nothing this build makes, and a
+# cursive lookup under 'curs' walked a word off the baseline while
+# every gate passed (round 11, mutant A2)
+POSITIONING_KINDS = frozenset({1, 2, 4, 6, 8})
+
+
 def check_pair_positioning(tf, check, allowed=("vkrn",)):
-    """GPOS pair positioning only under `allowed`: the build drops kern,
-    palt and halt because the grid is the spacing, and a PairPos under
-    ccmp moved the letter after 'a' 300 units (round 10, mutants G4,
-    J28b, J46). Source Han Sans's vertical kerning stays, opt-in."""
+    """The positioning surface: only POSITIONING_KINDS, and pair
+    positioning only under `allowed` -- the build drops kern, palt and
+    halt because the grid is the spacing, and a PairPos under ccmp
+    moved the letter after 'a' 300 units (round 10, mutants G4, J28b,
+    J46). Source Han Sans's vertical kerning stays, opt-in. What a
+    chain context calls is read by check_run_identity, which shapes the
+    runs it fires on."""
     off = []
     for i, kind, _subs, tags in _pos_lookups(tf):
-        if kind == 2 and not tags <= set(allowed):
-            off.append((i, sorted(tags)))
-    check(not off, f"pair positioning only under {list(allowed)} (off: {off})")
+        if kind not in POSITIONING_KINDS:
+            off.append((i, "type", kind, sorted(tags)))
+        elif kind == 2 and not tags <= set(allowed):
+            off.append((i, "pairs", sorted(tags)))
+    check(not off, f"positioning is {sorted(POSITIONING_KINDS)} with pairs only "
+                   f"under {list(allowed)} (off: {off})")
 
 
 def check_substitution_identity(tf, check):
@@ -2124,7 +2308,10 @@ def check_substitution_identity(tf, check):
     vertical form, A to full-width Ａ -- and never rn to m, 0 to O, or
     ａ to ｂ's half-width form (round 10, mutants G5, G37, J51). The
     unencoded outputs (the .cap accents, the dotless i, the variants)
-    are what the other gates measure. Asked of the lookups a shaper
+    are what the other gates measure. All four substitution kinds: a
+    shaper takes alternate 0 of a default feature, and an
+    AlternateSubst turning l into 1 was read by nothing while the gate
+    walked the single and ligature kinds only (round 11, mutant A4). Asked of the lookups a shaper
     runs by default (DEFAULT_FEATURES, and what those call): an opt-in
     feature is allowed to change the character -- jp78 gives another
     kanji, vert the vertical form of a different dash -- and the two
@@ -2146,12 +2333,15 @@ def check_substitution_identity(tf, check):
                     live.add(rec.LookupListIndex)
                     stack.append(rec.LookupListIndex)
 
-    def same(inputs, output):
-        if output not in rev or any(g not in rev for g in inputs):
+    def same_many(inputs, outputs):
+        if any(g not in rev for g in outputs) or any(g not in rev for g in inputs):
             return True
         want = unicodedata.normalize("NFKD", "".join(chr(rev[g]) for g in inputs))
-        got = unicodedata.normalize("NFKD", chr(rev[output]))
+        got = unicodedata.normalize("NFKD", "".join(chr(rev[g]) for g in outputs))
         return got == want or (want, got) in SUBSTITUTED_CHARACTERS
+
+    def same(inputs, output):
+        return same_many(inputs, [output])
 
     off, rules = {}, 0
     for i, lookup in enumerate(table.LookupList.Lookup):
@@ -2164,6 +2354,21 @@ def check_substitution_identity(tf, check):
                     rules += 1
                     if not same([g], out):
                         off.setdefault(i, []).append((g, out))
+            elif kind == 2:
+                # one glyph into several: the characters they spell
+                for g, outs in sub.mapping.items():
+                    rules += 1
+                    if not same_many([g], outs):
+                        off.setdefault(i, []).append((g, list(outs)))
+            elif kind == 3:
+                # a shaper takes alternate 0 of a default feature, so
+                # every alternate is a rule (round 11, mutant A4: an
+                # AlternateSubst turned l into 1 and nothing read it)
+                for g, outs in sub.alternates.items():
+                    for out in outs:
+                        rules += 1
+                        if not same([g], out):
+                            off.setdefault(i, []).append((g, out))
             elif kind == 4:
                 for first, ligs in sub.ligatures.items():
                     for lig in ligs:

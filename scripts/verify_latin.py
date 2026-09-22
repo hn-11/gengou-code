@@ -151,7 +151,11 @@ def main():
     check_substitution_identity(tf, check)
     check_blank_glyphs(tf, check, tf.getGlyphSet())
     check_name_composition(tf, check)
-    ref = FONT.with_name("Gengou-Regular.otf")
+    # the Regular of THIS face's own family (GengouNFM-Regular.otf
+    # beside a Nerd Font face): a hard-coded Gengou-Regular.otf never
+    # sits beside dist/nerd/latin, so the gate was a no-op on all ten
+    # of those faces and 37 IPA letters could go (round 11, mutant B2)
+    ref = FONT.with_name(f"{ps_family}-Regular.otf")
     check_family_cmap(tf, check, TTFont(str(ref)) if ref != FONT and ref.exists() else None)
     check_coverage_order(tf, check)
     check_mark_class_closure(tf, check)

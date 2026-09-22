@@ -668,7 +668,7 @@ def test_check_marks_attach_holds_a_composed_pair_to_the_composed_character():
 def test_check_marks_stack_is_an_equality_on_the_second_mark():
     anchors, heights = _ruled()
     font = _mark_font(anchors, heights, marks={"grave": 0x0300},
-                      mark2={"grave": (50, 200), "acute": (50, 200)})
+                      mark2={"grave": (50, 500), "acute": (50, 500)})   # the mark's own ink top
     assert _stack(font) == []
 
 
@@ -725,7 +725,7 @@ def test_check_marks_runs_every_gate_and_passes_a_sound_face():
     heights["acutecap"] = 500
     # every capital raises the acute; b5 is also 'b', where it seats
     font = _mark_font(anchors, heights, marks={"grave": 0x0300, "acutecap": None},
-                      mark2={"grave": (50, 200), "acute": (50, 200)},
+                      mark2={"grave": (50, 500), "acute": (50, 500)},
                       cmap_extra={0x62: "b5"},
                       fea_extra="feature ccmp { pos b1 <0 10 0 0>; } ccmp;\n"
                                 "feature ccmp { sub [%s] acute' by acutecap; } ccmp;\n"
@@ -883,12 +883,12 @@ def test_mark_model_skips_the_marks_a_lookups_class_filter_skips():
                       fea_extra="markClass grave <anchor 50 0> @GR;\n"
                                 "feature mark { pos base b0 <anchor 50 420> mark @GR; } mark;\n"
                                 "feature mkmk { lookupflag MarkAttachmentType @TOP; "
-                                "pos mark acute <anchor 50 200> mark @TOP; } mkmk;\n")
+                                "pos mark acute <anchor 50 500> mark @TOP; } mkmk;\n")
     assert _stack(font) == []
     model = verifylib._MarkModel(font)
     assert model.run(["b0", "grave", "acute"])[1] == model.on_base("b0", "acute")
     assert model.run(["b0", "acute", "acute"])[1] == (
-        model.on_base("b0", "acute")[0], model.on_base("b0", "acute")[1] + 200, 0)
+        model.on_base("b0", "acute")[0], model.on_base("b0", "acute")[1] + 500, 0)
 
 
 def test_check_mark_reachability_reports_a_lookup_that_never_sees_its_marks():
