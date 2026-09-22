@@ -803,6 +803,48 @@ round 11 で廃止したもの: `scripts/lint_workflows.py` 本体とその
 全ドライバが投げるテキスト `CASES` は、それを読む門番の隣
 （verifylib）へ移した。旧 `verify.py` は `verify_jp.py`。
 
+round 12 が見つけた門番の欠陥と、その修正:
+
+- **JP 面では合字が発火していなくても合格していた**（61/61）。判定が
+  「中央の送りの合計 == `cells × 600`」だけで、発火しなければ構成文字が
+  そのまま並び、合計は同じ値になる。欧文面には `len(infos) <= 5` の
+  一節があったので落ちた。全面で実測すると 61 個すべてが必ず 1 グリフに
+  畳まれるので、「a <seq> b が 5 グリフ、宣言したセル幅、かつ描く」が
+  規則のすべて。`check_ligatures_fire` に統合し、JP の 53 行・欧文の
+  13 行・4 セル専用ループを廃止（`'!='` の規則を抜いた面が両ファミリーで
+  落ちることを確認）。
+- **`check_family_cmap` は一度も走っていなかった**。比較相手を
+  「ファミリーの Regular（直立）」としていたため、スタイルで割れた
+  マトリクスでは斜体面の隣にその面が無い。**自分のファミリーかつ
+  自分のスタイルの Regular** に変えたところ、62 面中 50 面で実走し、
+  skip は 12 面（6 ファミリー × 2 スタイルの Regular 自身）だけになった。
+  CI の Light Italic ジョブには欧文 Regular Italic を 1 面追加（欧文静的面は
+  数秒、JP 面は 1 分なので JP 側は release の weight ペアに任せる）。
+- **`check_dotless` が「面が持つ上付きマークすべて」と書いて 22 しか
+  見ていなかった**。結合クラス 230 を cmap から読む形にして 27 プローブ。
+  新たに読まれる U+0341 / U+0342 / U+0344 はドナーの dotless クラスに
+  実在する規則。除外は U+0312 / U+0313 / U+033D / U+0343 の 4 字
+  （直立・斜体・JP で同じ）。
+- **JP 面の NF 検査に `NF_SYMBOLS` 必須のガードが無かった**（欧文面は
+  round 10 で入れた）。ドナー無しだと 9 つのうち 6 つが自分で skip する。
+
+round 11 のバッテリーが残した盲点のうち 2 つも塞いだ。`check_run_identity`
+は JP 面の 17,000 字から 40 字しか抜いておらず、平仮名 86 字をまたいで
+飛ばしていた（変異体 D2）。「1 字ずつ」は二次コストではないので全文字に
+広げ、「2 字の組」だけ標本のまま。`check_family_cmap` は基準面そのものを
+比較できない（変異体 B2）ので、ドナー基準の床
+`check_donor_repertoire`——「Source Code Pro が描く 1,334 字は、どの面も
+描く」——を入れた（dist の 62 面すべてが満たす）。
+
+round 12 で廃止・統合したもの: 東アジア文字幅 Wide の例外ブロック
+35 行 → 15 行（幅の両方向は `check_widths_by_class` が 1 字ずつ見ており、
+残る保証「13 字が cmap にまだ居る」だけを残した。Symbols フォントの
+読み込みも消えた）。`verify_latin_vf.master_locations` 32 行を削除し
+`verifylib.vf_region_peaks` に一本化（両 VF でプローブ位置が同一:
+200 / 300 / 364.75 / 400 / 500 / 600 / 700）。`CASES` ループの二重実装は
+`check_cases` 1 つに（欧文側の `0x2FFF` という上限は「その面が全文字を
+cmap に持つか」に置き換え）。`family_reference` も 3 実装から 1 つへ。
+
 build.py に残る処理（`build_face` の順）: SHS の読み込み、Gengou からの
 グリフ・GSUB・GPOS の取り込み（`graft_halfwidth` / `latin_ligatures` /
 `import_scp_variants` / `import_scp_locl` / `import_scp_marks` /
