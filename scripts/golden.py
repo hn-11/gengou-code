@@ -14,7 +14,7 @@ Checks per pair, in order:
   2. hmtx: identical advance width for every shared codepoint.
   3. glyph count within +/-5% (informational only) plus identical GSUB
      and GPOS feature-tag sets.
-  4. Shaping equivalence via uharfbuzz across a text corpus (verify.py's
+  4. Shaping equivalence via uharfbuzz across a text corpus (verifylib.py's
      CASES, every ligature in data/mona_ligs.json, and a few extra
      strings) under several feature-flag combinations, comparing
      (cluster, x_advance, x_offset, y_offset) — never glyph ids.
@@ -79,7 +79,7 @@ NAME_IDS = [1, 2, 4, 6, 16, 17]
 
 
 class Reporter:
-    """Tracks and prints ok/FAIL lines in verify.py's style."""
+    """Tracks and prints ok/FAIL lines in verify_jp.py's style."""
 
     def __init__(self):
         self.checks = 0
