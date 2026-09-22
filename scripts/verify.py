@@ -217,10 +217,16 @@ def check_width_forms(tf, check, shape):
 
 
 def family_reference(tf):
-    """The Regular JP face beside this one (the family's cmap reference),
-    or None when this is it or it is not there."""
+    """The Regular of this face's OWN family, beside it (the cmap
+    reference), or None when this is it or it is not there: a Term face
+    asks GengouJPTerm-Regular and a Nerd Font one GengouJPNFM-Regular,
+    where a hard-coded GengouJP-Regular.otf was a no-op for both
+    (round 11, mutant B2 did the same to the Latin side)."""
     from fontTools.ttLib import TTFont
-    ref = FONT.with_name("GengouJP-Regular.otf")
+    ps = (tf["name"].getDebugName(6) or "").split("-")[0]
+    if not ps:
+        return None
+    ref = FONT.with_name(f"{ps}-Regular.otf")
     if ref == FONT or not ref.exists():
         return None
     return TTFont(str(ref))
