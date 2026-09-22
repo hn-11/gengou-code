@@ -1,5 +1,5 @@
 """vfsource.VFSource on a synthetic two-master variable font: the '=' bar
-search the static faces and the variable Gengou are both placed by."""
+search the static faces and the variable Gengou Code are both placed by."""
 
 import sys
 from pathlib import Path

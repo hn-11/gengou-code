@@ -103,7 +103,7 @@ Regular vs BoldItalic  : 輪郭が違うアイコン 0 / 10396
 2. FreeType / HarfBuzz / DirectWrite が「CFF2 に 10,400 個の非変化グリフ」を
    嫌がらないか
 
-できれば `Gengou.zip` が可変のみ・`Gengou-NerdFont.zip` が静的のみという
+できれば `GengouCode.zip` が可変のみ・`GengouCode-NerdFont.zip` が静的のみという
 **現在の不整合も解消**します（可変で欲しい人がアイコンを諦める状態）。
 
 ### 5. Term ファミリーを残す

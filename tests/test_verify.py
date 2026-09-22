@@ -51,19 +51,19 @@ def _latin_font():
 
 
 def test_gates_for_sends_a_variable_font_to_verify_latin_vf(tmp_path):
-    path = tmp_path / "Gengou[wght].otf"
+    path = tmp_path / "GengouCode[wght].otf"
     _vf_font().save(path)
     assert verify.gates_for(path) == "verify_latin_vf.py"
 
 
 def test_gates_for_sends_a_font_that_draws_hiragana_to_verify_jp(tmp_path):
-    path = tmp_path / "GengouJP-Regular.otf"
+    path = tmp_path / "GengouCodeJP-Regular.otf"
     _jp_font().save(path)
     assert verify.gates_for(path) == "verify_jp.py"
 
 
 def test_gates_for_sends_everything_else_to_verify_latin(tmp_path):
-    path = tmp_path / "Gengou-Regular.otf"
+    path = tmp_path / "GengouCode-Regular.otf"
     _latin_font().save(path)
     assert verify.gates_for(path) == "verify_latin.py"
 
@@ -75,7 +75,7 @@ def test_gates_for_ignores_the_path_a_jp_font_under_a_latin_directory_still_gets
     tables, not where it sits."""
     latin_dir = tmp_path / "latin"
     latin_dir.mkdir()
-    path = latin_dir / "GengouJP-Regular.otf"
+    path = latin_dir / "GengouCodeJP-Regular.otf"
     _jp_font().save(path)
     assert verify.gates_for(path) == "verify_jp.py"
 
@@ -83,7 +83,7 @@ def test_gates_for_ignores_the_path_a_jp_font_under_a_latin_directory_still_gets
 def test_gates_for_ignores_the_path_a_latin_font_outside_any_latin_directory_still_gets_latin(tmp_path):
     outside = tmp_path / "dist"
     outside.mkdir()
-    path = outside / "Gengou-Regular.otf"
+    path = outside / "GengouCode-Regular.otf"
     _latin_font().save(path)
     assert verify.gates_for(path) == "verify_latin.py"
 
@@ -103,7 +103,7 @@ def test_main_a_missing_literal_path_names_the_font_not_a_silent_skip(monkeypatc
 
 
 def test_main_a_pattern_matching_nothing_is_skipped_not_an_error(monkeypatch, tmp_path):
-    real = tmp_path / "Gengou-Regular.otf"
+    real = tmp_path / "GengouCode-Regular.otf"
     real.write_bytes(b"")
     seen = []
     monkeypatch.setattr(verify, "run",
@@ -122,10 +122,10 @@ def test_main_nothing_matched_at_all_is_a_usage_error(monkeypatch, tmp_path):
 
 
 def test_main_takes_an_existing_bracketed_path_as_itself_not_a_pattern(monkeypatch, tmp_path):
-    """Gengou[wght].otf is a character class matching nothing: naming one
+    """GengouCode[wght].otf is a character class matching nothing: naming one
     used to verify nothing silently. An existing path is taken as itself
     before it is read as a glob."""
-    vf = tmp_path / "Gengou[wght].otf"
+    vf = tmp_path / "GengouCode[wght].otf"
     vf.write_bytes(b"")
     seen = []
     monkeypatch.setattr(verify, "run",
@@ -167,34 +167,34 @@ def _named_font(family, style):
 
 
 def test_family_name_prefers_nameid_16_over_1():
-    font = _named_font("Gengou JP", "Regular")
-    assert verify_jp.family_name(font) == "Gengou JP"
-    font["name"].setName("Gengou JP Term", 16, 3, 1, 0x409)
-    assert verify_jp.family_name(font) == "Gengou JP Term"
+    font = _named_font("Gengou Code JP", "Regular")
+    assert verify_jp.family_name(font) == "Gengou Code JP"
+    font["name"].setName("Gengou Code JP Term", 16, 3, 1, 0x409)
+    assert verify_jp.family_name(font) == "Gengou Code JP Term"
 
 
 def test_subfamily_name_prefers_nameid_17_over_2():
-    font = _named_font("Gengou JP", "Bold")
+    font = _named_font("Gengou Code JP", "Bold")
     assert verify_jp.subfamily_name(font) == "Bold"
     font["name"].setName("SemiBold", 17, 3, 1, 0x409)
     assert verify_jp.subfamily_name(font) == "SemiBold"
 
 
 def test_expected_metrics_defaults_for_the_base_family():
-    font = _named_font("Gengou JP", "Regular")
+    font = _named_font("Gengou Code JP", "Regular")
     assert verify_jp.expected_metrics(font) == verify_jp.DEFAULT_METRICS
 
 
 def test_expected_metrics_widens_the_term_family():
-    font = _named_font("Gengou JP Term", "Regular")
+    font = _named_font("Gengou Code JP Term", "Regular")
     assert verify_jp.expected_metrics(font) == (600, 1200)
 
 
 def test_expected_metrics_matches_term_as_a_whole_word_only():
     """FAMILY_METRICS is keyed by family-name tokens: 'Term' is a
-    separate word in 'Gengou JP Term', never a substring of another
+    separate word in 'Gengou Code JP Term', never a substring of another
     word."""
-    font = _named_font("Gengou JP Terminal", "Regular")
+    font = _named_font("Gengou Code JP Terminal", "Regular")
     assert verify_jp.expected_metrics(font) == verify_jp.DEFAULT_METRICS
 
 
@@ -203,17 +203,17 @@ def test_family_reference_asks_this_faces_own_family_not_gengoujp(tmp_path):
     Term face asks for ITS family's Regular -- a hard-coded lookup was a
     no-op for both Term and Nerd Font faces (round 11)."""
     sibling = make_font([".notdef", "a"], {0x61: "a"}, {"a": 600},
-                        family="Gengou JP Term", style="Regular")
-    sibling.save(tmp_path / "GengouJPTerm-Regular.otf")
+                        family="Gengou Code JP Term", style="Regular")
+    sibling.save(tmp_path / "GengouCodeJPTerm-Regular.otf")
     # a decoy under the old hard-coded name: if family_reference ever
-    # regressed to "GengouJP-Regular.otf" this is what it would read
-    decoy = make_font([".notdef"], {}, {}, family="Gengou JP", style="Regular")
-    decoy.save(tmp_path / "GengouJP-Regular.otf")
+    # regressed to "GengouCodeJP-Regular.otf" this is what it would read
+    decoy = make_font([".notdef"], {}, {}, family="Gengou Code JP", style="Regular")
+    decoy.save(tmp_path / "GengouCodeJP-Regular.otf")
 
-    face = _named_font("Gengou JP Term", "Bold")
-    face["name"].setName("GengouJPTerm-Bold", 6, 3, 1, 0x409)
+    face = _named_font("Gengou Code JP Term", "Bold")
+    face["name"].setName("GengouCodeJPTerm-Bold", 6, 3, 1, 0x409)
 
-    ref = verifylib.family_reference(tmp_path / "GengouJPTerm-Bold.otf", face)
+    ref = verifylib.family_reference(tmp_path / "GengouCodeJPTerm-Bold.otf", face)
     assert ref is not None
     assert ref.getBestCmap() == {0x61: "a"}   # the Term sibling, not the decoy
 
@@ -224,37 +224,37 @@ def test_family_reference_asks_an_italic_face_for_the_italic_regular(tmp_path):
     style builds beside it, so the gate skipped on every italic face in
     CI and in the release alike (round 12)."""
     italic = make_font([".notdef", "a"], {0x61: "a"}, {"a": 600},
-                       family="Gengou", style="Regular Italic")
-    italic.save(tmp_path / "Gengou-RegularItalic.otf")
-    upright = make_font([".notdef"], {}, {}, family="Gengou", style="Regular")
-    upright.save(tmp_path / "Gengou-Regular.otf")
+                       family="Gengou Code", style="Regular Italic")
+    italic.save(tmp_path / "GengouCode-RegularItalic.otf")
+    upright = make_font([".notdef"], {}, {}, family="Gengou Code", style="Regular")
+    upright.save(tmp_path / "GengouCode-Regular.otf")
 
-    face = _named_font("Gengou", "Bold Italic")
-    face["name"].setName("Gengou-BoldItalic", 6, 3, 1, 0x409)
+    face = _named_font("Gengou Code", "Bold Italic")
+    face["name"].setName("GengouCode-BoldItalic", 6, 3, 1, 0x409)
 
-    ref = verifylib.family_reference(tmp_path / "Gengou-BoldItalic.otf", face)
+    ref = verifylib.family_reference(tmp_path / "GengouCode-BoldItalic.otf", face)
     assert ref is not None
     assert ref.getBestCmap() == {0x61: "a"}   # the italic Regular, not the upright
 
 
 def test_family_reference_does_not_fall_back_to_the_hardcoded_family(tmp_path):
-    """Only a decoy under the old hard-coded GengouJP-Regular name
+    """Only a decoy under the old hard-coded GengouCodeJP-Regular name
     exists; the fixed function must return None rather than read it."""
-    decoy = make_font([".notdef"], {}, {}, family="Gengou JP", style="Regular")
-    decoy.save(tmp_path / "GengouJP-Regular.otf")
+    decoy = make_font([".notdef"], {}, {}, family="Gengou Code JP", style="Regular")
+    decoy.save(tmp_path / "GengouCodeJP-Regular.otf")
 
-    face = _named_font("Gengou JP Term", "Bold")
-    face["name"].setName("GengouJPTerm-Bold", 6, 3, 1, 0x409)
+    face = _named_font("Gengou Code JP Term", "Bold")
+    face["name"].setName("GengouCodeJPTerm-Bold", 6, 3, 1, 0x409)
 
-    assert verifylib.family_reference(tmp_path / "GengouJPTerm-Bold.otf", face) is None
+    assert verifylib.family_reference(tmp_path / "GengouCodeJPTerm-Bold.otf", face) is None
 
 
 def test_family_reference_is_none_for_the_regular_itself(tmp_path):
-    face = _named_font("Gengou JP", "Regular")
-    face["name"].setName("GengouJP-Regular", 6, 3, 1, 0x409)
-    assert verifylib.family_reference(tmp_path / "GengouJP-Regular.otf", face) is None
+    face = _named_font("Gengou Code JP", "Regular")
+    face["name"].setName("GengouCodeJP-Regular", 6, 3, 1, 0x409)
+    assert verifylib.family_reference(tmp_path / "GengouCodeJP-Regular.otf", face) is None
 
 
 def test_family_reference_is_none_without_a_postscript_name(tmp_path):
-    face = _named_font("Gengou JP", "Regular")
-    assert verifylib.family_reference(tmp_path / "GengouJP-Regular.otf", face) is None
+    face = _named_font("Gengou Code JP", "Regular")
+    assert verifylib.family_reference(tmp_path / "GengouCodeJP-Regular.otf", face) is None

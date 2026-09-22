@@ -1,6 +1,6 @@
 # Gate for every push/PR, in about a minute: the Regular faces (upright
 # and italic) and the Light Italic faces (the erosion path) of both
-# families, the variable Gengou and the Nerd Fonts graft, assembled from
+# families, the variable Gengou Code and the Nerd Fonts graft, assembled from
 # the live upstreams in eight parallel jobs (around ten, jobs start to
 # queue behind each other and finish late). upstream-sync.yml waits on
 # these jobs by name (REQUIRED_CHECKS there): renaming one here means
@@ -64,21 +64,21 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/setup-build
-      # the Latin layer (Gengou) is assembled first
+      # the Latin layer (Gengou Code) is assembled first
       # from the VFs; build.py grafts it into Source Han Sans
       - run: python scripts/build_latin.py "${{ matrix.latin || matrix.face }}"
       - run: python scripts/build.py "${{ matrix.face }} base Term"
       - if: matrix.nerd
         run: python scripts/nerdpatch.py dist/*.otf
       - run: python scripts/verify.py 'dist/latin/*.otf' 'dist/*.otf' 'dist/nerd/*.otf'
-  # the variable Gengou, BOTH styles. The italic is where every piece of
+  # the variable Gengou Code, BOTH styles. The italic is where every piece of
   # the second donor lives -- the Source Sans masters, the imported
   # anchors, the fitted ones, the varLib merge of anchors that differ
   # per master -- and building only the upright meant that code first
   # ran on a release tag, so an incompatibility failed the release
   # rather than the pull request. (verify_latin_vf.py's static-face
   # comparison skips when dist/latin has no statics; its check against
-  # Source Code Pro itself still runs.) Then nerdpatch.py on the Gengou
+  # Source Code Pro itself still runs.) Then nerdpatch.py on the Gengou Code
   # Regular face (the complete symbol set: the graft takes seconds)
   variable-nerd-font:
     runs-on: ubuntu-latest
@@ -90,7 +90,7 @@ jobs:
       - run: python scripts/build_latin_vf.py
       - run: >-
           python scripts/verify.py
-          "dist/latin/Gengou[wght].otf" "dist/latin/Gengou-Italic[wght].otf"
+          "dist/latin/GengouCode[wght].otf" "dist/latin/GengouCode-Italic[wght].otf"
       - run: python scripts/build_latin.py "Regular Upright"
-      - run: python scripts/nerdpatch.py dist/latin/Gengou-Regular.otf
-      - run: python scripts/verify.py dist/nerd/latin/GengouNFM-Regular.otf
+      - run: python scripts/nerdpatch.py dist/latin/GengouCode-Regular.otf
+      - run: python scripts/verify.py dist/nerd/latin/GengouCodeNF-Regular.otf
