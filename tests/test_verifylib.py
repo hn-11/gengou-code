@@ -1531,6 +1531,63 @@ def test_check_family_cmap_wants_every_sibling_codepoint():
     assert verifylib._MARK_DX_SPREAD == 150
 
 
+def _donor_font(tmp_path, cmap):
+    """A tiny real font saved to disk, standing in for
+    SourceCodeVF-Upright.otf: check_donor_repertoire only ever reads its
+    cmap back off disk."""
+    from conftest import make_font
+    order = [".notdef", *dict.fromkeys(cmap.values())]
+    font = make_font(order, cmap, {g: 600 for g in order})
+    path = tmp_path / "donor.ttf"
+    font.save(path)
+    return path
+
+
+def test_check_donor_repertoire_passes_a_cmap_that_covers_the_donor(monkeypatch, tmp_path):
+    donor_cmap = {0x21: "exclam", 0x41: "A", 0x61: "a"}
+    monkeypatch.setenv("SCP_VF_U", str(_donor_font(tmp_path, donor_cmap)))
+    check = verifylib.Checker()
+    verifylib.check_donor_repertoire(check, {**donor_cmap, 0x30: "zero"})
+    assert not check.failed
+
+
+def test_check_donor_repertoire_fails_and_names_the_missing_codepoint_in_hex(
+        monkeypatch, tmp_path, capsys):
+    """The Latin layer is grafted whole, so the donor's cmap is a floor
+    under every face of the family; a sibling comparison alone left the
+    family's own Regular with nothing to be compared against, and 40 IPA
+    letters deleted from it passed every gate (round 11, mutant B2)."""
+    donor_cmap = {0x21: "exclam", 0x41: "A", 0x61: "a"}
+    monkeypatch.setenv("SCP_VF_U", str(_donor_font(tmp_path, donor_cmap)))
+    check = verifylib.Checker()
+    verifylib.check_donor_repertoire(check, {0x41: "A", 0x61: "a"})   # 0x21 missing
+    assert check.failed
+    assert "0x21" in capsys.readouterr().out
+
+
+def test_check_donor_repertoire_skips_without_scp_vf_u(monkeypatch, capsys):
+    """SCP_VF_U names the donor; without it there is nothing to read, so
+    the gate says skip rather than reporting a pass it has no grounds
+    for (the None verdict Checker prints as 'skip', not 'ok')."""
+    monkeypatch.delenv("SCP_VF_U", raising=False)
+    check = verifylib.Checker()
+    verifylib.check_donor_repertoire(check, {0x61: "a"})
+    assert check.failed is False
+    out = capsys.readouterr().out
+    assert out.startswith("skip ") and "SCP_VF_U unset" in out
+
+
+def test_check_donor_repertoire_skips_when_scp_vf_u_names_no_file(monkeypatch, tmp_path,
+                                                                  capsys):
+    """A stale or mistyped path is exactly as unreadable as an unset one
+    -- it skips instead of raising."""
+    monkeypatch.setenv("SCP_VF_U", str(tmp_path / "does-not-exist.otf"))
+    check = verifylib.Checker()
+    verifylib.check_donor_repertoire(check, {0x61: "a"})
+    assert check.failed is False
+    assert capsys.readouterr().out.startswith("skip ")
+
+
 # --- round 11: a shaper reads everything at once (check_run_identity,
 # check_ligature_guards), the GPOS surface, mark filtering sets, the
 # stacked gap, and every GSUB kind -------------------------------------
@@ -1569,6 +1626,59 @@ def test_check_run_identity_catches_an_uncontexted_substitution():
     assert _gate(verifylib.check_substitution_identity, font) == []
     off = _run_identity(font)
     assert off and "'i'" in off[0] and "dotlessi" in off[0]
+
+
+def test_plain_characters_leaves_out_marks_ignorables_gdef3_and_double_span():
+    """_plain_characters is what check_run_identity now shapes alone --
+    every mapped codepoint that ordinary text is made of: not a Unicode
+    Mark, not a DEFAULT_IGNORABLE, not a DOUBLE_SPAN diacritic, and not a
+    glyph GDEF calls a mark (class 3). An ordinary letter among them is
+    kept."""
+    from conftest import make_font
+    cmap = {0x61: "a",            # an ordinary letter: kept
+            0x62: "b3",           # GDEF class 3, though not a Unicode mark
+            0x0301: "acute",      # combining acute: Unicode category Mn
+            0x200B: "zwsp",       # DEFAULT_IGNORABLE (zero-width space)
+            0x035C: "dbrv"}       # DOUBLE_SPAN (a double diacritic)
+    order = [".notdef", *cmap.values()]
+    font = make_font(order, cmap, {g: 500 for g in order})
+    assert verifylib._plain_characters(font, {"b3": 3}) == [0x61]
+
+
+def _wide_repertoire_font(bad_index=None):
+    """ASCII 'a'/'b' plus a 100-character block of Private Use Area
+    codepoints well past 0x7F -- a shape wide enough that
+    _run_alphabet's 40-character spread of it (step 2) never lands on an
+    odd index. `bad_index`, given odd, puts a SinglePos y placement
+    under ccmp on that one block glyph: reachable only by shaping the
+    whole repertoire alone, never by the sampled pair alphabet (round
+    11, mutant D2 -- a ccmp rule dropping every kana this way slipped
+    through the same 40-sample spread used for both probes)."""
+    from conftest import make_font
+    from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
+    block = [f"p{i}" for i in range(100)]
+    cmap = {0x61: "a", 0x62: "b", **{0xE000 + i: f"p{i}" for i in range(100)}}
+    order = [".notdef", "a", "b", *block]
+    font = make_font(order, cmap, {g: 600 for g in order})
+    target = None
+    if bad_index is not None:
+        assert bad_index % 2 == 1     # never selected by rest[::2]
+        addOpenTypeFeaturesFromString(
+            font, f"feature ccmp {{ pos p{bad_index} <0 50 0 0>; }} ccmp;\n")
+        target = 0xE000 + bad_index
+    return font, target
+
+
+def test_check_run_identity_reaches_a_character_the_sampled_alphabet_steps_over():
+    font, target = _wide_repertoire_font(bad_index=51)
+    assert target not in verifylib._run_alphabet(font, {})    # the mutant's blind spot
+    off = _run_identity(font)
+    assert off and "moved" in off[0]
+
+
+def test_check_run_identity_passes_a_clean_font_of_the_same_shape():
+    font, _ = _wide_repertoire_font()
+    assert _run_identity(font) == []
 
 
 def _guard_font(guarded):
@@ -1616,6 +1726,62 @@ def test_check_ligature_guards_catches_a_ligature_reaching_into_a_longer_run():
     font = _guard_font(guarded=False)
     off = _gate(lambda f, chk: verifylib.check_ligature_guards(f, _shaper_for(f), chk), font)
     assert off and "':::'" in off[0]
+
+
+def _fire_font(fires, blank=False):
+    """'a', 'b', the space and ':' in the cmap, and the unencoded glyph
+    build.LIGATURES' '::' entry compiles to -- the one declared
+    sequence a font with this cmap can shape. `fires` writes the rule;
+    without it the sequence stays two colons, which is what a build
+    that lost its liga lookup ships. `blank` keeps the rule and empties
+    the ligature glyph."""
+    from conftest import make_cff_font
+    from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
+    from fontTools.pens.t2CharStringPen import T2CharStringPen
+    order = [".notdef", "a", "b", "space", "colon", "lig"]
+
+    def box(empty=False):
+        pen = T2CharStringPen(0, None)
+        if not empty:
+            pen.moveTo((0, 0))
+            pen.lineTo((400, 0))
+            pen.lineTo((400, 400))
+            pen.closePath()
+        return pen.getCharString()
+    charstrings = {g: box(g == "lig" and blank) for g in order}
+    cmap = {0x61: "a", 0x62: "b", 0x20: "space", 0x3A: "colon"}
+    widths = {g: (500, 0) for g in order}
+    widths["lig"] = (1000, 0)          # build.LIGATURES['::'] is two cells
+    font = make_cff_font(order, charstrings, cmap, widths)
+    if fires:
+        addOpenTypeFeaturesFromString(
+            font, "feature liga { sub colon colon by lig; } liga;\n")
+    return font
+
+
+def test_check_ligatures_fire_passes_a_ligature_that_fires():
+    font = _fire_font(fires=True)
+    assert _gate(lambda f, chk: verifylib.check_ligatures_fire(
+        f, _shaper_for(f), chk, f.getGlyphSet(), 500), font) == []
+
+
+def test_check_ligatures_fire_catches_a_ligature_that_stays_plain():
+    """The rule the JP driver could not see: it summed the advances of
+    whatever sat between the padding, and a sequence that does not
+    ligate leaves its own characters there at one cell each -- the same
+    number the declared cells come to. All 61 passed while not firing
+    (round 12)."""
+    off = _gate(lambda f, chk: verifylib.check_ligatures_fire(
+        f, _shaper_for(f), chk, f.getGlyphSet(), 500), _fire_font(fires=False))
+    assert off and "'::'" in off[0] and "glyphs" in off[0]
+
+
+def test_check_ligatures_fire_catches_a_ligature_drawn_as_whitespace():
+    """It has to draw: a build that emptied the set would pass on the
+    glyph count and the advance alone."""
+    off = _gate(lambda f, chk: verifylib.check_ligatures_fire(
+        f, _shaper_for(f), chk, f.getGlyphSet(), 500), _fire_font(fires=True, blank=True))
+    assert off and "blank" in off[0]
 
 
 def test_check_pair_positioning_wants_only_positioning_kinds():

@@ -14,9 +14,9 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import build  # noqa: E402
 import build_latin  # noqa: E402
 from verifylib import (  # noqa: E402
-    CASES,
     Checker,
     check_blank_glyphs,
+    check_cases,
     check_cells,
     check_coverage_order,
     check_donor_repertoire,
@@ -44,6 +44,7 @@ from verifylib import (  # noqa: E402
     check_tables,
     check_version_stamp,
     check_zones,
+    family_reference,
     glyph_has_hint,
     hmtx_mismatches,
     ink_spill,
@@ -157,8 +158,7 @@ def main():
     # beside a Nerd Font face): a hard-coded Gengou-Regular.otf never
     # sits beside dist/nerd/latin, so the gate was a no-op on all ten
     # of those faces and 37 IPA letters could go (round 11, mutant B2)
-    ref = FONT.with_name(f"{ps_family}-Regular.otf")
-    check_family_cmap(tf, check, TTFont(str(ref)) if ref != FONT and ref.exists() else None)
+    check_family_cmap(tf, check, family_reference(FONT, tf))
     check_coverage_order(tf, check)
     check_mark_class_closure(tf, check)
     check_private(tf, check)
@@ -171,7 +171,7 @@ def main():
     check_monospace_metadata(tf, check)
 
     shape = make_shaper(FONT)
-    gs, order = tf.getGlyphSet(), tf.getGlyphOrder()
+    gs = tf.getGlyphSet()
     # the mark gates: the anchors themselves, their coverage, and what
     # the shaper makes of them (verifylib says why there are seven)
     check_marks(tf, check, shape, gs)
@@ -180,24 +180,7 @@ def main():
     check_heights(tf, check, gs, cmap)
     check_zones(tf, check, cmap)
     check_features_work(shape, check, cmap)
-    on = {"calt": True, "liga": True}
-    for text, want in CASES:
-        if any(ord(c) > 0x2FFF for c in text):
-            continue   # the CJK case belongs to the JP families
-        got = len(shape(text, on)[0])
-        check(got == want, f"{text!r}: {got} glyphs (want {want})")
-    order = tf.getGlyphOrder()
-    for seq, spec in build.LIGATURES.items():
-        infos, positions = shape(f"a {seq} b", on)
-        mid = positions[2:len(infos) - 2]
-        adv = sum(p.x_advance for p in mid)
-        # and it draws: only the count and the advance were read, so a
-        # build that emptied all 61 set them as whitespace and passed
-        blank = [order[i.codepoint] for i in infos[2:len(infos) - 2]
-                 if order[i.codepoint] not in bounds]
-        check(adv == spec["cells"] * CELL and len(infos) <= 5 and not blank,
-              f"ligature {seq!r}: {len(infos)} glyphs, {adv}u"
-              + (f", blank: {blank}" if blank else ""))
+    check_cases(tf, shape, check)
     off = {"calt": False, "liga": False}
     check(len(shape("a -> b", off)[0]) == 6, "calt/liga off leaves '->' plain")
     check(len(shape("a -> b", dict(off, ss02=True))[0]) == 5, "ss02 alone ligates '->'")

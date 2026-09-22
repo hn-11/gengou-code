@@ -18,7 +18,6 @@ from pathlib import Path
 from fontTools.pens.boundsPen import BoundsPen
 from fontTools.ttLib import TTFont
 from fontTools.varLib.instancer import instantiateVariableFont
-from fontTools.varLib.models import piecewiseLinearMap
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -53,6 +52,7 @@ from verifylib import (  # noqa: E402
     check_tables,
     check_version_stamp,
     check_zones,
+    family_reference,
     ink_spill,
     make_shaper,
     static_faces,
@@ -97,38 +97,6 @@ def scp_reference(italic):
     _, _, _, _, to_scp = build_latin_vf.user_axis(weight_pos, design, breaks,
                                                    axis.minValue)
     return scp, to_scp
-
-
-def master_locations(tf, axis):
-    """The user wght of every master in the file, read back from the
-    CFF2 VarStore's region peaks through avar and fvar.
-
-    The file has FOUR masters, not three: 200, the Monaspace floor
-    (build_latin_vf.mona_floor_wght — 364.75 upright, 381.15 italic,
-    at no named instance), 400 and 700. A piecewise-linear blend can
-    only turn at a master, so a master is exactly where a corruption
-    hides: a build that moved the 61 Monaspace ligatures 600u right at
-    the floor master ONLY put '->' 535 units past its own advance
-    there, and 219 past it at the Light instance, while the three
-    locations this used to probe measured clean."""
-    tag = "CFF2" if "CFF2" in tf else "CFF "
-    store = getattr(tf[tag].cff[tf[tag].cff.fontNames[0]], "VarStore", None)
-    store = getattr(store, "otVarStore", None)
-    peaks = {0.0}
-    for region in (store.VarRegionList.Region if store else []):
-        for i, a in enumerate(region.VarRegionAxis):
-            if tf["fvar"].axes[i].axisTag == "wght":
-                peaks.add(a.PeakCoord)
-    # avar maps normalized -> normalized; invert it, then denormalize
-    segments = (tf["avar"].segments.get("wght") if "avar" in tf else None) or {}
-    back = {v: k for k, v in segments.items()}
-    out = set()
-    for peak in peaks:
-        n = piecewiseLinearMap(peak, back) if back else peak
-        out.add(axis.defaultValue + n * ((axis.defaultValue - axis.minValue)
-                                         if n < 0 else
-                                         (axis.maxValue - axis.defaultValue)))
-    return sorted(out)
 
 
 def main():
@@ -276,8 +244,7 @@ def main():
     check_pair_positioning(tf, check)
     check_substitution_identity(tf, check)
     check_name_composition(tf, check)
-    ref = ROOT / "dist" / "latin" / "Gengou-Regular.otf"
-    check_family_cmap(tf, check, TTFont(str(ref)) if ref.exists() else None)
+    check_family_cmap(tf, check, family_reference(FONT, tf))
     check_coverage_order(tf, check)
     check_mark_class_closure(tf, check)
     check_private(tf, check)
@@ -378,8 +345,17 @@ def main():
     # rendering `!=` into the next column at Bold. The bound is
     # verifylib.ink_spill's, one location at a time
     spill, centres, default_boxes = {}, {}, {}
+    # the file has FOUR masters, not three: 200, the Monaspace floor
+    # (build_latin_vf.mona_floor_wght -- 364.75 upright, 381.16 italic,
+    # at no named instance), 400 and 700. A piecewise-linear blend can
+    # only turn at a master, so a master is exactly where a corruption
+    # hides: a build that moved the 61 Monaspace ligatures 600u right at
+    # the floor master ONLY put '->' 535 units past its own advance
+    # there, and 219 past it at Light, while the ends and the instances
+    # measured clean. verifylib.vf_region_peaks reads them, as the mark
+    # gates above already do -- this file used to carry a second copy
     probes = sorted({axis.minValue, axis.defaultValue, axis.maxValue}
-                    | set(master_locations(tf, axis))
+                    | set(vf_region_peaks(tf))
                     | {i.coordinates["wght"] for i in instances
                        if "wght" in i.coordinates})
     check(len(probes) >= len(WEIGHTS) + 2,

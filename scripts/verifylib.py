@@ -1877,24 +1877,38 @@ GREEK_ITALIC_GAP = {"\u0392": "the Latin accent",
                     "\u03c1\u0313\u0301": 3, "\u03b1\u0313\u0300": 3}
 
 
+# the above-marks Source Code Pro leaves out of its dotless class:
+# the two comma-aboves, the vertical tilde and the Greek koronis
+_NOT_DOTLESS = frozenset({0x0312, 0x0313, 0x033D, 0x0343})
+
+
 def check_dotless(tf, shape, check, label=""):
     """i and j lose their dot under an above-mark: Source Code Pro's
     ccmp swaps them for the dotless forms before a combining mark of
     the above class, and a face whose rule is gone draws the mark on
     the dot (round 9, mutant L7). Every above-mark the face has is
     asked, except the two comma-aboves U+0312 and U+0313, which the
-    donor itself leaves out of the class."""
+    donor itself leaves out of the class.
+
+    "Every above-mark" is combining class 230 read off the cmap, not a
+    range: written as range(0x0300, 0x0315) it asked 16 of the 23 the
+    faces map, and three of the seven it stepped over -- U+0341, U+0342
+    and U+0344 -- are live rules in the donor's class, so dropping them
+    from its ccmp context would have drawn the mark on the dot and
+    passed (round 12). The four it must leave out are the two
+    comma-aboves and U+033D and U+0343, measured the same on the
+    upright, the italic and the JP faces."""
     cmap = tf.getBestCmap()
     order = tf.getGlyphOrder()
     if not any(ord(base) in cmap for base in "ij"):
         return
+    above = [cp for cp in sorted(cmap)
+             if unicodedata.combining(chr(cp)) == 230 and cp not in _NOT_DOTLESS]
     dotted, probed = {}, 0
     for base in "ij":
         if ord(base) not in cmap:
             continue
-        for cp in range(0x0300, 0x0315):
-            if cp not in cmap or cp in (0x0312, 0x0313):
-                continue
+        for cp in above:
             infos, _ = shape(base + chr(cp), {})
             if len(infos) != 2:
                 continue
@@ -2472,12 +2486,67 @@ def check_substitution_identity(tf, check):
                              f"({rules} rules; off by lookup: {worst})")
 
 
+def check_cases(tf, shape, check, label=""):
+    """The hand-written texts, each shaped to the glyph count it is
+    written with. A text the face does not map every character of is
+    not its to answer -- the one CJK case belongs to the JP families,
+    which the Latin driver used to say with a 0x2FFF ceiling of its
+    own."""
+    cmap = tf.getBestCmap()
+    for text, want in CASES:
+        if any(ord(c) not in cmap for c in text):
+            continue
+        got = len(shape(text, {"calt": True, "liga": True})[0])
+        check(got == want, f"{text!r}: {got} glyphs (want {want}){label}")
+
+
+def check_ligatures_fire(tf, shape, check, gs, cell, label=""):
+    """Every declared ligature fires, at the width the build declared
+    it, and draws. The sequence is padded -- "a <seq> b", so calt sees
+    real neighbours and a real word boundary -- and has to come back as
+    five glyphs: the sequence collapsed into one.
+
+    The JP driver summed the advances of whatever sat in that middle
+    span instead. A sequence that does not ligate leaves its own
+    characters there at one cell each, and spec["cells"] is that same
+    character count, so the sum matches either way: all 61 declared
+    ligatures passed the gate while not firing at all, and a JP face
+    could have shipped with the whole set dead (round 12). Measured the
+    other way round, every one of the 61 collapses to exactly one glyph
+    on every face this build makes -- JP, Term, Latin and Nerd Font --
+    so "five glyphs" is the whole rule, and the 4-cell arrows are no
+    longer a case of their own."""
+    cmap = tf.getBestCmap()
+    order = tf.getGlyphOrder()
+    if any(ord(c) not in cmap for c in "ab "):
+        return                      # nothing to pad the sequence with
+    off, n = {}, 0
+    for seq, spec in build.LIGATURES.items():
+        if any(ord(c) not in cmap for c in seq):
+            continue
+        n += 1
+        infos, positions = shape(f"a {seq} b", {"calt": True, "liga": True})
+        glyphs = [order[i.codepoint] for i in infos]
+        if len(infos) != 5:
+            off[seq] = ("glyphs", glyphs)
+        elif positions[2].x_advance != spec["cells"] * cell:
+            off[seq] = ("advance", positions[2].x_advance, spec["cells"] * cell)
+        elif build._bounds(gs, glyphs[2]) is None:
+            # and it has to draw: a build that emptied all 61 set them
+            # as whitespace and passed on the count and the advance
+            off[seq] = "blank"
+    check(n and not off, f"every declared ligature fires at its width{label} "
+                         f"({n} ligatures; off: {dict(list(off.items())[:5])})")
+
+
 def check_ligature_cells(tf, shape, check, gs, cell, label=""):
     """Every declared ligature's glyph sits in its cells: ink inside
     [0, cells x cell] to _LIG_EDGE, and no lower or higher than the
     characters it is cut from by _LIG_Y (an unencoded glyph, so
     check_glyph_placement never sees it; round 10, mutants G1, G1b,
-    G1c, V10)."""
+    G1c, V10). It fires first (check_ligatures_fire), which is the
+    question this one skips over."""
+    check_ligatures_fire(tf, shape, check, gs, cell, label)
     cmap = tf.getBestCmap()
     order = tf.getGlyphOrder()
     off, n = {}, 0
@@ -2539,6 +2608,28 @@ def check_name_composition(tf, check):
         styles.add("Roman")
     check(" " not in ps and ps.split("-")[-1] in styles,
           f"nameID 6 ends in the subfamily ({ps!r}, want ...-{want_style})")
+
+
+def family_reference(path, tf):
+    """The face beside this one that its whole family must agree with:
+    the Regular of its own PostScript family AND its own style, opened,
+    or None when this face is that reference or it is not there.
+
+    Both halves are measured lessons. A hard-coded GengouJP-Regular.otf
+    was a no-op for the Term and the Nerd Font faces, which have their
+    own family (round 11); and asking an italic face for the upright
+    Regular is asking for a file no job that splits its matrix by style
+    ever builds beside it, so the gate skipped on every italic face in
+    CI and in the release alike (round 12)."""
+    from fontTools.ttLib import TTFont
+    ps = (tf["name"].getDebugName(6) or "").split("-")[0]
+    if not ps:
+        return None
+    path = Path(path)
+    ref = path.with_name(f"{ps}-Regular{'Italic' if is_italic(tf) else ''}.otf")
+    if ref == path or not ref.is_file():
+        return None
+    return TTFont(str(ref))
 
 
 def check_family_cmap(tf, check, reference):

@@ -21,10 +21,10 @@ import anchors  # noqa: E402
 import build  # noqa: E402
 from build import FULLWIDTH, _unwrap, _unwrap_pos  # noqa: E402
 from verifylib import (  # noqa: E402
-    CASES,
     WIDE_IN_ONE_CELL,
     Checker,
     check_blank_glyphs,
+    check_cases,
     check_cells,
     check_coverage_order,
     check_donor_repertoire,
@@ -49,6 +49,7 @@ from verifylib import (  # noqa: E402
     check_tables,
     check_version_stamp,
     check_zones,
+    family_reference,
     glyph_has_hint,
     hmtx_mismatches,
     ink_spill,
@@ -201,22 +202,6 @@ def check_width_forms(tf, check, shape):
             off[chr(base)] = "vert"
     check(probed and not off, f"fwid and vert give the encoded forms "
                               f"({probed} probed; off: {off})")
-
-
-def family_reference(tf):
-    """The Regular of this face's OWN family, beside it (the cmap
-    reference), or None when this is it or it is not there: a Term face
-    asks GengouJPTerm-Regular and a Nerd Font one GengouJPNFM-Regular,
-    where a hard-coded GengouJP-Regular.otf was a no-op for both
-    (round 11, mutant B2 did the same to the Latin side)."""
-    from fontTools.ttLib import TTFont
-    ps = (tf["name"].getDebugName(6) or "").split("-")[0]
-    if not ps:
-        return None
-    ref = FONT.with_name(f"{ps}-Regular.otf")
-    if ref == FONT or not ref.exists():
-        return None
-    return TTFont(str(ref))
 
 
 VORG_DEFAULT = 880    # Source Han Sans's vertical origin, kept as is
@@ -408,38 +393,18 @@ def main():
 
     # the exception to the policy: characters both donors draw one cell
     # wide although Unicode calls them Wide, so a terminal reserves two
-    # columns and the glyph sits in the left one. There is no wider form
-    # in either donor to offer under fwid, so the set is pinned here — an
-    # upstream release that adds one has to be looked at, not absorbed
-    import unicodedata
-    wide_one_cell = {cp for cp, g in cmap.items()
-                     if hmtx[g][0] == exp_half
-                     and unicodedata.east_asian_width(chr(cp)) in ("W", "F")}
-    grafted = set()
-    if "Nerd Font" in fam:
-        # every Nerd Fonts icon is one cell — that is what Mono means —
-        # and a few of them (⚡ U+26A1) live outside the private use area
-        import nerdpatch
-        symbols = nerdpatch.symbols_for_checks()
-        if symbols is None:
-            print("skip  East-Asian-Wide exception (NF face, NF_SYMBOLS unset)")
-            wide_one_cell = None
-        else:
-            grafted = set(symbols.getBestCmap())
-    if wide_one_cell is not None:
-        # a grafted icon may add to the set (every Nerd Fonts icon is one
-        # cell), never take from it. U+26A1 is the one member of
-        # WIDE_IN_ONE_CELL that reaches no face except through that
-        # graft (verifylib's own docstring: "the Nerd Fonts ⚡"), so a
-        # face with no NF_SYMBOLS graft never has it and must not be
-        # asked for it here -- only `added` reads the full shared set
-        added = wide_one_cell - WIDE_IN_ONE_CELL - grafted
-        core = WIDE_IN_ONE_CELL - {0x26A1}
-        gone = core - wide_one_cell
-        check(not added and not gone,
-              f"{len(WIDE_IN_ONE_CELL)} East-Asian-Wide characters at one cell "
-              f"(the documented exception; added {sorted(hex(c) for c in added)}, "
-              f"gone {sorted(hex(c) for c in gone)})")
+    # columns and the glyph sits in the left one. check_widths_by_class
+    # asks both directions of it character by character -- a Wide
+    # character at one cell that is not in the set fails there, and a
+    # member of the set at full width fails there too -- so all that is
+    # left to ask here is that the set is still in the cmap at all,
+    # which nothing walking the cmap can see (round 12). U+26A1 reaches
+    # a face only through the Nerd Fonts graft, so it is not asked of
+    # one that has not been patched
+    pinned = WIDE_IN_ONE_CELL - {0x26A1}
+    gone = sorted(hex(cp) for cp in pinned - set(cmap))
+    check(not gone, f"the {len(pinned)} pinned East-Asian-Wide characters are "
+                    f"still mapped (gone: {gone})")
 
     # and the other direction: Unicode's Halfwidth block is one column in
     # every terminal's width table, whatever the donor draws it at
@@ -507,7 +472,7 @@ def main():
     check_substitution_identity(tf, check)
     check_blank_glyphs(tf, check, tf.getGlyphSet())
     check_name_composition(tf, check)
-    check_family_cmap(tf, check, family_reference(tf))
+    check_family_cmap(tf, check, family_reference(FONT, tf))
 
     # every charstring's own width (encoded against its FD's nominalWidthX)
     # must agree with hmtx: a glyph appended under one FD and re-homed to
@@ -719,10 +684,7 @@ def main():
     def shape_len(text, feats):
         return len(shape_infos(text, feats)[0])
 
-    for text, nglyphs in CASES:
-        got = shape_len(text, {"calt": True, "liga": True})
-        ok = got == nglyphs
-        check(ok, f"{text!r}: {got} glyphs (want {nglyphs})")
+    check_cases(tf, shape_infos, check)
 
     check_features_work(shape_infos, check, cmap)
     # a combining mark's variant (cv11: the Cyrillic breve for U+0306, in
@@ -791,59 +753,6 @@ def main():
             mark_gids.append(infos[1].codepoint if len(infos) > 1 else None)
         check(None not in mark_gids and mark_gids[0] != mark_gids[1],
               "cv11 swaps the combining breve")
-
-    # 4-cell ligature: any spec whose "cells" == 4 must shape to a single
-    # glyph whose advance is exactly 4x the half-width cell
-    wide_seqs = [seq for seq, spec in LIGATURES.items() if spec["cells"] == 4]
-    for seq in wide_seqs:
-        infos, positions = shape_infos(seq, {"calt": True, "liga": True})
-        ok = len(infos) == 1 and positions[0].x_advance == 4 * a_adv
-        got_adv = positions[0].x_advance if positions else None
-        got_n = len(infos)
-        check(ok, f"{seq!r} 4-cell ligature: "
-                  f"{got_n} glyph(s), advance={got_adv} (want 1 glyph, {4 * a_adv})")
-
-    # every declared ligature must actually fire, at its declared cell width.
-    # Sequences are embedded as "a <seq> b" (the same robust padding used by
-    # CASES above) so calt's contextual rules see real neighbors/boundaries.
-    # "a" and " " never participate in these ligature rules, so the shaped
-    # output is: [a][space][<ligature glyph(s)>][space][b]. Most entries
-    # collapse the whole sequence into a single ligature glyph (5 glyphs
-    # total, ligature at index 2), but a few (":=", "::") are declared as
-    # multi-glyph substitutions ("glyphs" lists more than one component) and
-    # may shape to more than one output glyph in that middle span. Rather
-    # than hard-coding "exactly 5", sum the advances of whatever sits
-    # between the fixed 2-glyph prefix ("a ") and 2-glyph suffix (" b") and
-    # compare that to cells * half_width_cell -- this covers both the
-    # single-glyph and multi-glyph-component cases without special-casing.
-    lig_failed = 0
-    lig_fail_lines = []
-    lig_order = tf.getGlyphOrder()
-    for seq, spec in LIGATURES.items():
-        text = f"a {seq} b"
-        infos, positions = shape_infos(text, {"calt": True, "liga": True})
-        want_adv = spec["cells"] * a_adv
-        n = len(infos)
-        mid = positions[2:-2] if n > 4 else []
-        got_adv = sum(p.x_advance for p in mid) if mid else None
-        # and it has to DRAW: nothing here read the outline, so a build
-        # that emptied 50 of the 61 set '!=' as whitespace and passed
-        blank = [lig_order[i.codepoint] for i in infos[2:-2]
-                 if lig_order[i.codepoint] not in bounds]
-        ok = n > 4 and got_adv == want_adv and not blank
-        if not ok:
-            lig_failed += 1
-            lig_fail_lines.append(
-                f"FAIL ligature {seq!r} ({spec['cells']} cells): "
-                f"{n} glyphs total, mid_advance={got_adv} (want {want_adv})"
-                + (f", blank: {blank}" if blank else ""))
-    if lig_failed:
-        for line in lig_fail_lines:
-            print(line)
-        check.failed = True
-    else:
-        print(f"ok   all {len(LIGATURES)} ligatures shape at declared "
-              f"widths and draw")
 
     # standalone operators redrawn from Monaspace must match the ligatures
     # cut from the same instance: every contour of the lone glyph has a
@@ -1823,7 +1732,15 @@ def main():
 
     if "Nerd Font" in fam:
         import nerdpatch
-        for ok, msg in nerdpatch.icon_checks(tf, nerdpatch.symbols_for_checks()):
+        symbols = nerdpatch.symbols_for_checks()
+        # the icon gates without the donor keep a tenth of the cell of
+        # slack, and a separator 50 units short of the line passed that
+        # way (round 10, mutant N9); six of the nine skip themselves
+        # outright. The Latin driver has asked for the donor since that
+        # round and this one never did, though the JP Nerd Font faces
+        # are two of the six shipped zips (round 12)
+        check(symbols is not None, "NF_SYMBOLS points at the Symbols donor")
+        for ok, msg in nerdpatch.icon_checks(tf, symbols):
             check(ok, msg)
 
     print("FAILED" if check.failed else "all checks passed")
