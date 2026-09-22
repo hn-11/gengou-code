@@ -27,6 +27,7 @@ from verifylib import (  # noqa: E402
     check_blank_glyphs,
     check_cells,
     check_coverage_order,
+    check_donor_repertoire,
     check_family_cmap,
     check_features_work,
     check_font_matrix,
@@ -667,6 +668,10 @@ def main():
     # mark still meet
     check_marks(tf, check, shape_infos, tf.getGlyphSet())
     check_cells(tf, check, shape_infos, tf.getGlyphSet(), exp_half, exp_full)
+    # the Latin layer is grafted whole, so the donor's cmap is a floor
+    # here too -- and the JP faces are where a dropped codepoint would
+    # otherwise hide, their own repertoire being ten times the donor's
+    check_donor_repertoire(check, cmap)
     check_width_forms(tf, check, shape_infos)
     check_term_sibling(tf, check, exp_full)
     check_ligature_cells(tf, shape_infos, check, tf.getGlyphSet(), exp_half)

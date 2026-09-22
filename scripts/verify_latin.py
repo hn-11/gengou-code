@@ -19,6 +19,7 @@ from verifylib import (  # noqa: E402
     check_blank_glyphs,
     check_cells,
     check_coverage_order,
+    check_donor_repertoire,
     check_family_cmap,
     check_features_work,
     check_font_matrix,
@@ -93,6 +94,7 @@ def main():
     cmap = tf.getBestCmap()
     hmtx = tf["hmtx"]
     check_latin_repertoire(check, cmap)
+    check_donor_repertoire(check, cmap)
     check_grid(check, hmtx.metrics, CELL)
     widths, bearings, bounds = hmtx_mismatches(tf)
     check(not widths, f"CFF charstring widths agree with hmtx ({widths[:3]})")

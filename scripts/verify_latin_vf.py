@@ -29,6 +29,7 @@ from verifylib import (  # noqa: E402
     check_blank_glyphs,
     check_cells,
     check_coverage_order,
+    check_donor_repertoire,
     check_family_cmap,
     check_features_work,
     check_font_matrix,
@@ -250,6 +251,7 @@ def main():
     # failed three checks
     vf_cmap = tf.getBestCmap()
     check_latin_repertoire(check, vf_cmap)
+    check_donor_repertoire(check, vf_cmap)
     # the tables verify_latin.py has gated since round 43 and this file
     # never read: a VF with embedding restricted, the vendor id blanked,
     # the range bits or the char-index range zeroed, or both format-4

@@ -217,6 +217,31 @@ def check_latin_repertoire(check, cmap):
           "no CJK / full-width codepoints")
 
 
+def check_donor_repertoire(check, cmap, label=""):
+    """Every character Source Code Pro draws, this face draws.
+
+    The Latin layer takes the donor whole -- measured, all 62 faces in
+    dist/ map every one of its 1,334 codepoints, the italic faces and
+    the JP ones included -- so the donor's cmap is a floor under the
+    whole family. A floor is the one thing a sibling comparison cannot
+    give the face that IS the sibling: forty IPA letters deleted from
+    the family's own Regular passed every gate (round 11, mutant B2),
+    because check_family_cmap then had nothing to compare it with.
+    SCP_VF_U names the donor; a run without it reads nothing and says
+    so rather than reporting a pass."""
+    path = os.environ.get("SCP_VF_U")
+    if not (path and Path(path).is_file()):
+        check(None, f"every character Source Code Pro draws{label}: SCP_VF_U unset")
+        return
+    from fontTools.ttLib import TTFont
+    donor = TTFont(path, lazy=True).getBestCmap()
+    missing = sorted(set(donor) - set(cmap))
+    check(not missing,
+          f"every character Source Code Pro draws, this face draws{label} "
+          f"({len(donor)} codepoints; missing {len(missing)}: "
+          f"{[hex(cp) for cp in missing[:5]]})")
+
+
 def check_grid(check, metrics, cell):
     """Every advance is 0 or a whole number of cells (at most four)."""
     off = sorted({adv for adv, _ in metrics.values()}
@@ -2022,21 +2047,32 @@ def check_glyph_placement(tf, check, gs, cell, full, label=""):
                          f"({n} drawn; off: {dict(list(off.items())[:5])})")
 
 
-def _run_alphabet(tf, classes, extra=40):
-    """The characters a run gate shapes: every printable ASCII one the
-    face maps, plus a spread of `extra` more from the rest of its cmap
-    (every Nth, so a JP face brings kana, kanji and the full-width
-    forms). Marks, the default-ignorables and the double diacritics are
-    left out -- what they do to a run is the mark gates' subject."""
+def _plain_characters(tf, classes):
+    """Every character the face maps that ordinary text is made of:
+    not a mark, not a default-ignorable, not one of the double
+    diacritics, and not a glyph GDEF calls a mark -- what those do to a
+    run is the mark gates' subject."""
     cmap = tf.getBestCmap()
+    return [cp for cp in sorted(cmap)
+            if cp not in DEFAULT_IGNORABLE and cp not in DOUBLE_SPAN
+            and classes.get(cmap[cp]) != 3
+            and not unicodedata.category(chr(cp)).startswith("M")]
 
-    def plain(cp):
-        return (cp in cmap and cp not in DEFAULT_IGNORABLE and cp not in DOUBLE_SPAN
-                and classes.get(cmap[cp]) != 3
-                and not unicodedata.category(chr(cp)).startswith("M"))
 
-    ascii_ = [cp for cp in range(0x21, 0x7F) if plain(cp)]
-    rest = [cp for cp in sorted(cmap) if cp > 0x7F and plain(cp)]
+def _run_alphabet(tf, classes, extra=40):
+    """The characters a run gate pairs off: every printable ASCII one
+    the face maps, plus a spread of `extra` more from the rest of its
+    cmap (every Nth, so a JP face brings kana, kanji and the full-width
+    forms). Pairing is quadratic, so it is sampled; shaping a character
+    alone is not, and reads the whole repertoire (_plain_characters).
+
+    A spread this thin steps right over a block: 40 samples across a JP
+    face's 17,000 characters is one every 430, and hiragana is 86 of
+    them, so a ccmp rule dropping every kana 180 units passed (round
+    11, mutant D2) with the alphabet sampled for both halves."""
+    plain = _plain_characters(tf, classes)
+    ascii_ = [cp for cp in plain if 0x21 <= cp < 0x7F]
+    rest = [cp for cp in plain if cp > 0x7F]
     step = max(1, len(rest) // extra)
     return ascii_ + rest[::step][:extra]
 
@@ -2085,7 +2121,7 @@ def check_run_identity(tf, shape, check, label=""):
         return None
 
     alone, pairs, n = {}, {}, 0
-    for cp in alphabet:
+    for cp in _plain_characters(tf, classes):
         bad = off(chr(cp))
         if bad:
             alone[chr(cp)] = bad
@@ -2102,7 +2138,8 @@ def check_run_identity(tf, shape, check, label=""):
                 pairs[text] = bad
     check(n and not alone and not pairs,
           f"every character is its own glyph in a run{label} "
-          f"({len(alphabet)} characters, {n} pairs; alone: "
+          f"({len(_plain_characters(tf, classes))} characters alone, "
+          f"{len(alphabet)} paired off into {n} pairs; alone: "
           f"{dict(list(alone.items())[:3])}; in pairs: {dict(list(pairs.items())[:3])})")
 
 
