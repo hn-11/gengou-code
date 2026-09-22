@@ -3291,7 +3291,7 @@ def cell_fit(box, cell=CELL, bearing=LETTER_BEARING):
     proportional Greek and Cyrillic in the italic Latin faces. (A
     narrow_letters pass once stood by to condense Source Han Sans's own
     on the JP side; both Latin donors cover the whole block, it found
-    nothing to do on any face, and verify.py holds every Greek and
+    nothing to do on any face, and verify_jp.py holds every Greek and
     Cyrillic letter to one cell, so it went in round 10.)"""
     if not box:
         return 1.0, 0

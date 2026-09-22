@@ -99,7 +99,7 @@ SHCJ は上流から外れた。
   まさにその例で、Powerline の差し替えで `yMax` が 1060 → 1000 に下がる
   ため拒否される（拒否しなければ 1060 と誤って記録する）。JP 面は
   Source Han Sans のインクが 1808 まであるので影響を受けず、速い経路を
-  通る。`verify.py` の `check_tables` がアウトラインから再計算して
+  通る。`verify_jp.py` の `check_tables` がアウトラインから再計算して
   突き合わせるので、誤りは CI で必ず落ちる。
 - **Nerd Fonts 版の命名は本家の流儀**: アイコンを 1 セルに収めるので
   `<Family> Nerd Font Mono` / `<PSFamily>NFM`。v5.0.0 で font-patcher と
@@ -182,7 +182,7 @@ SHCJ は上流から外れた。
   完全に含まれるため、この変更後は 1 字も使われない（1 字も通らない
   経路として、ラウンド 10 で `narrow_letters` ごと廃止）。
 - ~~**JP 面の `usWinDescent` 288 は欧文レイヤーの罫線より浅い**~~
-  **解決**（`build.WIN_METRICS = (1160, 454)`、`verify.py` が全 JP 面で
+  **解決**（`build.WIN_METRICS = (1160, 454)`、`verify_jp.py` が全 JP 面で
   門番）。Source Code Pro 由来の罫線素片は −400、ブロック要素は −454 まで
   伸びるので、288 では cmap 上の 111 字が宣言値の外にあった
   （`USE_TYPO_METRICS` を読む DirectWrite / CoreText / HarfBuzz は 1257u の
@@ -618,7 +618,7 @@ Gengou JP の二度の改名とも同じ箇所を触っている。リポジト�
 2. `scripts/nerdpatch.py` の NF 命名正規表現
 3. TTC のファイル名（のちに TTC 自体を廃止）
 4. `.github/workflows/release.yml` のリリース資産名と `GENGOU_VERSION` 環境変数名
-5. `scripts/verify.py` の `FAMILY_METRICS` 判定（ファミリー名のトークン）
+5. `scripts/verify_jp.py` の `FAMILY_METRICS` 判定（ファミリー名のトークン）
 6. README / LICENSE の名前と、リポジトリ名・`git remote`
 
 命名上の注意:
@@ -721,12 +721,12 @@ scripts/build.py           # SHS + dist/latin
                             #   -> dist/GengouJP*.otf（JP / JP Term の 20 面）
 scripts/nerdpatch.py       # Nerd Fonts の記号フォントを接ぎ木
                             #   -> dist/nerd{,/latin}/*NFM-*.otf
-scripts/verify.py          # JP 面の回帰テスト
-scripts/verify_latin.py    # 欧文静的面の回帰テスト
-scripts/verify_latin_vf.py # 可変フォントの回帰テスト
-scripts/verify_many.py     # 上の静的面 2 つ（verify.py / verify_latin.py）に
-                            #   glob で振り分けてまとめて走らせる。可変
-                            #   フォントは落とす（verify_latin_vf.py は別掛け）
+scripts/verify.py          # 回帰テストの唯一の入口。名前と glob を取り、
+                            #   フォント自身（fvar があるか、あ を持つか）で
+                            #   下の 3 つに振り分けて並列に走らせる
+scripts/verify_jp.py       # JP 面の門番
+scripts/verify_latin.py    # 欧文静的面の門番
+scripts/verify_latin_vf.py # 可変フォントの門番
 scripts/golden.py          # 2つの dist ディレクトリを比較（cmap・送り幅・
                             #   シェーピング・アウトライン・メタデータ・ヒント）
 ```
@@ -779,7 +779,7 @@ round 10 でさらに廃止・統合したもの（いずれも出力バイト�
 ブロック全体を描くので全面で 0 件、verifier が「ギリシャ・キリルは
 1 セル」を見る）は削除。`_pos_records` は `_lookup_records` に、
 `vmtx_donor` の `fullwidth` 引数は削除（どちらのドナーも 1000 / 880）。
-verify.py が verifylib と二重に持っていた検査（`is_italic`、typo == hhea、
+JP 面の門番が verifylib と二重に持っていた検査（`is_italic`、typo == hhea、
 アライメントゾーン、GDEF のクラス、ウェイト名、等幅メタデータ、
 `.notdef`・半角の 1 セル、1 セルの Wide 集合）は共有版の呼び出しに
 （`check_monospace_metadata` の「win がボックスを覆う」は欧文の方針で、

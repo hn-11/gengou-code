@@ -13,8 +13,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 import build  # noqa: E402
 import build_latin  # noqa: E402
-from verify import CASES  # noqa: E402
 from verifylib import (  # noqa: E402
+    CASES,
     Checker,
     check_blank_glyphs,
     check_cells,

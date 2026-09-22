@@ -172,8 +172,8 @@ def add_missing_from_mona(font, mona, chars, dy, k):
 # italic angle (-11.0) and the cap height, and to a unit on the
 # x-height. It is proportional where this family is not, so each glyph
 # is centred in the cell and condensed only where its ink will not fit
-# -- the rule narrow_letters applies to these same two scripts on the JP
-# side, for the same reason.
+# (build.cell_fit, the one rule for seating a proportional glyph in a
+# monospaced cell).
 #
 # Greek Extended is in the range because Source Code Pro's upright draws
 # sixteen of its codepoints (the koronis, psili, dasia and perispomeni
@@ -230,8 +230,8 @@ def add_missing_from_sans(font, sans, upright):
             # (nothing but cmap points at it -- checked for pi, the one
             # such glyph Source Code Pro Italic draws in the block)
             src = sans_cm[cp]
-            # the same rule narrow_letters puts on these two scripts on
-            # the JP side, from the same place
+            # centred in the cell, condensed only where the ink will not
+            # fit: build.cell_fit, the same rule for every donor glyph
             sx, dx = build.cell_fit(build._bounds(sans_gs, src), CELL,
                                     build.LETTER_BEARING)
             condensed += sx != 1.0

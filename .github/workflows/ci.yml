@@ -35,7 +35,7 @@ jobs:
   #
   # The two families build in one job because two of the gates compare
   # a face with its sibling -- the Term face against the JP one it is
-  # widened from (verify.check_term_sibling, 14,345 glyphs) and every
+  # widened from (verify_jp.check_term_sibling, 14,345 glyphs) and every
   # face's cmap against its family's Regular (check_family_cmap) -- and
   # a job that builds one family has no sibling to compare against, so
   # both gates reported "skipped" on every run they ever made (round
@@ -60,7 +60,7 @@ jobs:
       - run: python scripts/build.py "${{ matrix.face }} base Term"
       - if: matrix.nerd
         run: python scripts/nerdpatch.py dist/*.otf
-      - run: python scripts/verify_many.py 'dist/latin/*.otf' 'dist/*.otf' 'dist/nerd/*.otf'
+      - run: python scripts/verify.py 'dist/latin/*.otf' 'dist/*.otf' 'dist/nerd/*.otf'
   # the variable Gengou, BOTH styles. The italic is where every piece of
   # the second donor lives -- the Source Sans masters, the imported
   # anchors, the fitted ones, the varLib merge of anchors that differ
@@ -78,8 +78,9 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/setup-build
       - run: python scripts/build_latin_vf.py
-      - run: python scripts/verify_latin_vf.py "dist/latin/Gengou[wght].otf"
-      - run: python scripts/verify_latin_vf.py "dist/latin/Gengou-Italic[wght].otf"
+      - run: >-
+          python scripts/verify.py
+          "dist/latin/Gengou[wght].otf" "dist/latin/Gengou-Italic[wght].otf"
       - run: python scripts/build_latin.py "Regular Upright"
       - run: python scripts/nerdpatch.py dist/latin/Gengou-Regular.otf
-      - run: python scripts/verify_latin.py dist/nerd/latin/GengouNFM-Regular.otf
+      - run: python scripts/verify.py dist/nerd/latin/GengouNFM-Regular.otf

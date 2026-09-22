@@ -100,7 +100,7 @@ class Reporter:
 
 
 def build_corpus():
-    from verify import CASES
+    from verifylib import CASES
 
     with open(ROOT / "data" / "mona_ligs.json", encoding="utf-8") as f:
         ligatures = json.load(f)

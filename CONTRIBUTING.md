@@ -71,9 +71,9 @@ python scripts/build.py "Light Upright Term"   # 1 面だけ
 
 ```sh
 python -m pytest tests/ -q                                  # 単体テスト
-python scripts/verify_latin.py dist/latin/Gengou-Regular.otf
-python scripts/verify_latin_vf.py "dist/latin/Gengou[wght].otf"
-python scripts/verify.py dist/GengouJP-Regular.otf
+python scripts/verify.py dist/GengouJP-Regular.otf          # 面を名指し
+python scripts/verify.py "dist/latin/Gengou[wght].otf"      # 可変版も同じ入口
+python scripts/verify.py 'dist/*.otf' 'dist/latin/*.otf' 'dist/nerd/*.otf'
 ```
 
 グリフの合成漏れやメトリクスの崩れなど、シェイピングまわりの回帰を
@@ -100,8 +100,8 @@ Fonts の接ぎ木も検証）、可変フォントと Gengou への接ぎ木を
 GitHub Release を作り、5 分程度。所要時間を測るだけなら Run workflow の dry-run に
 チェックを入れるか、コミットメッセージに `[release-dry]` と書いたコミットを
 ブランチに push する。どちらもビルドと梱包まで走って Release は作らない）。複数の面をまとめて検証するときは
-`python scripts/verify_many.py dist/*.otf dist/latin/*.otf` が面ごとに
-プロセスを分けて走らせます。ビルド前後の出力を比べたいときは
+`python scripts/verify.py 'dist/*.otf' 'dist/latin/*.otf'` が面ごとに
+プロセスを分けて走らせます（どの門番に掛けるかはフォント自身が決める）。ビルド前後の出力を比べたいときは
 `python scripts/golden.py <前の dist> <今の dist>` が cmap・送り幅・
 シェーピング・アウトライン・メタデータ・ヒントを突き合わせます。
 

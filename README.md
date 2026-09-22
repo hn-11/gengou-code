@@ -361,9 +361,9 @@ python scripts/build_latin.py           # dist/latin/Gengou-*.otf（10 面）
 python scripts/build_latin_vf.py        # dist/latin/Gengou[wght].otf, -Italic[wght].otf
 python scripts/build.py                 # 両ファミリー（JP / Term × 10 面）
 python scripts/build.py "Regular"       # Regular系のみ（動作確認用）
-python scripts/verify_latin.py dist/latin/Gengou-Regular.otf        # Gengou の回帰テスト
-python scripts/verify_latin_vf.py "dist/latin/Gengou[wght].otf"     # 可変版（SCP と突き合わせ）
-python scripts/verify.py dist/GengouJP-Regular.otf   # JP の回帰テスト
+python scripts/verify.py dist/GengouJP-Regular.otf          # 回帰テスト（面ごと）
+python scripts/verify.py 'dist/*.otf' 'dist/latin/*.otf'   # まとめて
+python scripts/verify.py "dist/latin/Gengou[wght].otf"     # 可変版（SCP と突き合わせ）
 python scripts/golden.py <前の dist> dist                  # 2つのビルド出力の比較
 NF_SYMBOLS=... python scripts/nerdpatch.py                 # Nerd Fonts 版
 ```
@@ -375,7 +375,7 @@ Source Code Pro VF / Source Sans 3 VF / Monaspace VF の Releases から
 組む場合も必須（欠けたまま斜体を組むと 2 文字体系が黙って抜けるため）。
 `build.py` は Source Code Pro / Monaspace の VF に直接触らず、代わりに
 `SHS_DIR`（Source Han Sans JP）と `LATIN_DIR`（既定 `dist/latin`、
-`build_latin.py` の出力先）を見る。`verify.py` と `verify_latin_vf.py` は
+`build_latin.py` の出力先）を見る。`verify_jp.py` と `verify_latin_vf.py` は
 `SCP_VF_U` / `SCP_VF_I` があれば `=` のバーを Source Code Pro の
 インスタンスと突き合わせる。
 `GENGOU_VERSION`（例 `6.0.0`）を立てると name テーブルにその版番号を刻む

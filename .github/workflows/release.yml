@@ -56,7 +56,7 @@ jobs:
       fail-fast: false
       # by style, not by family: each job builds a weight's faces in
       # BOTH families, so every Term face has the JP face it is widened
-      # from beside it and verify.check_term_sibling runs (a
+      # from beside it and verify_jp.check_term_sibling runs (a
       # family-split matrix never gave it a sibling, so it reported
       # "skipped" on every release; round 11). Six jobs and twenty
       # faces either way -- four, four and two per style.
@@ -113,7 +113,7 @@ jobs:
       # is dist/latin/Gengou*[wght].otf and rides along (verify_latin_vf
       # runs in the package job, against every static)
       - run: >-
-          python scripts/verify_many.py
+          python scripts/verify.py
           'dist/*.otf' 'dist/nerd/*.otf' 'dist/latin/Gengou-*.otf' 'dist/nerd/latin/*.otf'
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -146,8 +146,8 @@ jobs:
           merge-multiple: true
       - name: Verify the variable fonts against the static faces
         run: |
-          python scripts/verify_latin_vf.py "dist/latin/Gengou[wght].otf"
-          python scripts/verify_latin_vf.py "dist/latin/Gengou-Italic[wght].otf"
+          python scripts/verify.py \
+            "dist/latin/Gengou[wght].otf" "dist/latin/Gengou-Italic[wght].otf"
       - run: |
           cp LICENSE dist/LICENSE
           cp LICENSE dist/nerd/LICENSE

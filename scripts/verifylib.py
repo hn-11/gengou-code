@@ -1,7 +1,8 @@
-"""Shared pieces of the verification scripts (verify.py, verify_latin.py,
-verify_latin_vf.py, golden.py): a HarfBuzz shaper, the ok/FAIL check
-tally, the CFF hint probe, and the static-face listing nerdpatch.py and
-harmonize_latin.py share.
+"""Shared pieces of the verification scripts (verify_jp.py,
+verify_latin.py, verify_latin_vf.py and golden.py, which verify.py
+dispatches to): a HarfBuzz shaper, the ok/FAIL check tally, the texts
+every driver shapes, the CFF hint probe, and the static-face listing
+nerdpatch.py shares.
 """
 
 import math
@@ -2105,13 +2106,35 @@ def check_run_identity(tf, shape, check, label=""):
           f"{dict(list(alone.items())[:3])}; in pairs: {dict(list(pairs.items())[:3])})")
 
 
+# The texts every driver shapes: (text, expected glyph count).
+# Hand-written, and the only probe the guards had before
+# check_ligature_guards was written (round 11)
+CASES = [
+    ("a != b", 5), ("x := 0", 5), ("a <= b", 5), ("a >= b", 5),
+    ("a -> b", 5), ("a <- b", 5), ("a === b", 5), ("a !== b", 5),
+    ("a == b", 5), ("a => b", 5), ("x |> f", 5), ("t :: u", 5),
+    ("m >>= g", 5), ("s // c", 5),
+    # context guards: an operator run longer than any ligature stays plain
+    ("x <|> y", 7), ("a ->> b", 7), ("a ==> b", 7),
+    # every one of these ligated before ligature_guards' prefix guards
+    # were made unconditional — JavaScript's '>>>=' shaped as '>' '>' '≥'
+    ("x >>>= 2", 8), ("a <=== b", 8), ("a ==!= b", 8), ("a <<<= b", 8),
+    ("a <<-> b", 8), ("a <<--> b", 9), ("a <</> b", 8), ("a <~~> b", 8),
+    ("a ==>> b", 8), ("a >>== b", 8),
+    # ... while runs that ARE ligatures (added in 3.3) collapse
+    ("a &&= b", 5), ("a ~~> b", 5), ("a <!-- b", 5), ("a && b", 5),
+    ("a ++ b", 5), ("a =~ b", 5),
+    ("日本語 != x", 7),
+]
+
+
 def check_ligature_guards(tf, shape, check, label=""):
     """A ligature does not fire inside a longer run of the same
     operator characters: ':::' is three colons, not the '::' ligature
     and one more, and '->>' is not '->' and '>'. The build writes those
     guards (build._guard_subtables, rules a and b: the sequence
     preceded by its own first character or followed by its own last),
-    and only verify.py's hand-written CASES list ever probed them --
+    and only the hand-written CASES list above ever probed them --
     deleting the two rules that keep '::' plain before a third colon
     passed every gate (round 11, mutant B3)."""
     cmap = tf.getBestCmap()
@@ -2136,7 +2159,7 @@ def check_ligature_guards(tf, shape, check, label=""):
             if lig in run(longer):
                 fired[longer] = lig
     # a face that declares no ligature has no guard to read; the
-    # ligature set itself is verify.py's "all 61 shape at their
+    # ligature set itself is verify_jp.py's "all 61 shape at their
     # declared widths" and check_ligature_cells
     check(not fired, f"no ligature fires inside a longer operator run{label} "
                      f"({probed} runs; fired: {fired})")
