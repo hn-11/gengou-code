@@ -429,6 +429,26 @@ def test_contour_boxes_reads_the_curve_not_its_control_points():
     assert boxes[1] == (200, 0, 210, 20)
 
 
+def test_contour_boxes_splits_all_off_curve_contours_with_no_movetos():
+    """A TrueType contour with no on-curve point at all draws as a bare
+    qCurveTo ending in None, with nothing recorded before it -- no
+    moveTo to split on (611 of the Nerd Fonts symbols draw this way).
+    Two such contours back to back, with no moveTo between them either,
+    must still come out as two boxes: closePath/endPath is what has to
+    do the splitting here, and without it these merge into one box
+    covering both."""
+    class Glyph:
+        def draw(self, pen):
+            pen.qCurveTo((0, 0), (100, 100), None)
+            pen.closePath()
+            pen.qCurveTo((300, 0), (400, 100), None)
+            pen.closePath()
+    boxes = build.contour_boxes({"g": Glyph()}, "g")
+    assert len(boxes) == 2
+    assert boxes[0] == (25.0, 25.0, 75.0, 75.0)
+    assert boxes[1] == (325.0, 25.0, 375.0, 75.0)
+
+
 # --- erosion for the Monaspace wght floor ---------------------------------
 
 def test_erode_path_shrinks_every_side():
@@ -1116,8 +1136,7 @@ def test_narrow_halfwidth_leaves_the_latin_donors_glyph_alone():
     wide; at Bold Italic its ink is 605 wide, and judged on ink width
     alone this pass condensed it to zero side bearings at that one
     weight while every other weight and the Latin face kept the glyph
-    as drawn. A glyph the donor supplied is its own, as it is for
-    narrow_letters."""
+    as drawn. A glyph the donor supplied is its own."""
     font = _cff_font_with_widths({"won": 600, "jamo": 920}, x0=0)
     # ink wider than the cell on both: 'won' is the donor's, 'jamo' is not
     for g in ("won", "jamo"):
@@ -2396,9 +2415,10 @@ def test_copy_line_metrics_takes_the_line_from_the_latin_and_pins_the_win_box():
 
 
 def test_cell_fit_centres_what_fits_and_condenses_only_what_does_not():
-    """The rule narrow_letters and build_latin.add_missing_from_sans
-    share. Condensing costs stroke weight, so a glyph that already fits
-    keeps its drawn width and only its position moves."""
+    """The one rule for seating a proportional glyph in a monospaced
+    cell, which build_latin.add_missing_from_sans applies. Condensing
+    costs stroke weight, so a glyph that already fits keeps its drawn
+    width and only its position moves."""
     cell, bearing = 600, 8
     room = cell - 2 * bearing
 
@@ -3017,6 +3037,21 @@ def test_anchor_loose_letters_skips_what_takes_no_accent():
         _letters_cmap(_HEIGHTS, {0x0301: "acute", 0x2E: "period"}),
         [_edge_markbase(marks, _HEIGHTS, 20, top=True)])
     assert anchors.anchor_loose_letters(font) == 1
+
+
+def test_accent_bases_excludes_space_and_out_of_range_letters():
+    """The boundary decisions, not what gets in (that is covered above
+    through anchor_loose_letters): U+0020 SPACE is category Zs and below
+    the ASCII/Latin-1 branch's 0x21 floor, excluded on both counts; a
+    CJK ideograph (U+4E00, category Lo -- a letter by unicodedata) sits
+    in none of LETTER_RANGES, which is exactly the point of keying off
+    ranges rather than category alone -- LETTER_RANGES's own comment
+    says a JP face maps 17,000 such kanji "letters" that take no accent;
+    and U+037E GREEK QUESTION MARK falls inside LETTER_RANGES numerically
+    but is category Po, not a letter, and sits above 0xFF so the
+    ASCII/Latin-1 branch does not rescue it either."""
+    cmap = {0x41: "A", 0x20: "space", 0x4E00: "cjk", 0x37E: "greekq"}
+    assert anchors.accent_bases(cmap) == {"A"}
 
 
 def test_import_donor_base_anchors_moves_the_anchor_with_the_outline():

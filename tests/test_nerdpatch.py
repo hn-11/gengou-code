@@ -346,6 +346,33 @@ def test_sources_for_paths_names_and_everything(tmp_path, monkeypatch):
     assert nerdpatch.sources_for(["nothing-like-this"]) == []
 
 
+def test_sources_for_resolves_a_relative_path_before_routing(tmp_path, monkeypatch):
+    """The explicit-path branch keys the LATIN_OUT/OUT choice off
+    `p.resolve().parent == LATIN_DIR.resolve()`, not off the string the
+    caller passed -- a relative path has to route the same as the
+    absolute one above (a Gengou face under dist/latin/ out to
+    dist/nerd/latin/, a JP face straight in dist/ out to dist/nerd/), or
+    a plain relative command-line argument would silently fall through
+    to OUT because its own (relative) parent never equals the
+    (absolute) LATIN_DIR."""
+    dist = tmp_path / "dist"
+    latin = dist / "latin"
+    latin.mkdir(parents=True)
+    (dist / "GengouJP-Light.otf").write_bytes(b"")
+    (latin / "Gengou-Light.otf").write_bytes(b"")
+    monkeypatch.setattr(nerdpatch, "DIST", dist)
+    monkeypatch.setattr(nerdpatch, "LATIN_DIR", latin)
+    monkeypatch.setattr(nerdpatch, "OUT", dist / "nerd")
+    monkeypatch.setattr(nerdpatch, "LATIN_OUT", dist / "nerd" / "latin")
+    monkeypatch.chdir(dist)
+
+    got = nerdpatch.sources_for(["latin/Gengou-Light.otf", "GengouJP-Light.otf"])
+
+    assert [(p.name, out) for p, out in got] == [
+        ("Gengou-Light.otf", dist / "nerd" / "latin"),
+        ("GengouJP-Light.otf", dist / "nerd")]
+
+
 def test_powerline_range_is_the_two_powerline_blocks():
     assert 0xE0A0 in nerdpatch.POWERLINE and 0xE0D7 in nerdpatch.POWERLINE
     assert 0xE0D8 not in nerdpatch.POWERLINE and 0xE09F not in nerdpatch.POWERLINE
