@@ -552,7 +552,9 @@ def set_cmap(font, mapping, add_new=False):
     BMP-only format 0/4/6 subtable cannot take a supplementary plane
     codepoint)."""
     for table in font["cmap"].tables:
-        if not table.isUnicode():
+        # a format 14 subtable is Unicode too, but its map is the
+        # variation-sequence dict; the `.cmap` it carries is a dummy
+        if not table.isUnicode() or table.format == 14:
             continue
         bmp_only = table.format in (0, 4, 6)
         for cp, name in mapping.items():
@@ -904,6 +906,12 @@ def _ccmp_remap(lookup, gmap, shift, gid):
             st.ligatures = ligs
             alive = bool(ligs)
         elif kind == 6:
+            # coverage-based contexts only: a class- or glyph-based one
+            # (Format 1, 2) has no coverage lists to remap and would
+            # fall out below as dead, silently
+            if getattr(st, "Format", 3) != 3:
+                raise ValueError(f"ccmp: chain context Format {st.Format}; "
+                                 f"only Format 3 is carried")
             # the glyph counts are the coverage lists' own lengths, so
             # only a coverage that empties changes the subtable's shape
             # — and an empty one would match everywhere
@@ -1108,7 +1116,15 @@ def _add_feature_where(table, tag, where):
     distinct lookup list is added and swapped into the LangSys that
     wants it. Source Han Sans shares one 'locl' record between a
     script's default and its languages, so merging into it put the
-    Serbian б in every Cyrillic run."""
+    Serbian б in every Cyrillic run.
+
+    A language the base has a LangSys for and `where` does not name
+    gets the script's default list, as a shaper would give a language
+    the donor has no record of: a LangSys is complete, nothing
+    cascades to it, and Source Han Sans keeps a Japanese LangSys under
+    every script it has -- so a shaper told the text is Japanese, as an
+    editor in a ja locale does, read grek/JAN and set the Latin acute
+    on β where every other language got the tonos."""
     records = table.FeatureList.FeatureRecord
     existing = {i for i, fr in enumerate(records) if fr.FeatureTag == tag}
     made = {}
@@ -1120,7 +1136,8 @@ def _add_feature_where(table, tag, where):
         for lang, langsys in ([(None, record.Script.DefaultLangSys)]
                               + [(r.LangSysTag, r.LangSys)
                                  for r in record.Script.LangSysRecord]):
-            wanted = where.get((record.ScriptTag, lang))
+            wanted = where.get((record.ScriptTag, lang),
+                               where.get((record.ScriptTag, None)))
             if langsys is None or not wanted:
                 continue
             mine = sorted(existing.intersection(langsys.FeatureIndex))
@@ -1143,6 +1160,36 @@ def _add_feature_where(table, tag, where):
                 + [made[key]])
             langsys.FeatureCount = len(langsys.FeatureIndex)
     table.FeatureList.FeatureCount = len(records)
+    # the base's own records the swap left no LangSys pointing at
+    prune_orphan_features(table)
+
+
+def prune_orphan_features(table):
+    """Drop every FeatureRecord no LangSys names (by index or as its
+    required feature) and remap the rest. Returns the count dropped.
+
+    _add_feature_where swaps a new record into a LangSys without
+    editing the old one, which is then unreachable; and
+    prune_orphan_lookups roots reachability at the LangSys, so a lookup
+    only an orphan record names goes with it."""
+    records = table.FeatureList.FeatureRecord
+    used = set()
+    for ls in _langsys_list(table):
+        used.update(ls.FeatureIndex)
+        req = getattr(ls, "ReqFeatureIndex", NO_REQUIRED_FEATURE)
+        if req != NO_REQUIRED_FEATURE:
+            used.add(req)
+    keep = [i for i in range(len(records)) if i in used]
+    if len(keep) == len(records):
+        return 0
+    remap = {old: new for new, old in enumerate(keep)}
+    table.FeatureList.FeatureRecord = [records[i] for i in keep]
+    table.FeatureList.FeatureCount = len(keep)
+    for ls in _langsys_list(table):
+        ls.FeatureIndex = sorted(remap[i] for i in ls.FeatureIndex if i in remap)
+        ls.FeatureCount = len(ls.FeatureIndex)
+        remap_required(ls, remap)
+    return len(records) - len(keep)
 
 
 def scripts_with_langsys(table):
@@ -1205,6 +1252,8 @@ def _insert_lookups_first(table, lookups):
     by = len(lookups)
     if not by:
         return
+    if getattr(table, "FeatureVariations", None) is not None:
+        raise ValueError("FeatureVariations name lookups this does not renumber")
     for lookup in table.LookupList.Lookup:
         _renumber_lookups(lookup, by)
     for fr in table.FeatureList.FeatureRecord:
@@ -1353,7 +1402,11 @@ def _remap_single_pos(sub, gmap, gid, marks):
         for attr in ("XAdvance", "YAdvance"):
             if hasattr(value, attr):
                 delattr(value, attr)
-        value.XPlacement = getattr(value, "XPlacement", 0) + CELL
+        # only a record whose format carries an x placement: one that
+        # sets y alone leaves the mark where the graft drew it, a cell
+        # left with no advance, which is where it belongs
+        if sub.ValueFormat & 0x1:
+            value.XPlacement = getattr(value, "XPlacement", 0) + CELL
 
     if sub.Format == 2:
         pairs = sorted(((gmap[g], v) for g, v in zip(cov.glyphs, sub.Value)
@@ -1515,6 +1568,12 @@ def import_scp_marks(base, scp, default_map, marks):
     shift = {old: first + k for k, old in enumerate(live)}
     for old in live:
         lookup = copy.deepcopy(donor.LookupList.Lookup[old])
+        # a mark filtering set indexes the donor's MarkGlyphSetsDef,
+        # which does not travel: copied, the flag would index a table
+        # the base has none of (_ccmp_remap refuses it the same way)
+        if lookup.LookupFlag & 0x0010:
+            raise ValueError(f"mark: donor lookup {old} uses a mark "
+                             f"filtering set, which is not carried")
         remap(lookup, shift)
         ours.LookupList.Lookup.append(lookup)
     ours.LookupList.LookupCount = len(ours.LookupList.Lookup)
@@ -1525,13 +1584,19 @@ def import_scp_marks(base, scp, default_map, marks):
     sort_feature_list(ours)
     # 'mkmk' asks GDEF which marks it may stack on (LookupFlag's mark
     # attachment type); Source Han Sans JP declares no such classes, so
-    # the donor's travel with the lookups that read them
+    # the donor's travel with the lookups that read them -- and only
+    # because it declares none: a class number the base already used
+    # would make its marks stackable by the donor's lookups
     donor_classes = getattr(scp.get("GDEF"), "table", None)
     donor_classes = getattr(donor_classes, "MarkAttachClassDef", None)
     if donor_classes is not None and "GDEF" in base:
         gdef = base["GDEF"].table
         classes = dict(getattr(getattr(gdef, "MarkAttachClassDef", None),
                                "classDefs", None) or {})
+        if classes:
+            raise ValueError("mark: the base already declares mark "
+                             "attachment classes; the donor's would "
+                             "share their numbers")
         for name, cls in donor_classes.classDefs.items():
             if name in gmap:
                 classes[gmap[name]] = cls
@@ -3201,8 +3266,17 @@ def prune_orphan_lookups(font):
         if ll is None or not ll.Lookup:
             continue
         lookups = ll.Lookup
-        reach, stack = set(), [i for fr in table.FeatureList.FeatureRecord
-                               for i in fr.Feature.LookupListIndex]
+        # from the LangSys, not the FeatureList: a FeatureRecord nothing
+        # names is no route either (prune_orphan_features drops those)
+        records = table.FeatureList.FeatureRecord
+        named = set()
+        for ls in _langsys_list(table):
+            named.update(ls.FeatureIndex)
+            req = getattr(ls, "ReqFeatureIndex", NO_REQUIRED_FEATURE)
+            if req != NO_REQUIRED_FEATURE:
+                named.add(req)
+        reach, stack = set(), [i for k in sorted(named) if k < len(records)
+                               for i in records[k].Feature.LookupListIndex]
         while stack:
             i = stack.pop()
             if i in reach or not 0 <= i < len(lookups):
@@ -3215,8 +3289,11 @@ def prune_orphan_lookups(font):
         keep = sorted(reach)
         remap = {old: new for new, old in enumerate(keep)}
         for fr in table.FeatureList.FeatureRecord:
+            # a record no LangSys names may point at what was just
+            # dropped; it is itself dead (prune_orphan_features)
             fr.Feature.LookupListIndex = [remap[i]
-                                          for i in fr.Feature.LookupListIndex]
+                                          for i in fr.Feature.LookupListIndex
+                                          if i in remap]
             fr.Feature.LookupCount = len(fr.Feature.LookupListIndex)
         for i in keep:
             for sub in unwrap(lookups[i])[1]:
@@ -4120,9 +4197,10 @@ def build_face(job):
     added = latin_ligatures(base, latin, latin_path, alts, LIGATURES)
     add_gsub(base, added, alts, LIGATURES, variant_maps, variant_names)
     # after add_gsub, which appends to the same LookupList: the copied
-    # ccmp lookups' nested lookup indices are absolute, so nothing may
-    # renumber the list once they are in (drop_features below touches
-    # the FeatureList only)
+    # ccmp lookups' nested lookup indices are absolute, so whatever
+    # renumbers the list after this must renumber those too --
+    # import_scp_locl (_insert_lookups_first) and prune_orphan_lookups
+    # do, drop_features touches the FeatureList only
     n_ccmp += import_scp_ccmp(base, latin, default_map, marks)
     n_locl += import_scp_locl(base, latin, default_map,
                               scripts_with_langsys(base["GSUB"].table))

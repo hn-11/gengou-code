@@ -1172,3 +1172,31 @@ def test_check_greek_accents_wants_the_tonos_after_a_greek_capital():
 def test_greek_italic_gap_is_the_listed_three():
     assert verifylib.GREEK_ITALIC_GAP == {"Β": "the Latin accent",
                                           "ῤ́": 3, "ἂ": 3}
+
+
+def _tone_font(shared):
+    """A letter lookup plus a Bopomofo tone-mark lookup; `shared` puts
+    the letters in the tone lookup as well."""
+    anchors_, heights = _ruled(2)
+    heights["tone"] = 500
+    bases = "tone b0 b1" if shared else "tone"
+    return _mark_font(anchors_, heights, cmap_extra={0x3105: "tone"},
+                      fea_extra="feature mark { pos base [%s] <anchor 50 520> mark @TOP; } mark;\n"
+                                % bases)
+
+
+def test_tone_lookups_are_not_letter_lookups_for_the_anchor_passes():
+    import anchors
+    font = _tone_font(shared=False)
+    every = anchors._mark_base_lookups(font)
+    on_letter = anchors._mark_base_lookups(font, on_letter=True)
+    assert len(every) == 2 and len(on_letter) == 1
+    assert "tone" not in on_letter[0][1][0].BaseCoverage.glyphs
+    # and the verifier reads the same subtables
+    assert [i for i, _ in verifylib._mark_base_subtables(font)] == [i for i, _ in on_letter]
+
+
+def test_check_tone_lookups_wants_no_letter_in_a_tone_lookup():
+    assert _gate(verifylib.check_tone_lookups, _tone_font(shared=False)) == []
+    off = _gate(verifylib.check_tone_lookups, _tone_font(shared=True))
+    assert off and "b0" in off[0]

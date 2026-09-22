@@ -2553,8 +2553,13 @@ class _FakeLookupList:
 
 
 def _gsub_with(lookups, feature_lookups):
+    """One 'calt' record over `feature_lookups`, named by one LangSys:
+    reachability starts at the LangSys, so a record nothing names is
+    no root."""
+    default = FakeLangSys([0])
+    default.ReqFeatureIndex = 0xFFFF
     gsub = FakeGSUB([FakeFeatureRecord("calt", FakeFeature(list(feature_lookups)))],
-                    [])
+                    [FakeScriptRecord(FakeScript(default))])
     gsub.LookupList = _FakeLookupList(lookups)
     return gsub
 
@@ -3543,3 +3548,63 @@ def test_raise_marks_after_capitals_adds_every_capital_to_the_swap_context():
     assert {"Alpha", "Be", *caps} <= back and "a" not in back
     assert chain.BacktrackCoverage[0].glyphs == sorted(back, key=font.getGlyphID)
     assert anchors.raise_marks_after_capitals(font) == 0
+
+
+def test_add_feature_where_gives_an_unnamed_language_the_script_default():
+    """Source Han Sans keeps a Japanese LangSys under every script; the
+    donor's locl names grek/dflt only. A LangSys is complete -- nothing
+    cascades to it -- so grek/JAN must get the default list too, or a
+    shaper told the text is Japanese sets the Latin acute on beta."""
+    class FakeLangSysRecord:
+        def __init__(self, tag, langsys):
+            self.LangSysTag = tag
+            self.LangSys = langsys
+    default, japanese, serbian = FakeLangSys([]), FakeLangSys([]), FakeLangSys([])
+    script = FakeScript(default, [FakeLangSysRecord("JAN ", japanese),
+                                  FakeLangSysRecord("SRB ", serbian)])
+    record = FakeScriptRecord(script)
+    record.ScriptTag = "cyrl"
+    gsub = FakeGSUB([], [record])
+    build._add_feature_where(gsub, "locl", {("cyrl", None): [5], ("cyrl", "SRB "): [5, 6]})
+    records = gsub.FeatureList.FeatureRecord
+
+    def reach(ls):
+        return [records[i].Feature.LookupListIndex for i in ls.FeatureIndex]
+    assert reach(default) == [[5]]
+    assert reach(japanese) == [[5]]        # the default, not nothing
+    assert reach(serbian) == [[5, 6]]      # its own, as named
+
+
+def test_prune_orphan_features_drops_what_no_langsys_names_and_remaps():
+    records = [FakeFeatureRecord(tag, FakeFeature([i])) for i, tag in enumerate(("aalt", "locl", "mark"))]
+    default = FakeLangSys([0, 2])
+    default.ReqFeatureIndex = 0xFFFF
+    script = FakeScript(default)
+    gsub = FakeGSUB(records, [FakeScriptRecord(script)])
+    assert build.prune_orphan_features(gsub) == 1
+    assert [fr.FeatureTag for fr in gsub.FeatureList.FeatureRecord] == ["aalt", "mark"]
+    assert default.FeatureIndex == [0, 1] and default.FeatureCount == 2
+    assert build.prune_orphan_features(gsub) == 0
+
+
+def test_add_feature_where_leaves_no_orphan_record():
+    """The base's own locl record, swapped out of every LangSys, goes."""
+    old = FakeFeatureRecord("locl", FakeFeature([1]))
+    default = FakeLangSys([0])
+    default.ReqFeatureIndex = 0xFFFF
+    record = FakeScriptRecord(FakeScript(default))
+    record.ScriptTag = "grek"
+    gsub = FakeGSUB([old], [record])
+    build._add_feature_where(gsub, "locl", {("grek", None): [5]})
+    assert [fr.Feature.LookupListIndex for fr in gsub.FeatureList.FeatureRecord] == [[1, 5]]
+    assert default.FeatureIndex == [0]
+
+
+def test_prune_orphan_lookups_roots_at_the_langsys_not_the_feature_list():
+    """A FeatureRecord no LangSys names is no route to its lookups."""
+    gsub = _gsub_with([_single({"a": "b"}), _single({"c": "d"})], [0])
+    gsub.FeatureList.FeatureRecord.append(FakeFeatureRecord("locl", FakeFeature([1])))
+    gsub.FeatureList.FeatureCount = 2
+    font = {"GSUB": FakeTable(gsub)}
+    assert build.prune_orphan_lookups(font) == {"GSUB": 1}
+    assert gsub.FeatureList.FeatureRecord[1].Feature.LookupListIndex == []

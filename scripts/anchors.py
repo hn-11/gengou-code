@@ -31,10 +31,20 @@ from fontTools.ttLib.tables import otTables
 # letters to Unicode and take no accent
 LETTER_RANGES = ((0x0041, 0x02FF), (0x0370, 0x052F), (0x1D00, 0x1FFF))
 
+# the syllables Source Han Sans's own mark lookups set a tone mark
+# BESIDE: a mark-to-base lookup with one of these as a base is not a
+# lookup that places a mark on a letter, and neither the anchor passes
+# here nor the verifier reads it as one
+BOPOMOFO = frozenset(range(0x3100, 0x3130)) | frozenset(range(0x31A0, 0x31C0))
 
-def _mark_base_lookups(font):
+
+def _mark_base_lookups(font, on_letter=False):
     """[(lookup index, [MarkBasePos subtables])] under 'mark', Extension
-    unwrapped, in LookupList order."""
+    unwrapped, in LookupList order. `on_letter` leaves out a lookup
+    that sets a mark beside a Bopomofo syllable (BOPOMOFO): fitted to
+    the letters like the rest, Source Han Sans's two tone-mark lookups
+    took 620 Latin, Greek and Cyrillic bases each, and A + U+02EA drew
+    the tone mark on the A's shoulder while keeping its cell."""
     if "GPOS" not in font:
         return []
     table = font["GPOS"].table
@@ -42,11 +52,16 @@ def _mark_base_lookups(font):
     for fr in table.FeatureList.FeatureRecord:
         if fr.FeatureTag == "mark":
             want |= set(fr.Feature.LookupListIndex)
+    rev = {g: cp for cp, g in font.getBestCmap().items()} if on_letter else {}
     out = []
     for i in sorted(want):
         kind, subs = _unwrap_pos(table.LookupList.Lookup[i])
-        if kind == 4:
-            out.append((i, subs))
+        if kind != 4:
+            continue
+        if on_letter and any(rev.get(g) in BOPOMOFO
+                             for sub in subs for g in sub.BaseCoverage.glyphs):
+            continue
+        out.append((i, subs))
     return out
 
 
@@ -198,7 +213,7 @@ def fit_anchor_rules(font):
     """
     gs = font.getGlyphSet()
     out = {}
-    for i, subs in _mark_base_lookups(font):
+    for i, subs in _mark_base_lookups(font, on_letter=True):
         for j, sub in enumerate(subs):
             if sub.ClassCount != 1:
                 continue
@@ -244,7 +259,7 @@ def anchor_loose_letters(font, rules=None):
     bases = _canonical_bases(cmap)
     gid = font.getGlyphID
     added = 0
-    for i, subs in _mark_base_lookups(font):
+    for i, subs in _mark_base_lookups(font, on_letter=True):
         for j, sub in enumerate(subs):
             if sub.ClassCount != 1:
                 continue      # one class here; more would need the class too
@@ -364,7 +379,7 @@ def anchor_loose_marks(font, floor=16, band=300, near=80):
     classes = getattr(getattr(gdef, "GlyphClassDef", None), "classDefs", None) or {}
     gs = font.getGlyphSet()
     gid = font.getGlyphID
-    subs = [sub for _, parts in _mark_base_lookups(font) for sub in parts]
+    subs = [sub for _, parts in _mark_base_lookups(font, on_letter=True) for sub in parts]
     covered = set()
     for sub in subs:
         covered |= set(sub.MarkCoverage.glyphs)

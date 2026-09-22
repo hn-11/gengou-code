@@ -792,7 +792,7 @@ _SEAT_MEDIAN_DY = (-60, 130)
 # verifier caught when the caron took the .cap anchor
 CLEAR_BASES = "bdfhklt"
 CLEAR_MARKS = STACKABLE_MARKS + "\u030c"
-_BOPOMOFO = frozenset(range(0x3100, 0x3130)) | frozenset(range(0x31A0, 0x31C0))
+_BOPOMOFO = anchors.BOPOMOFO
 DOUBLE_SPAN = anchors.DOUBLE_SPAN
 
 
@@ -837,20 +837,43 @@ def _pos_lookups(tf):
     return out
 
 
+def _tone_subtable(sub, rev):
+    """Whether a mark-to-base subtable is one of Source Han Sans's
+    Bopomofo tone-mark ones, which set the mark beside the syllable:
+    the one rule anchors._mark_base_lookups(on_letter=True) reads."""
+    return any(rev.get(g) in _BOPOMOFO for g in sub.BaseCoverage.glyphs)
+
+
 def _mark_base_subtables(tf):
     """[(lookup index, subtable)] for every mark-to-base subtable that
-    places a mark ON the letter -- Source Han Sans's Bopomofo tone
-    marks, which go beside the syllable, are left out by name."""
+    places a mark ON the letter -- the Bopomofo tone-mark subtables,
+    which go beside the syllable, are left out (_tone_subtable)."""
     rev = {g: cp for cp, g in tf.getBestCmap().items()}
-    out = []
+    return [(i, sub) for i, kind, subs, _ in _pos_lookups(tf) if kind == 4
+            for sub in subs if not _tone_subtable(sub, rev)]
+
+
+def check_tone_lookups(tf, check, label=""):
+    """A tone-mark subtable covers no letter. The subtables the mark
+    gates leave out are the one place a letter's anchor is not read,
+    so a letter in one is an anchor no gate sees: the JP build's
+    anchor_loose_letters once fitted the tone lookups to every letter,
+    and A + U+02EA set the tone mark on the A while keeping its cell."""
+    cmap = tf.getBestCmap()
+    rev = {g: cp for cp, g in cmap.items()}
+    letters = {g for cp, g in cmap.items()
+               if any(lo <= cp <= hi for lo, hi in LETTER_RANGES)
+               and unicodedata.category(chr(cp)).startswith("L")}
+    off = {}
     for i, kind, subs, _ in _pos_lookups(tf):
         if kind != 4:
             continue
         for sub in subs:
-            if any(rev.get(g) in _BOPOMOFO for g in sub.BaseCoverage.glyphs):
-                continue
-            out.append((i, sub))
-    return out
+            if _tone_subtable(sub, rev):
+                hit = sorted(letters.intersection(sub.BaseCoverage.glyphs))
+                if hit:
+                    off[i] = (len(hit), hit[:3])
+    check(not off, f"a tone-mark lookup covers no letter{label} (off: {off})")
 
 
 def _mark_mark_subtables(tf):
@@ -1664,6 +1687,7 @@ def check_marks(tf, check, shape, gs, label=""):
     forms each script asks for."""
     check_mark_features(tf, check, label)
     check_mark_reachability(tf, check, label)
+    check_tone_lookups(tf, check, label)
     check_langsys_parity(tf, check, label)
     check_anchor_placement(tf, check, gs, label)
     check_anchor_coverage(tf, check, gs, label)
