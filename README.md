@@ -201,22 +201,18 @@ stylistic set も同じ挙動なので許容している。グループを跨い
 ## Nerd Fonts 版
 
 全面に Nerd Fonts のアイコングリフを追加した変種も生成する。アイコンは
-1 セルに収めるので、Nerd Fonts 本家の命名では **Mono** に当たり、
-ファミリー名は `Gengou JP Nerd Font Mono` / `Gengou JP Term Nerd
-Font Mono` / `Gengou Nerd Font Mono`（PostScript 名 `GengouJPNFM-*`
-など。`JetBrainsMono Nerd Font Mono` と同じ流儀）。
+1 セルに収める。ファミリー名は `Gengou JP NF` / `Gengou JP Term NF` /
+`Gengou NF`（PostScript 名 `GengouJPNF-*` など。`Cascadia Mono NF` と
+同じ流儀）。
 
-ただし綴ったままだと Windows GDI の `LOGFONT.lfFaceName`（31 文字）に
-入らない面が出る（非 RIBBI は名前にウェイト名が付くので
-`Gengou JP Term Nerd Font Mono SemiBold` で 38 文字）。そこで
-**nameID 1 だけ `NFM` に略してある**——`Gengou JP NFM` /
-`Gengou JP Term NFM` / `Gengou NFM`（最長 `Gengou JP Term NFM
-SemiBold` で 27 文字）。nameID 16 / 4 は綴ったままなので、
-Windows Terminal・VS Code・macOS・Linux のピッカーには
-`Gengou JP Term Nerd Font Mono` が出て、**旧 conhost・メモ帳・Office の
-GDI 経路にだけ略称 `Gengou JP Term NFM` が出る**。指定するときは
-その環境のピッカーに出ているほうの名前を使う。本家 font-patcher の
-`--windows` と同じ手。
+本家の命名（`Gengou JP Term Nerd Font Mono`）にしないのは、Windows GDI の
+`LOGFONT.lfFaceName`（31 文字）に入らない面が出るため（非 RIBBI は
+名前にウェイト名が付くので `Gengou JP Term Nerd Font Mono SemiBold` で
+38 文字）。`NF` なら最長 `Gengou JP Term NF SemiBold` で 26 文字に収まり、
+Windows Terminal・VS Code・macOS・Linux のピッカーにも、旧 conhost・
+メモ帳・Office の GDI 経路にも同じ名前が出る。本家の命名では `NF` は
+アイコンがセルからはみ出してよい変種を指すが、このフォントの Nerd Fonts
+版はこれ一つで、アイコンはすべて 1 セル。
 
 アイコンは font-patcher で掛けるのではなく、Nerd Fonts が配っている記号
 だけのフォント `Symbols Nerd Font Mono`（各リリースの

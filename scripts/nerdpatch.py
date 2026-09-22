@@ -78,8 +78,8 @@ side no icon ever spills its cell on. Making it exact needs
 font-patcher's per-group tables, which is the whole complexity this
 module exists without; docs/gengou-plan.md carries the measurement.
 
-Names: "<Family> Nerd Font Mono", PostScript "<PSFamily>NFM-", Nerd
-Fonts' own convention for a font whose icons are one cell wide (nf_name).
+Names: "<Family> NF", PostScript "<PSFamily>NF-" in every record, as
+Cascadia Code's Nerd Fonts faces are named (nf_name, NF_MARKER).
 Everything else — STAT, OS/2, post, the hints, the GSUB — is the source
 face's, untouched; the icons carry no hints (font-patcher's did not
 either).
@@ -143,33 +143,33 @@ STRETCHED = SEPARATORS | PROGRESS
 TEXT_OVER_ICON = frozenset({0x2665})            # BLACK HEART SUIT
 
 
-# GDI looks a family up by nameID 1 through LOGFONT.lfFaceName, which
-# holds 31 characters and a NUL. Spelled out, the marker puts the
-# non-RIBBI faces of the longest family over it ("Gengou JP Term Nerd
-# Font Mono SemiBold" is 38), and those faces cannot be picked in the
-# old conhost, Notepad or Office's GDI path at all. nameID 1 therefore
-# takes the abbreviation and nameID 16 keeps the name spelled out:
-# that split is what 16 is for, and DirectWrite, CoreText and
-# fontconfig all read 16 in preference, so only GDI sees the short
-# one. Upstream font-patcher shortens the same record under --windows.
-NF_MARKER = " Nerd Font Mono"
-NF_MARKER_GDI = " NFM"
+# The marker is Cascadia's "NF", not Nerd Fonts' "Nerd Font Mono": GDI
+# looks a family up by nameID 1 through LOGFONT.lfFaceName, which holds
+# 31 characters and a NUL, and spelled out the marker puts the non-RIBBI
+# faces of the longest family over it ("Gengou JP Term Nerd Font Mono
+# SemiBold" is 38). Abbreviating nameID 1 alone, as font-patcher's
+# --windows does, left GDI's pickers naming the face differently from
+# every other one; "NF" in every record is one name everywhere, and
+# "Gengou JP Term NF SemiBold" is 26.
+NF_MARKER = " NF"
 
 
 def nf_name(s, marker=NF_MARKER):
     """The Nerd Fonts name of one of our names: the marker spliced in
-    after the family, variant token included ("Gengou JP Term Nerd
-    Font Mono", "GengouJPTermNFM-Bold"). A name that already carries
-    it comes back unchanged.
+    after the family, variant token included ("Gengou JP Term NF",
+    "GengouJPTermNF-Bold"). A name that already carries it comes back
+    unchanged.
 
     The two forms are told apart by what follows the family: a
     PostScript name is always Family-Style, so its variant runs into
     the family and a "-" comes next; a display name never has one
     there. Reading the space inside the family instead would work only
     while the family is two words."""
-    if "Nerd Font Mono" in s or "NFM" in s:   # already carries the marker
+    if re.search(r"Gengou(?:JP(?:Term)?)?NF-|Gengou(?: JP(?: Term)?)?"
+                 + re.escape(marker) + r"\b", s):   # already carries the marker
         return s
-    ps, hit = re.subn(r"(Gengou(?:JP(?:Term)?)?)(?=-)", r"\1NFM", s, count=1)
+    ps, hit = re.subn(r"(Gengou(?:JP(?:Term)?)?)(?=-)",
+                      r"\1" + marker.replace(" ", ""), s, count=1)
     if hit:
         return ps
     return re.sub(r"Gengou(?: JP(?: Term)?)?", lambda m: m.group(0) + marker,
@@ -374,24 +374,13 @@ NF_DESIGNER = "Nerd Fonts: Ryan L McIntyre and the Nerd Fonts contributors"
 def rename(font):
     """Every name record naming the family takes the Nerd Fonts name,
     the CFF's own names follow, and the copyright and designer records
-    credit Nerd Fonts for the icons. nameID 1 takes the abbreviated
-    marker so it stays inside GDI's 31 characters (NF_MARKER_GDI).
-    Returns the new PostScript name."""
+    credit Nerd Fonts for the icons. Returns the new PostScript name."""
     name = font["name"]
-    spelled = None
     for rec in name.names:
         s = rec.toUnicode()
         if "Gengou" in s:
-            gdi = rec.nameID == 1
-            if gdi and "NFM" not in s:
-                # what 1 becomes spelled out, for the CFF names below to
-                # fall back on when this face carries no 16 or 4: reading
-                # 1 back would hand them GDI's abbreviation instead. Not
-                # computed on a second pass, where 1 already holds the
-                # abbreviation and there is nothing to spell out
-                spelled = nf_name(s, NF_MARKER)
-            name.setName(nf_name(s, NF_MARKER_GDI if gdi else NF_MARKER),
-                         rec.nameID, rec.platformID, rec.platEncID, rec.langID)
+            name.setName(nf_name(s), rec.nameID, rec.platformID,
+                         rec.platEncID, rec.langID)
     for nid, sep, credit in ((0, " ", NF_NOTICE), (9, "; ", NF_DESIGNER)):
         records = [r for r in name.names if r.nameID == nid]
         if not records:      # a face with no such record gets one
@@ -410,7 +399,7 @@ def rename(font):
     # would otherwise file this face under the plain family
     td = cff[ps]
     for attr, nid in (("FamilyName", 16), ("FullName", 4)):
-        val = name.getDebugName(nid) or spelled
+        val = name.getDebugName(nid) or name.getDebugName(1)
         if hasattr(td, attr) and val:
             setattr(td, attr, val)
     return ps
@@ -675,7 +664,7 @@ def extend_realign_bases(font, names):
     realign_halfwidth_marks freezes its backtrack at widening time — the
     glyphs the widening did not move — and nerdpatch.py then appends
     10,402 one-cell icons to the finished face. None of them were in it,
-    so in GengouJPTermNFM-* a full-width mark after an icon kept the
+    so in GengouJPTermNF-* a full-width mark after an icon kept the
     widening's -100: U+F120 + U+20DD drew the ring at -465..465 where
     the same one-cell base two rows up puts it at -365..565."""
     gpos = getattr(font.get("GPOS"), "table", None)

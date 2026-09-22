@@ -298,8 +298,8 @@ def check_style_bits(tf, check, subfamily, italic):
 # conhost, Notepad, or Office's GDI text path. nameID 16 carries the
 # name spelled out for everything that reads it (DirectWrite, CoreText,
 # fontconfig all prefer 16), so holding 1 to this bound costs nothing.
-# It is the Nerd Fonts marker that pushes against it: nerdpatch splices
-# the abbreviation into 1 and the full words into 16.
+# It is the Nerd Fonts marker that pushes against it, which is why
+# nerdpatch's is "NF" rather than "Nerd Font Mono".
 # the characters the Latin donor draws and the build does not
 # redraw: the operators are Monaspace's, so they are not asked
 DONOR_LETTERS = tuple(range(0x30, 0x3A)) + tuple(range(0x41, 0x5B)) \
@@ -2777,7 +2777,7 @@ def check_name_composition(tf, check):
     full, ps = name.getDebugName(4), name.getDebugName(6)
     want_full = fam if sub == "Regular" else f"{fam} {sub}"
     check(full in (want_full, f"{fam} {sub}"), f"nameID 4 is family + subfamily ({full!r})")
-    # the family half is abbreviated by design (GengouNFM for the Nerd
+    # the family half is abbreviated by design (GengouNF for the Nerd
     # Fonts face); the style half is the subfamily, and there are no spaces
     want_style = sub.replace(" ", "")
     # the Regular weight keeps its name in the PostScript style

@@ -93,4 +93,4 @@ jobs:
           "dist/latin/Gengou[wght].otf" "dist/latin/Gengou-Italic[wght].otf"
       - run: python scripts/build_latin.py "Regular Upright"
       - run: python scripts/nerdpatch.py dist/latin/Gengou-Regular.otf
-      - run: python scripts/verify.py dist/nerd/latin/GengouNFM-Regular.otf
+      - run: python scripts/verify.py dist/nerd/latin/GengouNF-Regular.otf

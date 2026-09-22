@@ -56,22 +56,24 @@ SHCJ は上流から外れた。
   重なりの総量は変わらない——**この 120 字余りは縮小しない限り直らない**のに、
   v5 はその縮小を廃止した。上流に従って全角のままにする。
 - ~~**NF 版のファミリー名が GDI の 31 文字に収まらない**~~ **解決**
-  （nameID 1 だけ `NFM` に略す。`nerdpatch.NF_MARKER_GDI`）。綴ったままだと
+  （マーカーを全レコードで `NF` にする。`nerdpatch.NF_MARKER`）。綴ったままだと
   `Gengou JP Term Nerd Font Mono` 自体は 29 文字で収まるが、非 RIBBI は
   nameID 1 にウェイト名が付くので `... Nerd Font Mono SemiBold` が
   38 文字になり、JP の NF 20 面のうち 8 面（Term の Light / Medium /
   SemiBold 各 2 面と、基本ファミリーの SemiBold 2 面）が
   `LOGFONT.lfFaceName`（31 文字）に入らなかった（欧文の 10 面は全部収まる。
   v5.0.0 の `Sumi Moji` では Term の RIBBI が 32 文字で、JP 16 面・
-  欧文 2 面が入らなかった）。nameID 1 を `Gengou JP Term NFM SemiBold`
-  （最長 27 文字）に、nameID 16 / 4 は綴ったままにする分割で解決した。
-  本家 font-patcher の `--windows` と同じ手で、DirectWrite 系
-  （Windows Terminal・macOS・Linux）は 16 を読むので表示は変わらず、
-  GDI 系のピッカーにだけ略称が出る。`verifylib.check_gdi_family_name` が
-  31 文字を全面で門番している。副作用として NF 面の nameID 4 は
-  nameID 1 で始まらなくなる（fontbakery の
-  `opentype/name/match_familyname_fullfontname` はこれを落とす。
-  本家 `--windows` も同じ）
+  欧文 2 面が入らなかった）。最初は本家 font-patcher の `--windows` と
+  同じく nameID 1 だけ `NFM` に略し、16 / 4 は `Nerd Font Mono` と
+  綴る分割で解決したが、GDI 系のピッカーにだけ別の名前が出るうえ、
+  NF 面の nameID 4 が nameID 1 で始まらなくなる（fontbakery の
+  `opentype/name/match_familyname_fullfontname` が落とす）。
+  Cascadia Code（`Cascadia Mono NF`）と同じく全レコードを `NF` に
+  そろえて、最長 `Gengou JP Term NF SemiBold`（26 文字）。どの環境の
+  ピッカーにも同じ名前が出る。`verifylib.check_gdi_family_name` が
+  31 文字を全面で門番している。本家の命名では `NF` はアイコンがセルから
+  はみ出してよい変種を指すが、このフォントに 1 セルに収めない版は
+  無いので取り違えは起きない
 - ~~**`drop_features` は参照されなくなった Lookup を残す**~~ **解決**
   （`prune_orphan_lookups`）。FeatureList から到達可能性を辿り、文脈
   依存 Lookup が呼ぶ先も再帰的に追って、届かない Lookup を捨てて索引を
@@ -101,8 +103,9 @@ SHCJ は上流から外れた。
   Source Han Sans のインクが 1808 まであるので影響を受けず、速い経路を
   通る。`verify_jp.py` の `check_tables` がアウトラインから再計算して
   突き合わせるので、誤りは CI で必ず落ちる。
-- **Nerd Fonts 版の命名は本家の流儀**: アイコンを 1 セルに収めるので
-  `<Family> Nerd Font Mono` / `<PSFamily>NFM`。v5.0.0 で font-patcher と
+- **Nerd Fonts 版の命名は Cascadia Code の流儀**: `<Family> NF` /
+  `<PSFamily>NF`（本家の `Nerd Font Mono` は GDI の 31 文字に入らない。
+  上の GDI の項）。v5.0.0 で font-patcher と
   FontForge を捨て、本家の `Symbols Nerd Font Mono` から fontTools で
   接ぎ木する（同じ記号集合・同じ 1 セル送り、1 面 10 秒、CID 構造もメタ
   データもそのまま。寸法の差は下の項）。本家の立場は「フォールバック ＞ パッチ／合成」で、
@@ -314,7 +317,7 @@ SHCJ は上流から外れた。
   `check_family_cmap`（同じ家族の隣の面と同じ文字集合）、JP の
   `check_vertical_layout`（全角文字は縦組みで 1 em 送り、x は −半角、y は
   自分の VORG、既定 VORG 880。〱〲と注音は SHS 独自の縦メトリクスなので
-  除く）、NFM 面は `NF_SYMBOLS` 必須（ドナー無しの余裕 1/10 セルで
+  除く）、NF 面は `NF_SYMBOLS` 必須（ドナー無しの余裕 1/10 セルで
   区切りが 50u 短くても通った）。**残る盲点**（据え置き）: 1 字だけアンカーを横に 250u
   動かす（絶対帯 330 の内側。種類ごとの横中央値や重なり率も試したが、
   F の下のセディラ・A の足のオゴネク・Light の l の上の広いマークなど
@@ -346,7 +349,7 @@ SHCJ は上流から外れた。
   置換の同一性は 4 型すべて（ウクライナ語の `ї` を点無し i に分解するのは
   ドナーの設計として名指し）、JP は VORG を**ドナーと突き合わせ**
   （全角で描く 15,778 字。`SHS_DIR` 必須）、家族 cmap の参照は自分の
-  ファミリーの Regular（`GengouNFM-Regular.otf`）。
+  ファミリーの Regular（`GengouNF-Regular.otf`）。
 - ~~**静的面に Source Code Pro の重なった輪郭が残る**~~ **解決**
   （`build_latin.round_outlines` が `draw_clean` を通す）。VF のマスターは
   補間のために重なりを残し、Adobe の静的版は除去しているが、当方の静的面は
@@ -599,14 +602,12 @@ Gengou JP の欧文層（Source Code Pro の文字 + Monaspace の記号・合�
 | 用途 | ファミリー名 | PostScript 名 |
 |---|---|---|
 | 欧文のみ | Gengou | Gengou-Regular など |
-| 欧文のみ NF | Gengou Nerd Font Mono | GengouNFM-Regular |
+| 欧文のみ NF | Gengou NF | GengouNF-Regular |
 | 和文入り | Gengou JP / Gengou JP Term | GengouJP-Regular, GengouJPTerm-Regular |
-| 和文入り NF | Gengou JP Nerd Font Mono など | GengouJPNFM-Regular など |
+| 和文入り NF | Gengou JP NF など | GengouJPNF-Regular など |
 
-NF 版のファミリー名は nameID 16（と nameID 4）の綴り。nameID 1 は
-GDI の 31 文字に収めるため `Gengou JP NFM` / `Gengou JP Term NFM` /
-`Gengou NFM` に略してある（上の GDI の項）ので、旧 conhost・メモ帳・
-Office のピッカーには略称のほうが出る。
+NF 版は nameID 1 / 4 / 16 のどれも `NF`（上の GDI の項）なので、
+GDI 系（旧 conhost・メモ帳・Office）のピッカーにも同じ名前が出る。
 
 リブランディングで名前を変えた箇所（Shoyu Code Pro JP → Sumi Moji JP →
 Gengou JP の二度の改名とも同じ箇所を触っている。リポジトリ名と
@@ -720,7 +721,7 @@ scripts/build_latin_vf.py  # 同じマスターを varLib で合成
 scripts/build.py           # SHS + dist/latin
                             #   -> dist/GengouJP*.otf（JP / JP Term の 20 面）
 scripts/nerdpatch.py       # Nerd Fonts の記号フォントを接ぎ木
-                            #   -> dist/nerd{,/latin}/*NFM-*.otf
+                            #   -> dist/nerd{,/latin}/*NF-*.otf
 scripts/verify.py          # 回帰テストの唯一の入口。名前と glob を取り、
                             #   フォント自身（fvar があるか、あ を持つか）で
                             #   下の 3 つに振り分けて並列に走らせる

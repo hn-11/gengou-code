@@ -259,7 +259,7 @@ class _Name:
 def test_check_gdi_family_name_bounds_nameid_1():
     at_limit = "G" * verifylib.LFFACENAME_MAX
     for family, want in ((at_limit, True), (at_limit + "G", False),
-                         ("Gengou JP Term NFM SemiBold", True),
+                         ("Gengou JP Term NF SemiBold", True),
                          ("Gengou JP Term Nerd Font Mono SemiBold", False),
                          (None, True)):                      # absent reads as empty
         check = verifylib.Checker()

@@ -22,32 +22,20 @@ from conftest import make_cff_font  # noqa: E402
 
 
 @pytest.mark.parametrize("name, want", [
-    ("Gengou JP", "Gengou JP Nerd Font Mono"),
-    ("Gengou JP Term", "Gengou JP Term Nerd Font Mono"),
-    ("Gengou JP Term SemiBold Italic", "Gengou JP Term Nerd Font Mono SemiBold Italic"),
-    ("GengouJPTerm-BoldItalic", "GengouJPTermNFM-BoldItalic"),
-    ("GengouJP-Light", "GengouJPNFM-Light"),
-    ("Gengou", "Gengou Nerd Font Mono"),
-    ("Gengou-RegularItalic", "GengouNFM-RegularItalic"),
-    ("5.0.0;GNGO;GengouJP-Regular", "5.0.0;GNGO;GengouJPNFM-Regular"),
-    ("Version 5.0.0;Gengou JP;SHS 2.005", "Version 5.0.0;Gengou JP Nerd Font Mono;SHS 2.005"),
+    ("Gengou JP", "Gengou JP NF"),
+    ("Gengou JP Term", "Gengou JP Term NF"),
+    ("Gengou JP Term SemiBold Italic", "Gengou JP Term NF SemiBold Italic"),
+    ("GengouJPTerm-BoldItalic", "GengouJPTermNF-BoldItalic"),
+    ("GengouJP-Light", "GengouJPNF-Light"),
+    ("Gengou", "Gengou NF"),
+    ("Gengou-RegularItalic", "GengouNF-RegularItalic"),
+    ("5.0.0;GNGO;GengouJP-Regular", "5.0.0;GNGO;GengouJPNF-Regular"),
+    ("Version 5.0.0;Gengou JP;SHS 2.005", "Version 5.0.0;Gengou JP NF;SHS 2.005"),
     ("Source Han Sans", "Source Han Sans"),
 ])
 def test_nf_name(name, want):
     assert nerdpatch.nf_name(name) == want
-
-
-@pytest.mark.parametrize("name, want", [
-    ("Gengou JP Term", "Gengou JP Term NFM"),
-    ("Gengou JP Term SemiBold", "Gengou JP Term NFM SemiBold"),
-    ("Gengou", "Gengou NFM"),
-    # a PostScript name is keyed off its "-", not off the marker it is
-    # given, so it abbreviates either way
-    ("GengouJPTerm-BoldItalic", "GengouJPTermNFM-BoldItalic"),
-    ("Source Han Sans", "Source Han Sans"),
-])
-def test_nf_name_gdi_marker(name, want):
-    assert nerdpatch.nf_name(name, nerdpatch.NF_MARKER_GDI) == want
+    assert nerdpatch.nf_name(want) == want          # a second pass is a no-op
 
 
 def _rect(pen, x0, y0, x1, y1):
@@ -271,24 +259,23 @@ def test_graft_symbols_keeps_every_glyph_on_one_vertical_origin(monkeypatch):
 
 def test_rename_splices_the_marker_and_credits_nerd_fonts():
     face = _face()
-    assert nerdpatch.rename(face) == "GengouJPNFM-Regular"
+    assert nerdpatch.rename(face) == "GengouJPNF-Regular"
     name = face["name"]
     assert "Nerd Fonts" in name.getDebugName(0)                 # the icons' donor
     assert "LICENSE-NerdFonts" in name.getDebugName(0)
     nerdpatch.rename(face)                                      # idempotent
     assert name.getDebugName(0).count("Nerd Fonts:") == 1
-    assert name.getDebugName(1) == "Gengou JP NFM"      # GDI's 31 characters
-    assert name.getDebugName(3) == "5.0.0;GNGO;GengouJPNFM-Regular"
-    assert name.getDebugName(6) == "GengouJPNFM-Regular"
+    assert name.getDebugName(1) == "Gengou JP NF"
+    assert name.getDebugName(3) == "5.0.0;GNGO;GengouJPNF-Regular"
+    assert name.getDebugName(6) == "GengouJPNF-Regular"
     cff = face["CFF "].cff
-    assert cff.fontNames[0] == "GengouJPNFM-Regular"
-    assert cff["GengouJPNFM-Regular"].FullName == "Gengou JP Nerd Font Mono"
+    assert cff.fontNames[0] == "GengouJPNF-Regular"
+    assert cff["GengouJPNF-Regular"].FullName == "Gengou JP NF"
 
 
-def test_rename_abbreviates_only_nameid_1_and_spells_16_out():
-    """GDI reads nameID 1 and has 31 characters for it; everything else
-    reads 16, which keeps the marker spelled out. Splitting them is the
-    whole reason 16 exists, and the CFF's own family name follows 16."""
+def test_rename_gives_nameid_1_and_16_the_same_marker():
+    """GDI reads nameID 1, everything else 16: the same "NF" in both,
+    so no picker names the face differently from another."""
     face = _face()
     name = face["name"]
     for nid, val in ((16, "Gengou JP Term"), (17, "SemiBold Italic"),
@@ -298,10 +285,10 @@ def test_rename_abbreviates_only_nameid_1_and_spells_16_out():
         for plat, enc, lang in ((3, 1, 0x409), (1, 0, 0)):
             name.setName(val, nid, plat, enc, lang)
     nerdpatch.rename(face)
-    assert name.getDebugName(1) == "Gengou JP Term NFM SemiBold"
-    assert name.getDebugName(16) == "Gengou JP Term Nerd Font Mono"
+    assert name.getDebugName(1) == "Gengou JP Term NF SemiBold"
+    assert name.getDebugName(16) == "Gengou JP Term NF"
     assert len(name.getDebugName(1)) <= verifylib.LFFACENAME_MAX
-    # spelled out it would not have fitted -- that is the point
+    # spelled out it would not have fitted -- that is why the marker is short
     assert len("Gengou JP Term Nerd Font Mono SemiBold") > verifylib.LFFACENAME_MAX
 
 
@@ -314,7 +301,7 @@ def test_every_shipped_family_keeps_nameid_1_inside_gdi_s_limit():
     for base in ("Gengou", "Gengou JP", "Gengou JP Term"):
         for weight in ("Light", "Regular", "Medium", "SemiBold", "Bold"):
             family = base if weight in ("Regular", "Bold") else f"{base} {weight}"
-            got = nerdpatch.nf_name(family, nerdpatch.NF_MARKER_GDI)
+            got = nerdpatch.nf_name(family)
             assert len(got) <= verifylib.LFFACENAME_MAX, got
 
 

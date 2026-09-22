@@ -2745,8 +2745,8 @@ def set_names(font, suffix, weight, italic, italic_angle=-12.0, version=None,
     # base_family, not family_base: a Term face's own family carries the
     # suffix, and naming it "Gengou JP" here left nameID 0 and 5 pointing
     # at a family the face is not in -- which nerdpatch.rename then
-    # marked, giving a Gengou JP Term Nerd Font Mono face a version
-    # string reading "Gengou JP Nerd Font Mono"
+    # marked, giving a Gengou JP Term NF face a version
+    # string reading "Gengou JP NF"
     copyright_parts = [f"{base_family}: {PROJECT_COPYRIGHT}."]
     designer_parts = []
     if base_credit:

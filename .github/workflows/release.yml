@@ -161,7 +161,7 @@ jobs:
           cd dist
           for fam in GengouJP GengouJPTerm; do
             zip -q "$fam.zip" "$fam"-*.otf LICENSE
-            (cd nerd && zip -q "../$fam-NerdFont.zip" "$fam"NFM-*.otf LICENSE LICENSE-NerdFonts)
+            (cd nerd && zip -q "../$fam-NerdFont.zip" "$fam"NF-*.otf LICENSE LICENSE-NerdFonts)
           done
           (cd latin && zip -q ../Gengou.zip 'Gengou[wght].otf' 'Gengou-Italic[wght].otf' LICENSE)
           (cd nerd/latin && zip -q ../../Gengou-NerdFont.zip *.otf LICENSE LICENSE-NerdFonts)

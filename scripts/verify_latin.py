@@ -63,13 +63,13 @@ def main():
 
     name = tf["name"]
     fam = name.getDebugName(16) or name.getDebugName(1)
-    # a Nerd Fonts variant ("Gengou Nerd Font Mono", nerdpatch.nf_name)
+    # a Nerd Fonts variant ("Gengou NF", nerdpatch.nf_name)
     # appends Nerd Fonts' own marker after the family — strip it before
     # matching against the family name.
-    is_nf = bool(fam) and fam.endswith(" Nerd Font Mono")
-    base_fam = fam[:-len(" Nerd Font Mono")] if is_nf else (fam or "")
+    is_nf = bool(fam) and fam.endswith(" NF")
+    base_fam = fam[:-len(" NF")] if is_nf else (fam or "")
     check(base_fam == build_latin.FAMILY, f"family name {fam!r}")
-    ps_family = build_latin.PS_FAMILY + ("NFM" if is_nf else "")
+    ps_family = build_latin.PS_FAMILY + ("NF" if is_nf else "")
     check((name.getDebugName(6) or "").startswith(ps_family + "-"),
           f"PostScript name {name.getDebugName(6)!r}")
     subfamily = name.getDebugName(17) or name.getDebugName(2) or ""
@@ -155,7 +155,7 @@ def main():
     check_substitution_identity(tf, check)
     check_blank_glyphs(tf, check, tf.getGlyphSet())
     check_name_composition(tf, check)
-    # the Regular of THIS face's own family (GengouNFM-Regular.otf
+    # the Regular of THIS face's own family (GengouNF-Regular.otf
     # beside a Nerd Font face): a hard-coded Gengou-Regular.otf never
     # sits beside dist/nerd/latin, so the gate was a no-op on all ten
     # of those faces and 37 IPA letters could go (round 11, mutant B2)

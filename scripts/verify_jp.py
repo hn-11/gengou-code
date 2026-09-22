@@ -496,12 +496,12 @@ def main():
     # carries
     name = tf["name"]
     fam = family_name(tf)
-    is_nf = fam.endswith(" Nerd Font Mono")
-    base_fam = fam[:-len(" Nerd Font Mono")] if is_nf else fam
+    is_nf = fam.endswith(" NF")
+    base_fam = fam[:-len(" NF")] if is_nf else fam
     want_fam = "Gengou JP" + (" Term" if exp_full > 1000 else "")
     check(base_fam == want_fam, f"family name {fam!r} (want {want_fam!r})")
     ps_family = "GengouJP" + ("Term" if exp_full > 1000 else "") \
-        + ("NFM" if is_nf else "")
+        + ("NF" if is_nf else "")
     check((name.getDebugName(6) or "").startswith(ps_family + "-"),
           f"PostScript name {name.getDebugName(6)!r} (want {ps_family}-...)")
     n0 = name.getDebugName(0) or ""
@@ -1373,7 +1373,7 @@ def main():
         # U+F120 is a Nerd Fonts icon: one cell, and appended to the
         # face AFTER the widening, so it was in no backtrack coverage
         # and every one of the 10,402 icons kept the -100 in the Term
-        # NFM faces (U+F120 + U+20DD drew the ring at -465..465 where
+        # NF faces (U+F120 + U+20DD drew the ring at -465..465 where
         # the same one-cell base gives -365..565)
         for seq in ("==", "===", "!==", "::", "=>", "...", "\uf120"):
             if any(ord(c) not in cmap for c in seq):
