@@ -183,12 +183,14 @@ def check_version_stamp(tf, check, unique_id=False):
               f"{head5!r})")
 
 
-def check_monospace_metadata(tf, check):
+def check_monospace_metadata(tf, check, win_covers_bbox=True):
     """What a font picker and GDI read to call the face monospaced, and
     the line metrics as build.set_monospace_metadata leaves them: post
     and PANOSE declare fixed pitch, PANOSE's weight follows
     usWeightClass, typo == hhea with USE_TYPO_METRICS, and the win
-    metrics cover the bbox."""
+    metrics cover the bbox -- the Latin families' policy; the JP faces
+    pin theirs below Source Han Sans's outliers (build.WIN_METRICS) and
+    verify.py holds them to the pin instead."""
     os2 = tf["OS/2"]
     check(tf["post"].isFixedPitch == 1 and os2.panose.bProportion == 9,
           "declared monospaced")
@@ -201,9 +203,10 @@ def check_monospace_metadata(tf, check):
           == (hhea.ascent, hhea.descent, hhea.lineGap) and os2.fsSelection & 0x80,
           "typo metrics == hhea metrics, USE_TYPO_METRICS set")
     head = tf["head"]
-    check(os2.usWinAscent >= head.yMax and os2.usWinDescent >= -head.yMin,
-          f"win metrics cover the bbox ({os2.usWinAscent}/{os2.usWinDescent} "
-          f"vs {head.yMax}/{-head.yMin})")
+    if win_covers_bbox:
+        check(os2.usWinAscent >= head.yMax and os2.usWinDescent >= -head.yMin,
+              f"win metrics cover the bbox ({os2.usWinAscent}/{os2.usWinDescent} "
+              f"vs {head.yMax}/{-head.yMin})")
 
 
 def check_latin_repertoire(check, cmap):
@@ -800,9 +803,11 @@ _SEAT_SPREAD = 60
 # and each MARK sideways: within a lookup every mark sits at the same
 # offset from the letter's centre, so one mark's own median dx is held
 # to the lookup's -- a mark's outline moved 220 with its anchor left
-# behind passed (round 9, mutant L13). Measured 45 upright, 74 at Bold
-# Italic (the double grave)
-_MARK_DX_SPREAD = 110
+# behind passed (round 9, mutant L13). Measured on six lowercase
+# letters a mark: 45 upright, 74 at Bold Italic (the double grave), and
+# 110 for the double acute at Bold, which leans right by design
+_MARK_DX_SPREAD = 150
+_SEAT_MARK_ROWS = 6          # lowercase letters each mark is measured on for its own sideways median
 _SEAT_KIND = 5               # letters a kind needs before it has a median to hold to
 SEAT_EDGE_LETTERS = frozenset("\u01a1\u01b0\u01a0\u01af\u0260\u03b7\u0265\u027b\u0255"
                               "\u0287\u0256y\u1ef5\u1ef7\u1ef9")
@@ -1637,12 +1642,21 @@ def check_marks_seat(tf, shape, check, gs, label=""):
         # every mark on the first three letters of each case: after a
         # capital the shaper swaps the mark for its raised form, so the
         # lowercase letters are where the mark itself is measured
-        firsts = bases[:3] + [b for b in bases
-                              if unicodedata.category(chr(rev[b])) == "Ll"][:6]
-        for base_g in firsts:
+        lower = [b for b in bases if unicodedata.category(chr(rev[b])) == "Ll"]
+        for base_g in bases[:3]:
             for mark_g in marks:
                 if (base_g, mark_g) not in seen:
                     measure(base_g, mark_g)
+        for mark_g in marks:
+            got = 0
+            for base_g in lower:
+                if got >= _SEAT_MARK_ROWS:
+                    break
+                if (base_g, mark_g) in seen:
+                    got += 1
+                elif measure(base_g, mark_g):
+                    seen.add((base_g, mark_g))
+                    got += 1
         if dxs:
             mdx, mdy = statistics.median(dxs), statistics.median(dys)
             medians[i] = (round(mdx), round(mdy))
@@ -1661,7 +1675,11 @@ def check_marks_seat(tf, shape, check, gs, label=""):
                            if len(v) >= _SEAT_KIND}
             by_mark = {}
             for base_g, mark_g, dx, dy, ch in rows:
-                by_mark.setdefault(mark_g, []).append(dx)
+                # on the letters: the digits and punctuation take the
+                # rule's anchor, not the donor's, and a mark's own
+                # offset is what the donor gave it on the letters
+                if unicodedata.category(ch).startswith("L"):
+                    by_mark.setdefault(mark_g, []).append(dx)
             for mark_g, v in by_mark.items():
                 # a median of one letter is that letter's own offset
                 # (b sets every accent over its stem, 180 left)
@@ -1967,9 +1985,12 @@ def check_glyph_placement(tf, check, gs, cell, full, label=""):
 
 def check_cells(tf, check, shape, gs, cell, full=None, label=""):
     """One glyph in one cell: its advance by its width class, as
-    shaped, and its ink where that class sits."""
+    shaped, and its ink where that class sits -- and the repertoire
+    a terminal actually types with (check_letter_glyphs), which was
+    defined and unit-tested but reached from no driver."""
     check_widths_by_class(tf, shape, check, cell, full, label)
     check_glyph_placement(tf, check, gs, cell, full, label)
+    check_letter_glyphs(tf, check, gs, label)
 
 
 def check_marks(tf, check, shape, gs, label=""):
@@ -2214,7 +2235,11 @@ def check_name_composition(tf, check):
     # the family half is abbreviated by design (GengouNFM for the Nerd
     # Fonts face); the style half is the subfamily, and there are no spaces
     want_style = sub.replace(" ", "")
-    styles = {want_style, "Roman"} if want_style == "Regular" else {want_style}   # a variable font's upright is "Roman"
+    # the Regular weight keeps its name in the PostScript style
+    # ("RegularItalic"); a variable font's upright is "Roman"
+    styles = {want_style, "Regular" + want_style}
+    if want_style == "Regular":
+        styles.add("Roman")
     check(" " not in ps and ps.split("-")[-1] in styles,
           f"nameID 6 ends in the subfamily ({ps!r}, want ...-{want_style})")
 

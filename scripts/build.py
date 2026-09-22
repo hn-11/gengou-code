@@ -194,84 +194,6 @@ GROUP_NAMES = {
 }
 
 
-def _contour_bounds(contours):
-    """Per-contour (xMin, yMin, xMax, yMax) from recorded segments.
-
-    Curve control points are NOT treated as extremes — a cubic's real
-    bounds come from the segment solve, otherwise a '=' bar with rounded
-    ends measures thicker than it is.
-    """
-    out = []
-    for segs in contours:
-        xs, ys = [], []
-        for kind, raw_pts, start in segs:
-            pts = [p for p in raw_pts if p is not None]  # all-offcurve TT contour
-            if not pts or start is None:
-                continue
-            for axis, acc in ((0, xs), (1, ys)):
-                coords = [start[axis]] + [p[axis] for p in pts]
-                if kind == "lineTo":
-                    acc.extend((coords[0], coords[-1]))
-                elif kind == "curveTo":
-                    acc.extend(_cubic_extremes(coords))
-                else:               # qCurveTo
-                    acc.extend(_quad_extremes(coords))
-        if xs:
-            out.append((min(xs), min(ys), max(xs), max(ys)))
-    return out
-
-
-def _cubic_extremes(c):
-    """Extreme values of a cubic bezier on one axis (start + 2 controls +
-    end). CFF charstrings never emit longer chains."""
-    if len(c) != 4:
-        return list(c)
-    p0, p1, p2, p3 = c
-    vals = [p0, p3]
-    # derivative roots: 3(-p0+3p1-3p2+p3)t^2 + 6(p0-2p1+p2)t + 3(p1-p0) = 0
-    for t in _quad_roots(3 * (-p0 + 3 * p1 - 3 * p2 + p3),
-                         6 * (p0 - 2 * p1 + p2), 3 * (p1 - p0)):
-        if 0 < t < 1:
-            mt = 1 - t
-            vals.append(mt ** 3 * p0 + 3 * mt * mt * t * p1
-                        + 3 * mt * t * t * p2 + t ** 3 * p3)
-    return vals
-
-
-def _quad_extremes(c):
-    """Extremes of a TrueType quadratic run on one axis: start, then N
-    off-curve points and the final on-curve point. Consecutive off-curve
-    pairs imply an on-curve point at their midpoint — split there."""
-    if len(c) < 3:
-        return list(c)
-    start, offs, end = c[0], c[1:-1], c[-1]
-    vals = [start, end]
-    cur = start
-    for i, ctrl in enumerate(offs):
-        last = i == len(offs) - 1
-        seg_end = end if last else (ctrl + offs[i + 1]) / 2
-        den = cur - 2 * ctrl + seg_end
-        if den:
-            t = (cur - ctrl) / den
-            if 0 < t < 1:
-                mt = 1 - t
-                vals.append(mt * mt * cur + 2 * mt * t * ctrl
-                            + t * t * seg_end)
-        vals.append(seg_end)
-        cur = seg_end
-    return vals
-
-
-def _quad_roots(a, b, c):
-    if abs(a) < 1e-12:
-        return [] if abs(b) < 1e-12 else [-c / b]
-    d = b * b - 4 * a * c
-    if d < 0:
-        return []
-    r = math.sqrt(d)
-    return [(-b + r) / (2 * a), (-b - r) / (2 * a)]
-
-
 def _glyphset(source):
     """`source` as a glyph set: a TTFont's, or a glyph set handed over as
     is (TTFont.getGlyphSet(location=...) for a VF probed at a location
@@ -279,31 +201,32 @@ def _glyphset(source):
     return source.getGlyphSet() if hasattr(source, "getGlyphSet") else source
 
 
-def _record_contours(font, glyph_name):
-    """[(kind, points, start_point), ...] per closed OR open contour.
-    `font` is a TTFont or a glyph set (_glyphset)."""
+def contour_boxes(font, glyph_name):
+    """(xMin, yMin, xMax, yMax) of each contour of `glyph_name`, open
+    or closed, from the curves themselves and not their control points
+    -- a '=' bar with rounded ends measures thicker than it is
+    otherwise. `font` is a TTFont or a glyph set (_glyphset). One
+    BoundsPen per contour, split at each moveTo; this replaced a
+    105-line extremum solver that agreed with it on every glyph of
+    every donor (round 10)."""
     pen = RecordingPen()
     _glyphset(font)[glyph_name].draw(pen)
-    contours, cur, cursor, start = [], [], None, None
+    contours, cur = [], []
     for op, args in pen.value:
-        if op == "moveTo":
-            if cur:
-                contours.append(cur)
+        if op == "moveTo" and cur:
+            contours.append(cur)
             cur = []
-            cursor = start = args[0]
-        elif op in ("lineTo", "curveTo", "qCurveTo"):
-            cur.append((op, list(args), cursor))
-            if args[-1] is not None:   # None = all-offcurve TrueType contour
-                cursor = args[-1]
-        elif op in ("closePath", "endPath"):
-            if cursor is not None and start is not None and cursor != start:
-                cur.append(("lineTo", [start], cursor))  # implied closing line
-            if cur:
-                contours.append(cur)
-            cur, cursor, start = [], None, None
-    if cur:  # unterminated (open) contour: keep it, don't drop it
+        cur.append((op, args))
+    if cur:
         contours.append(cur)
-    return contours
+    out = []
+    for ops in contours:
+        box = BoundsPen(None)
+        for op, args in ops:
+            getattr(box, op)(*args)
+        if box.bounds is not None:
+            out.append(box.bounds)
+    return out
 
 
 def bar_thickness(font, glyph_name):
@@ -313,8 +236,7 @@ def bar_thickness(font, glyph_name):
     same thickness, so min-height is robust against contour order (and
     against a font whose '=' carries extra bits). `font` is a TTFont or a
     glyph set."""
-    heights = [b[3] - b[1] for b in _contour_bounds(
-        _record_contours(font, glyph_name))]
+    heights = [b[3] - b[1] for b in contour_boxes(font, glyph_name)]
     return min(heights) if heights else 0
 
 
@@ -436,14 +358,15 @@ def vmtx_origin(font, glyph):
     return cache[glyph]
 
 
-def vmtx_donor(font, fullwidth=True):
-    """Glyph whose vertical metrics the appended glyphs inherit. Resolve
-    once per call site — getBestCmap() per glyph was the hot spot."""
+def vmtx_donor(font):
+    """Glyph whose vertical metrics the appended glyphs inherit: 日, or
+    the first of a few others a face is sure to have (they all carry
+    Source Han Sans's one em and 880 origin). Resolve once per call
+    site — getBestCmap() per glyph was the hot spot."""
     if "vmtx" not in font:
         return None
     cmap = font.getBestCmap()
-    order = (0x65E5,) if fullwidth else (0xFF61, 0xFF9F, 0x0041, 0x65E5)
-    for cp in order:
+    for cp in (0x65E5, 0xFF61, 0xFF9F, 0x0041):
         g = cmap.get(cp)
         if g is not None and g in font["vmtx"].metrics:
             return g
@@ -509,7 +432,7 @@ def append_glyph(font, td, name, cs, fd_index, width, lsb=None, vdonor=None):
     font["maxp"].numGlyphs = len(order)
     return box
 
-def append_context(font, fullwidth=False):
+def append_context(font):
     """What appending a glyph next to 'A' needs: (top dict, cmap, FD
     index, that FD's Private dict, vmtx donor). The FD (and its
     nominalWidthX, which pen_width() offsets against) is the one 'A'
@@ -528,7 +451,7 @@ def append_context(font, fullwidth=False):
     cmap = font.getBestCmap()
     a = cmap[ord("A")]
     return (td, cmap, glyph_fd(font, td, a), glyph_private(font, td, a),
-            vmtx_donor(font, fullwidth))
+            vmtx_donor(font))
 
 
 def graft_outline(font, ctx, draws, width, simplify=True):
@@ -1416,20 +1339,6 @@ def _remap_single_pos(sub, gmap, gid, marks):
     return True
 
 
-def _pos_records(sub):
-    """Every PosLookupRecord a contextual positioning subtable holds,
-    whichever format it is in: format 3 keeps them on the subtable,
-    formats 1 and 2 under a rule set indexed by glyph or by class."""
-    yield from getattr(sub, "PosLookupRecord", None) or ()
-    for holder in ("ChainPosClassSet", "ChainPosRuleSet",
-                   "PosClassSet", "PosRuleSet"):
-        for rules in getattr(sub, holder, None) or ():
-            for attr in ("ChainPosClassRule", "ChainPosRule",
-                         "PosClassRule", "PosRule"):
-                for rule in getattr(rules, attr, None) or ():
-                    yield from getattr(rule, "PosLookupRecord", None) or ()
-
-
 def _remap_chain_pos(sub, gmap, gid, shift):
     """Rewrite a ChainContextPos subtable: coverages and class
     definitions in our glyph names, the lookups it calls at their new
@@ -1521,7 +1430,7 @@ def import_scp_marks(base, scp, default_map, marks):
         if kind != 8:
             continue
         for sub in subtables:
-            for rec in _pos_records(sub):
+            for rec in _lookup_records(sub):
                 wanted.setdefault(rec.LookupListIndex, set())
 
     def remap(lookup, shift):
@@ -1616,7 +1525,7 @@ def copy_line_metrics(base, latin):
     sliced the bottom off 111 codepoints, 101 of them box drawing — a
     terminal font's frames and rules breaking in exactly the renderers
     that read this field. 454 is what the Latin family already declares
-    for the same ink (build_latin.harmonize_win_metrics measures 1060 / 454), so
+    for the same ink (build_latin.LATIN_WIN_METRICS pins 1060 / 454), so
     this is the JP faces catching up to their own Latin layer rather
     than a new policy. Two codepoints stay outside it, the vertical kana
     repeat marks U+3031 and U+3032 at -549; covering them would cost
@@ -1816,7 +1725,7 @@ def stretch_arrows(font, added, fullwidth, slant=0.0):
     straight. `fullwidth` is {codepoint: the two-cell glyph}
     (fullwidth_forms()'s); the cmap is not touched. Returns
     {codepoint: new glyph name}."""
-    td, _cmap, fd_index, private, vdon = append_context(font, fullwidth=True)
+    td, _cmap, fd_index, private, vdon = append_context(font)
     gs = font.getGlyphSet()
     t = math.tan(math.radians(-slant))
     swapped = {}
@@ -1882,8 +1791,9 @@ def grid_step(adv, ink, cell):
     of them sit a little over the cell, so rounding up would cost every
     one a whole terminal column, and would make the same letter one
     cell in one weight and two in the next (its advance grows with the
-    weight). The widest still land on a full width here, which is why
-    narrow_letters runs first and puts the lot on the cell.
+    weight). The widest would land on a full width here, which is why
+    both Latin donors draw the whole block and no letter of it is
+    Source Han Sans's.
 
     The ink may overhang the step by up to a third of a cell — an italic
     always overhangs — but no further: a three-em dash (⸻, 2452 wide)
@@ -2007,8 +1917,8 @@ def fit_to_grid(font, cell, steps=None):
             continue
         # the family's answer first: a glyph can land on a step in one
         # weight and off it in the next, and both must end up the same
-        # ... and not one narrow_letters already put on the cell: the
-        # reference map still has the donor's own full width for it
+        # ... and not one pinned to the cell: the reference map still
+        # has the donor's own full width for it
         new = (None if name in built or name in pinned
                else (steps or {}).get(name))
         if new is None:
@@ -3353,11 +3263,6 @@ def add_gsub(font, added, alts, ligatures, variant_maps=None,
     sort_feature_list(gsub)
 
 
-# Greek and Coptic, and Cyrillic: the width policy says every character
-# Gengou covers is one cell (README, 幅の方針), and these two scripts
-# are in it. Source Code Pro Italic draws neither, so the italic faces
-# fall through to Source Han Sans's own proportional letters.
-LETTER_BLOCKS = ((0x0370, 0x04FF),)
 # the tightest side bearing the Latin donor gives a letter: Source Code
 # Pro's 'w' and 'W' carry 8 units either side of the 600 cell. A letter
 # condensed to fit the cell gets the same, rather than an ink-exact fit
@@ -3375,14 +3280,12 @@ def cell_fit(box, cell=CELL, bearing=LETTER_BEARING):
     the letters that need it are the only ones that get it. A glyph with
     no ink is centred trivially.
 
-    Two callers share this rule for the same two scripts, and it must
-    not drift apart between them: build_latin.add_missing_from_sans,
-    seating Source Sans's proportional Greek and Cyrillic in the italic
-    Latin faces, and narrow_letters, which would condense Source Han
-    Sans's on the JP side. narrow_letters finds nothing to do today --
-    both Latin donors now cover the whole block, so every codepoint in
-    it is grafted before that pass runs -- and stands by for an upstream
-    that stops covering it."""
+    build_latin.add_missing_from_sans applies it, seating Source Sans's
+    proportional Greek and Cyrillic in the italic Latin faces. (A
+    narrow_letters pass once stood by to condense Source Han Sans's own
+    on the JP side; both Latin donors cover the whole block, it found
+    nothing to do on any face, and verify.py holds every Greek and
+    Cyrillic letter to one cell, so it went in round 10.)"""
     if not box:
         return 1.0, 0
     ink = box[2] - box[0]
@@ -3440,73 +3343,6 @@ def notdef_to_cell(base, latin, cell):
     return True
 
 
-def narrow_letters(font, cell, blocks=LETTER_BLOCKS):
-    """Condense an alphabetic glyph Source Han Sans draws wider than the
-    cell into it, in place.
-
-    grid_step rounds to the NEAREST step, so the fourteen widest of these
-    (Ж М Ф Ш Щ Ъ Ы Ю ж ф ш щ ю Μ, drawn 755-1005) landed on a full
-    width: two terminal columns for scripts every terminal allots one
-    (Cyrillic and Greek are East_Asian_Width A), so an italic МОСКВА
-    painted its М over its О while the upright face of the same family
-    was right. The advance goes to the cell for all of them; the outline
-    is scaled only where its ink does not fit the cell less a bearing at
-    each side, and then only as far as that — condensing costs stroke
-    weight, and a letter squeezed beside letters that were not reads as
-    thin and small inside its own alphabet. It is what a monospace face
-    does with a wide letter, Source Code Pro's own M included, but only
-    the letters that need it. A glyph the Latin donor supplied is left
-    alone: it is already a cell wide by construction.
-
-    Runs before fit_to_grid, on Source Han Sans's own advance, and the
-    names it touches are recorded so that pass leaves them alone.
-    Modifies the glyph rather than copying it: each is reached from one
-    codepoint. One that is not is left alone and said so, since
-    condensing it would narrow whatever else shares it. Returns the
-    number condensed."""
-    cmap = font.getBestCmap()
-    hmtx = font["hmtx"]
-    gs = font.getGlyphSet()
-    cff = font["CFF "].cff
-    td = cff[cff.fontNames[0]]
-    wanted = {cp for lo, hi in blocks for cp in range(lo, hi + 1)}
-    built = state_of(font).built
-    room = cell - 2 * LETTER_BEARING
-    reached = {}
-    for cp, name in cmap.items():
-        reached.setdefault(name, set()).add(cp)
-    drawn = {}
-    for cp in sorted(wanted & set(cmap)):
-        name = cmap[cp]
-        adv = hmtx[name][0]
-        if adv <= 0 or name in drawn or name in built:
-            continue                      # the Latin donor's, already a cell
-        box = _bounds(gs, name)
-        ink = (box[2] - box[0]) if box else 0
-        if adv == cell and ink <= room:
-            continue
-        if not reached[name] <= wanted:
-            print(f"  skip U+{cp:04X}: its glyph also draws "
-                  f"{sorted(hex(c) for c in reached[name] - wanted)}")
-            continue
-        private = glyph_private(font, td, name)
-        # cell_fit scales ONLY where the ink does not fit, and then just
-        # enough. Scaling everything by cell/advance instead did that to
-        # 61 of these 115, taking Ж's stem from 83 units to 54 while Г
-        # kept 83. Twenty-eight are genuinely wider than the cell
-        sx, dx = cell_fit(box, cell, LETTER_BEARING)
-        pen = T2CharStringPen(pen_width(private, cell), gs)
-        gs[name].draw(TransformPen(pen, (sx, 0, 0, 1, dx, 0)))
-        drawn[name] = pen.getCharString(private=private)
-    for name, cs in drawn.items():
-        td.CharStrings[name] = cs
-        hmtx.metrics[name] = (cell, charstring_lsb(cs))
-    note_redrawn(font, drawn)
-    pinned = state_of(font).pinned_cell
-    pinned.update(drawn)
-    return len(drawn)
-
-
 def narrow_halfwidth(font, cell):
     """A character Unicode calls Halfwidth (East_Asian_Width H, taken
     from unicodedata so this and verify.py cannot disagree) is one cell,
@@ -3523,8 +3359,8 @@ def narrow_halfwidth(font, cell):
     advance and not the grid step that pass would give it, and before
     widen_fullwidth, which must not widen the copies. A glyph that
     already fits the cell is left for fit_to_grid to centre. A glyph
-    the Latin donor supplied is left alone altogether, as narrow_letters
-    leaves them: it is a cell wide by construction, and this pass's
+    the Latin donor supplied is left alone altogether: it is a cell
+    wide by construction, and this pass's
     ink-width test is the wrong question for it -- the won sign
     (U+20A9, Halfwidth) came from Source Code Pro Italic with 605 units
     of ink at Bold and 527-581 at the other weights, so Bold Italic
@@ -3536,7 +3372,7 @@ def narrow_halfwidth(font, cell):
     gs = font.getGlyphSet()
     cff = font["CFF "].cff
     td = cff[cff.fontNames[0]]
-    vdon = vmtx_donor(font, fullwidth=False)
+    vdon = vmtx_donor(font)
     built = state_of(font).built
     made, new = {}, {}
     for cp, name in sorted(cmap.items()):
@@ -4187,12 +4023,6 @@ def build_face(job):
     # condensed from Source Han Sans's own advance and not from the one
     # the grid pass would give it
     n_half = narrow_halfwidth(base, CELL)
-    # and any Greek or Cyrillic still standing on Source Han Sans's own
-    # glyph, for the same reason: on the donor's own advance, before the
-    # grid pass rounds the widest of them up to two columns. Both Latin
-    # donors cover the whole block now, so this reports 0 on every face;
-    # it stands by for an upstream that stops covering it
-    n_letters = narrow_letters(base, CELL)
     # then Source Han Sans's proportional leftovers onto the grid — every
     # glyph, so hwid's own 500-advance alternates and the locl forms no
     # codepoint reaches come along. It reads no features, so nothing
@@ -4263,7 +4093,7 @@ def build_face(job):
     write_face(base, out, state_of(base).redrawn)
     return (f"{face_label}{f' [{suffix}]' if suffix else ''}: "
             f"latin={n_scp} fwid={len(fullwidth)} vert={n_vert} "
-            f"fitted={n_fit} half={n_half} letters={n_letters} "
+            f"fitted={n_fit} half={n_half} "
             f"ligs={len(added)} ccmp={n_ccmp} locl={n_locl} mark={n_mark} loose={n_loose} "
             f"tall={n_tall} -> {out.name}")
 

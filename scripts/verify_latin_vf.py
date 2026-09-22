@@ -225,10 +225,10 @@ def main():
     check("Source Code Pro:" in n0 and "Monaspace:" in n0,
           "nameID 0 credits Source Code Pro and Monaspace")
 
-    # (the win metrics: GDI clips to these. Deleting
-    # build_latin.fit_win_metrics from the VF build left 984/273 against
-    # a 1060/-454 box — 76u of ascender and 181u of descender cut off —
-    # and every check here still passed)
+    # (the win metrics: GDI clips to these. Deleting the pin
+    # (build_latin.pin_win_metrics) from the VF build left 984/273
+    # against a 1060/-454 box — 76u of ascender and 181u of descender
+    # cut off — and every check here still passed)
     check_monospace_metadata(tf, check)
     hhea = tf["hhea"]
     # head / hhea extents must hold every instance, not just the default

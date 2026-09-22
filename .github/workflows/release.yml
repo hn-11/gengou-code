@@ -12,9 +12,10 @@
 # A family's weights per job — its Latin donors, its JP faces, their
 # Nerd Fonts patches and a share of the Gengou ones (patched while
 # the JP faces build), verified side by side and uploaded as an
-# artifact; the package job assembles dist/ from the artifacts,
-# harmonizes the Latin families' win metrics (a per-job build never sees
-# a family whole), zips and publishes.
+# artifact; the package job assembles dist/ from the artifacts (each
+# Latin face already carries its pinned win metrics from the job that
+# built it, so nothing here needs to touch or re-verify them), zips and
+# publishes.
 name: Release
 on:
   push:
@@ -137,17 +138,10 @@ jobs:
           pattern: faces-*
           path: dist
           merge-multiple: true
-      - run: python scripts/harmonize_latin.py
       - name: Verify the variable fonts against the static faces
         run: |
           python scripts/verify_latin_vf.py "dist/latin/Gengou[wght].otf"
           python scripts/verify_latin_vf.py "dist/latin/Gengou-Italic[wght].otf"
-      # every face harmonize_latin.py rewrote, not two of the twenty:
-      # this pass is the only one that sees a Latin family whole, and it
-      # writes new win metrics into all ten statics of each
-      - run: >-
-          python scripts/verify_many.py
-          'dist/latin/Gengou-*.otf' 'dist/nerd/latin/*.otf'
       - run: |
           cp LICENSE dist/LICENSE
           cp LICENSE dist/nerd/LICENSE

@@ -526,9 +526,6 @@ def build_style(style, env, out_dir):
                            f"masters, which varLib cannot merge")
     print(f"[{style}] letters given a fitted base anchor: "
           f"{loose[default_wght]} per master")
-    win_ascent = max(b["head"].yMax for b in bases.values())
-    win_descent = max(-b["head"].yMin for b in bases.values())
-
     # credits come off the default master's own (still SCP-inherited) name
     # table — finalize_vf_names below replaces it
     credits = build_latin.credits_from(
@@ -581,7 +578,6 @@ def build_style(style, env, out_dir):
     build.set_monospace_metadata(vf)
     build.set_latin_heights(vf)
     build_latin.use_typo_metrics(vf)
-    build_latin.fit_win_metrics(vf, ascent=win_ascent, descent=win_descent)
     vf["OS/2"].recalcUnicodeRanges(vf)
     build.recalc_codepage_range(vf)
     ps = finalize_vf_names(vf, italic, env.get("GENGOU_VERSION"), credits,
@@ -608,6 +604,11 @@ def build_style(style, env, out_dir):
     hhea.xMaxExtent = max(e[2] for e in ext)
     hhea.advanceWidthMax = max(adv for adv, _ in vf["hmtx"].metrics.values())
     vf.recalcBBoxes = False
+    # after head is set to the union above, not before: pin_win_metrics
+    # reads head.yMax / head.yMin, and the merged VF's own head (still
+    # the default master's, until the assignment above) is not that
+    # union
+    build_latin.pin_win_metrics(vf)
 
     out_path = Path(out_dir) / out_name
     out_path.parent.mkdir(parents=True, exist_ok=True)

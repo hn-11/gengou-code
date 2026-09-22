@@ -17,6 +17,7 @@ import anchors  # noqa: E402
 import build  # noqa: E402
 from build import FULLWIDTH, _unwrap, _unwrap_pos  # noqa: E402
 from verifylib import (  # noqa: E402
+    WIDE_IN_ONE_CELL,
     Checker,
     check_blank_glyphs,
     check_cells,
@@ -26,10 +27,12 @@ from verifylib import (  # noqa: E402
     check_font_matrix,
     check_gdef_classes,
     check_gdi_family_name,
+    check_heights,
     check_ligature_cells,
     check_line_metrics,
     check_mark_class_closure,
     check_marks,
+    check_monospace_metadata,
     check_name_composition,
     check_name_ids,
     check_pair_positioning,
@@ -39,9 +42,11 @@ from verifylib import (  # noqa: E402
     check_substitution_identity,
     check_tables,
     check_version_stamp,
+    check_zones,
     glyph_has_hint,
     hmtx_mismatches,
     ink_spill,
+    is_italic,
     make_shaper,
     weight_name,
 )
@@ -112,6 +117,11 @@ CCMP_PROBES = (("i", "\u0307"), ("j", "\u0301"), ("g", "\u0303"),
                ("\u00ea", "\u0306"), ("\u0457", "\u0301"))
 # the above-base accents an ascender has to clear: grave, acute,
 # circumflex, tilde, macron, breve, dot, diaeresis, caron, ring
+# (the same ten codepoints as verifylib.CLEAR_MARKS, but in a different
+# order: `stacked()` below walks them as ADJACENT cyclic pairs, and its
+# calibration against the donor -- "the donor stacks {want}" -- was
+# measured on exactly this ordering, so importing CLEAR_MARKS would
+# probe a different set of pairs under the same name)
 ACCENTS = "\u0300\u0301\u0302\u0303\u0304\u0306\u0307\u0308\u030c\u030a"
 
 # suffix in the base family name -> expected (half-width, full-width) advances
@@ -124,9 +134,9 @@ DEFAULT_METRICS = (600, 1000)
 # anything wider to offer under fwid (README, 幅の方針): six emoji only
 # Source Code Pro carries at 600, five Bopomofo final letters only Source
 # Han Sans carries at 600, and two Hangul tone marks Source Han Sans
-# draws 250 wide that fit_to_grid centres in the cell
-WIDE_AT_ONE_CELL = {0x2615, 0x302E, 0x302F, 0x31B4, 0x31B5, 0x31B6, 0x31B7,
-                    0x31BB, 0x1F3B5, 0x1F3B6, 0x1F4A9, 0x1F512, 0x1F916}
+# draws 250 wide that fit_to_grid centres in the cell -- verifylib's
+# WIDE_IN_ONE_CELL (imported above), which also carries the Nerd Fonts
+# ⚡ U+26A1 that a grafted NF face adds to `grafted` below anyway
 
 # the line metrics of an English terminal font: Source Code Pro's, hhea
 # and typo alike, with USE_TYPO_METRICS set (build.copy_line_metrics)
@@ -153,15 +163,6 @@ def subfamily_name(tf):
         if n:
             return n
     return ""
-
-
-def is_italic(tf):
-    sub = subfamily_name(tf)
-    if "Italic" in sub:
-        return True
-    if tf["post"].italicAngle:
-        return True
-    return bool(tf["head"].macStyle & 0x2)
 
 
 def expected_metrics(tf):
@@ -351,9 +352,8 @@ def main():
             off_policy[ch] = got
     check(not off_policy, f"width policy ({len(policy)} probes; off: {off_policy})")
 
-    # and every Greek and Cyrillic letter, whichever donor drew it (and
-    # build.narrow_letters, should one ever stand on Source Han Sans's
-    # own glyph): both scripts are East_Asian_Width A, so every terminal
+    # and every Greek and Cyrillic letter, whichever donor drew it:
+    # both scripts are East_Asian_Width A, so every terminal
     # allots them one column, and a full width would paint over the
     # next character
     greek_cyrillic = {cp: hmtx[g][0] for cp, g in cmap.items()
@@ -385,27 +385,32 @@ def main():
             grafted = set(symbols.getBestCmap())
     if wide_one_cell is not None:
         # a grafted icon may add to the set (every Nerd Fonts icon is one
-        # cell), never take from it
-        added = wide_one_cell - WIDE_AT_ONE_CELL - grafted
-        gone = WIDE_AT_ONE_CELL - wide_one_cell
+        # cell), never take from it. U+26A1 is the one member of
+        # WIDE_IN_ONE_CELL that reaches no face except through that
+        # graft (verifylib's own docstring: "the Nerd Fonts ⚡"), so a
+        # face with no NF_SYMBOLS graft never has it and must not be
+        # asked for it here -- only `added` reads the full shared set
+        added = wide_one_cell - WIDE_IN_ONE_CELL - grafted
+        core = WIDE_IN_ONE_CELL - {0x26A1}
+        gone = core - wide_one_cell
         check(not added and not gone,
-              f"{len(WIDE_AT_ONE_CELL)} East-Asian-Wide characters at one cell "
+              f"{len(WIDE_IN_ONE_CELL)} East-Asian-Wide characters at one cell "
               f"(the documented exception; added {sorted(hex(c) for c in added)}, "
               f"gone {sorted(hex(c) for c in gone)})")
 
     # and the other direction: Unicode's Halfwidth block is one column in
     # every terminal's width table, whatever the donor draws it at
-    # (build.narrow_halfwidth)
-    wide_half = sorted(cp for cp, g in cmap.items()
-                       if unicodedata.east_asian_width(chr(cp)) == "H"
-                       and hmtx[g][0] not in (0, exp_half))   # 0: a combining one
-    check(not wide_half,
-          f"every Halfwidth character is one cell "
-          f"({len(wide_half)} off: {[hex(c) for c in wide_half[:5]]})")
+    # (build.narrow_halfwidth) -- asked again, cmap-wide, by
+    # check_cells -> check_widths_by_class below (check_cells(tf, check,
+    # shape_infos, tf.getGlyphSet(), exp_half, exp_full))
 
     # nothing anywhere in the font is off the grid, cmap'd or not: a
     # feature on by default (locl, ccmp) can put a glyph on the page
-    # that no codepoint reaches (fit_to_grid)
+    # that no codepoint reaches (fit_to_grid). Not verifylib.check_grid
+    # (a single cell's whole multiples): the default (non-Term) family
+    # pairs a 600-unit half cell with a 1000-unit full one, and 1000 is
+    # no multiple of 600, so a glyph on the grid has to clear either
+    # modulus, not one fixed cell's
     off_grid = sorted(name for name, (adv, _lsb) in hmtx.metrics.items()
                       if adv > 0 and adv % exp_half and adv % exp_full)
     check(not off_grid,
@@ -647,17 +652,7 @@ def main():
     # face's own x-height and cap; swapping in Source Han Sans's
     # (540/733 against an actual 486/656) snaps every stem to the wrong
     # place at small sizes, and nothing read the Private dict
-    if hasattr(hint_td, "FDArray") and ord("H") in cmap:
-        fd = hint_td.FDSelect[tf.getGlyphID(cmap[ord("H")])]
-        private = hint_td.FDArray[fd].Private
-        blues = list(getattr(private, "BlueValues", ()) or ())
-        os2m = tf["OS/2"]
-        wanted = [os2m.sxHeight, os2m.sCapHeight]
-        near = [any(abs(b - v) <= 14 for b in blues) for v in wanted]
-        check(all(near) and getattr(private, "StdHW", 0),
-              f"the Latin FontDict's zones are this face's "
-              f"(BlueValues {blues}, x-height {os2m.sxHeight}, "
-              f"cap {os2m.sCapHeight}, StdHW {getattr(private, 'StdHW', None)})")
+    check_zones(tf, check, cmap)
 
 
     # the two-cell forms under fwid: the arrow redrawn from the ligature,
@@ -813,16 +808,13 @@ def main():
     from build import (
         MONA_STANDALONE,
         WEIGHT_CLASS,
-        _contour_bounds,
-        _record_contours,
         bar_thickness,
-        panose_weight,
+        contour_boxes,
     )
     glyph_order = tf.getGlyphOrder()
 
     def y_rows(gname):
-        return sorted((round(b[1]), round(b[3])) for b in
-                      _contour_bounds(_record_contours(tf, gname)))
+        return sorted((round(b[1]), round(b[3])) for b in contour_boxes(tf, gname))
 
     def lig_glyph(text):
         infos, _ = shape_infos(text, {"calt": True, "liga": True})
@@ -1174,14 +1166,8 @@ def main():
     # the lift is read through GDEF: 'mkmk' asks which marks it may
     # stack on by the mark attachment class in its lookup flag, and a
     # font that carries the lookup without the classes stacks nothing
-    classes = getattr(getattr(tf.get("GDEF"), "table", None),
-                      "MarkAttachClassDef", None)
-    filtered = [lk.LookupFlag >> 8 for lk in tf["GPOS"].table.LookupList.Lookup
-                if lk.LookupFlag >> 8]
-    named = sorted(set(classes.classDefs.values())) if classes else []
-    check(filtered and classes is not None and set(filtered) <= set(named),
-          f"GDEF names the mark classes GPOS filters on "
-          f"({sorted(set(filtered))}; GDEF has {named})")
+    # -- asked above, through check_marks -> verifylib.check_mark_features
+    # ("GDEF names the mark classes GPOS filters on")
 
     # a voicing mark over a HALF-width kana must not be drawn into it.
     # The mark is registered to the cell before it, and Term widens the
@@ -1689,9 +1675,7 @@ def main():
     # this weight, so its '=' bar must measure the VF's at that wght
     # (SCP_VF_U / SCP_VF_I when set), and the Japanese face is the Source
     # Han Sans weight whose '＝' bar matches it (build.FACES: within 4u)
-    weight = sub[:-len(" Italic")] if sub.endswith(" Italic") else sub
-    if weight == "Italic":   # "Regular Italic" collapses to "Italic"
-        weight = "Regular"
+    weight = weight_name(sub)   # "Regular Italic" collapses to "Italic"
     got = bar_thickness(tf, cmap[ord("=")]) if ord("=") in cmap else 0
     scp_path = os.environ.get("SCP_VF_I" if italic else "SCP_VF_U")
     if weight not in WEIGHT_CLASS:
@@ -1767,66 +1751,28 @@ def main():
     # Windows Terminal's picker and GDI's FIXED_PITCH filter read; Source
     # Han Sans's own 0/0 hid it there), xAvgCharWidth per OS/2 v3+ (mean of every
     # non-zero advance), x/cap height measured on the face's own glyphs.
-    fixed = tf["post"].isFixedPitch
-    ok = fixed == 1
-    check(ok, f"post.isFixedPitch == 1, got {fixed}")
-
-    panose = tf["OS/2"].panose
-    check(panose.bProportion == 9,
-          f"OS/2 PANOSE proportion == 9 (monospaced), got {panose.bProportion}")
-    want_pw = panose_weight(tf["OS/2"].usWeightClass)
-    check(panose.bWeight == want_pw,
-          f"OS/2 PANOSE weight {panose.bWeight} matches usWeightClass "
-          f"{tf['OS/2'].usWeightClass} (want {want_pw})")
-
-    from fontTools.misc.roundTools import otRound
-    widths = [adv for adv, _ in tf["hmtx"].metrics.values() if adv > 0]
-    avg_w = tf["OS/2"].xAvgCharWidth
-    want_avg = otRound(sum(widths) / len(widths))
-    ok = avg_w == want_avg
-    check(ok, f"OS/2.xAvgCharWidth is the mean non-zero advance ({avg_w} vs {want_avg})")
-
+    check_monospace_metadata(tf, check, win_covers_bbox=False)
     gs = tf.getGlyphSet()
-    for attr, ch in (("sxHeight", "x"), ("sCapHeight", "H")):
-        pen = BoundsPen(gs)
-        gs[cmap[ord(ch)]].draw(pen)
-        got, want = getattr(tf["OS/2"], attr), round(pen.bounds[3])
-        ok = got == want
-        check(ok, f"OS/2.{attr} == top of {ch!r} ({got} vs {want})")
+    check_heights(tf, check, gs, cmap)
 
-    # line-metrics sanity: hhea and OS/2 vertical metrics must be nonzero
-    # and internally consistent
-    hhea = tf["hhea"]
+    # the win metrics, pinned, not merely positive (copy_line_metrics,
+    # README 行の高さ). They are the GDI line height as much as a
+    # clipping bound, and this family's ink reaches 1808/-1048 —
+    # covering it would give a 2856u line, more than twice the 1257u
+    # every renderer that honours USE_TYPO_METRICS uses. The descent
+    # does cover the Latin layer's box drawing (-400) and shade blocks
+    # (-454); docs/gengou-plan.md carries the measurement and the two
+    # codepoints left outside
     os2 = tf["OS/2"]
-    ok = hhea.ascent > 0 and hhea.descent < 0
-    check(ok, f"hhea ascent/descent sane "
-              f"(ascent={hhea.ascent}, descent={hhea.descent})")
-
-    ok = os2.sTypoAscender > 0 and os2.sTypoDescender < 0
-    check(ok, f"OS/2 typo metrics sane "
-              f"(typoAsc={os2.sTypoAscender}, typoDesc={os2.sTypoDescender})")
-    # pinned, not merely positive (copy_line_metrics, README 行の高さ).
-    # They are the GDI line height as much as a clipping bound, and this
-    # family's ink reaches 1808/-1048 — covering it would give a 2856u
-    # line, more than twice the 1257u every renderer that honours
-    # USE_TYPO_METRICS uses. The descent does cover the Latin layer's
-    # box drawing (-400) and shade blocks (-454); docs/gengou-plan.md
-    # carries the measurement and the two codepoints left outside
     check((os2.usWinAscent, os2.usWinDescent) == WIN_METRICS,
           f"win metrics are the pinned {WIN_METRICS}, got "
           f"({os2.usWinAscent}, {os2.usWinDescent})")
     # a terminal gives a codepoint no font in the fallback chain covers
     # one column, and Source Han Sans's .notdef is full width -- 1000
     # here, 1200 in Term -- so one such character moved the rest of the
-    # line. build.notdef_to_cell replaces it with the Latin donor's.
-    # Both Latin verifiers ask this; the JP faces are the only place the
-    # defect ever existed, and the generic grid check cannot see it (a
-    # full width is a whole number of cells)
-    notdef = tf.getGlyphOrder()[0]
-    half, _ = expected_metrics(tf)
-    check(tf["hmtx"].metrics[notdef][0] == half,
-          f".notdef is one cell ({half}), got "
-          f"{tf['hmtx'].metrics[notdef][0]}")
+    # line. build.notdef_to_cell replaces it with the Latin donor's --
+    # asked above, through check_cells -> verifylib.check_widths_by_class,
+    # which holds .notdef to exp_half by the same policy
 
     if "Nerd Font" in fam:
         import nerdpatch

@@ -274,7 +274,7 @@ def credits_from(*donors):
 def use_typo_metrics(font):
     """typo == hhea (SCP ships hhea 984/-273 but typo 750/-250, which only
     agree if nobody reads typo) and USE_TYPO_METRICS on. The win metrics
-    are fit_win_metrics'/harmonize_win_metrics' business."""
+    are pin_win_metrics' business."""
     hhea = font["hhea"]
     os2 = font["OS/2"]
     os2.sTypoAscender = hhea.ascent
@@ -283,27 +283,34 @@ def use_typo_metrics(font):
     os2.fsSelection |= 0x80
 
 
-def fit_win_metrics(font, ascent=0, descent=0):
+# (usWinAscent, usWinDescent) for every Latin face, static and variable
+# alike: pinned rather than fit per face or harmonized after the fact,
+# the way build.WIN_METRICS is pinned for the JP faces. Every face this
+# family has ever built draws the same two extremes -- U+2593 SHADE at
+# head.yMin -454 and Powerline U+E0A0 at head.yMax 1060 -- at every
+# weight, so a single pair already covers the whole family; measuring
+# it per face and then reconciling the faces against each other (as
+# harmonize_latin.py used to, once a whole family was assembled) never
+# once changed the answer. If an upstream update ever draws past this
+# box, pin_win_metrics below fails the build that first sees it, naming
+# the glyph extents, rather than silently widening the GDI clip (and
+# the line height every legacy GDI path derives from it).
+LATIN_WIN_METRICS = (1060, 454)
+
+
+def pin_win_metrics(font):
+    """Set OS/2 usWinAscent/usWinDescent to the pinned LATIN_WIN_METRICS.
+    Raises when the font's own glyph extents (head.yMax / -head.yMin)
+    have grown past the pinned pair -- verify.py's "win metrics cover
+    the bbox" check would fail too, but the build should say so first,
+    with the extents that broke it."""
     head = font["head"]
-    os2 = font["OS/2"]
-    os2.usWinAscent = max(os2.usWinAscent, head.yMax, ascent)
-    os2.usWinDescent = max(os2.usWinDescent, -head.yMin, descent)
-
-
-def harmonize_win_metrics(paths):
-    """One usWinAscent/Descent pair over `paths`: the max over every one
-    of them. main() passes the whole family present in the output
-    directory, not only the faces this run built, so a filtered run (CI
-    builds Regular and Light Italic in separate steps) cannot leave the
-    family split between two pairs."""
-    fonts = {p: TTFont(p) for p in paths}
-    ascent = max(f["OS/2"].usWinAscent for f in fonts.values())
-    descent = max(f["OS/2"].usWinDescent for f in fonts.values())
-    for p, f in fonts.items():
-        if (f["OS/2"].usWinAscent, f["OS/2"].usWinDescent) != (ascent, descent):
-            fit_win_metrics(f, ascent, descent)
-            f.save(p)
-    return ascent, descent
+    ascent, descent = LATIN_WIN_METRICS
+    if head.yMax > ascent or -head.yMin > descent:
+        raise RuntimeError(
+            f"glyph extents {head.yMax}/{-head.yMin} exceed the pinned "
+            f"LATIN_WIN_METRICS {LATIN_WIN_METRICS}")
+    font["OS/2"].usWinAscent, font["OS/2"].usWinDescent = LATIN_WIN_METRICS
 
 
 def build_face(job):
@@ -372,7 +379,7 @@ def build_face(job):
     build.add_stat(base, weight, italic)
     build.prune_orphan_names(base)
     build.update_bbox(base)
-    fit_win_metrics(base)
+    pin_win_metrics(base)
     out = Path(out_dir) / f"{ps}.otf"
     # every glyph: fontTools' CFF2 instancing leaves the SCP outlines
     # without their hints (the VF's charstrings carry them inside blended
@@ -451,30 +458,13 @@ def main():
         sys.exit(f"no face matches {only!r}")
     if only is None:
         # a full build must not leave faces from an older roster for
-        # harmonize_win_metrics / nerdpatch.py to pick up (same as build.py)
+        # nerdpatch.py to pick up (same as build.py)
         for stale in static_faces(out_dir, PS_FAMILY):
             stale.unlink()
-    try:
-        # a weight's two styles side by side, not one after the other
-        build.run_faces(jobs, build_face, pool_from=2,
-                        label=lambda job: f"{job[0]}{' Italic' if job[1] else ''}",
-                        on_result=lambda job, msg: print(msg))
-    finally:
-        # over every face of the family in the output directory (see
-        # harmonize_win_metrics). A face a failed worker left half
-        # written would raise here and replace run_faces' own report of
-        # which faces failed, so it is swallowed only while that report
-        # is already on its way out
-        in_flight = sys.exc_info()[1]                  # run_faces' own report?
-        try:
-            paths = static_faces(out_dir, PS_FAMILY)
-            if paths:
-                a, d = harmonize_win_metrics(paths)
-                print(f"win metrics {a}/{d} over {len(paths)} faces")
-        except Exception as exc:                       # noqa: BLE001
-            if in_flight is None:
-                raise                                  # this pass IS the failure
-            print(f"win metrics skipped: {exc!r}")
+    # a weight's two styles side by side, not one after the other
+    build.run_faces(jobs, build_face, pool_from=2,
+                    label=lambda job: f"{job[0]}{' Italic' if job[1] else ''}",
+                    on_result=lambda job, msg: print(msg))
 
 
 if __name__ == "__main__":

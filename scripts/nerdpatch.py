@@ -108,7 +108,7 @@ from fontTools.ttLib.tables._c_m_a_p import CmapSubtable
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build  # noqa: E402
 from build import _bounds, _unwrap_pos  # noqa: E402
-from build_latin import fit_win_metrics  # noqa: E402
+from build_latin import pin_win_metrics  # noqa: E402
 from verifylib import static_faces  # noqa: E402
 
 DIST = build.ROOT / "dist"
@@ -582,8 +582,6 @@ def patch_face(src, out_dir, symbols_path):
     # use areas: the declared ranges are how a fallback picker finds them
     font["OS/2"].recalcUnicodeRanges(font)
     ps = rename(font)
-    os2, head = font["OS/2"], font["head"]
-    covered = (os2.usWinAscent >= head.yMax and os2.usWinDescent >= -head.yMin)
     # widened by what the graft wrote rather than measured over all
     # 30,000 glyphs (6.2 s of a JP face, two thirds of it spent on the
     # 19,500 this pass never touched). False when one of the redrawn
@@ -591,11 +589,12 @@ def patch_face(src, out_dir, symbols_path):
     # nothing for it but to measure
     if not update_bbox_after(font, written, dropped):
         build.update_bbox(font)
-    if covered:
-        # the source's win metrics covered its box (Gengou's policy):
-        # keep covering it with the icons in. The JP faces keep Source
-        # Han Sans's values, which never covered its outliers
-        fit_win_metrics(font)
+    if out_dir == LATIN_OUT:
+        # LATIN_WIN_METRICS already covers the icons (their extremes
+        # are -279..991), so pinning it here holds after the graft too.
+        # The JP faces keep Source Han Sans's own pinned pair (build.py,
+        # not this one) untouched
+        pin_win_metrics(font)
     out = Path(out_dir) / f"{ps}.otf"
     # the icons carry no hints (font-patcher's did not either); only the
     # Powerline glyphs redrawn over Source Code Pro's own had hints to

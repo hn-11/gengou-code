@@ -1222,8 +1222,16 @@ def _seat(font):
 
 
 def _cells(font, full=None):
-    return _gate(lambda f, chk: verifylib.check_cells(f, chk, _shaper_for(f), f.getGlyphSet(),
+    """check_cells minus check_letter_glyphs's two messages: every
+    _mark_font fixture below maps only a handful of ASCII codepoints
+    (whichever the anchors/cmap_extra name), so the full-repertoire
+    check fails on all of them by construction. That check has its own
+    tests (test_check_letter_glyphs_... and
+    test_check_cells_also_runs_check_letter_glyphs below); this helper
+    stays about the width/placement gates the callers below mutate."""
+    out = _gate(lambda f, chk: verifylib.check_cells(f, chk, _shaper_for(f), f.getGlyphSet(),
                                                      600, full), font)
+    return [m for m in out if "ASCII letter" not in m and m != ".notdef draws"]
 
 
 def test_check_marks_seat_holds_each_letter_to_its_kind():
@@ -1312,6 +1320,19 @@ def test_check_glyph_placement_holds_a_letter_to_its_cells_centre_and_baseline()
     td.CharStrings["b2"] = pen.getCharString(private=td.Private)
     up = _cells(font)
     assert up and "baseline" in up[0]
+
+
+def test_check_cells_also_runs_check_letter_glyphs():
+    """check_cells wires check_letter_glyphs in after check_glyph_placement
+    (it used to be defined and unit-tested but reached from no driver),
+    so a font whose cmap never reaches most of ASCII -- every _mark_font
+    fixture above, which cmaps only the handful of codepoints a test
+    names -- fails through the one entry point every driver calls."""
+    anchors, heights = _ruled()
+    font = _mark_font(anchors, heights, width=500)
+    off = _gate(lambda f, chk: verifylib.check_cells(f, chk, _shaper_for(f), f.getGlyphSet(),
+                                                     600, None), font)
+    assert any("ASCII letter" in m for m in off)
 
 
 def test_round_9_bands_are_the_measured_ones():
@@ -1507,4 +1528,4 @@ def test_check_family_cmap_wants_every_sibling_codepoint():
     off = _gate(lambda f, chk: verifylib.check_family_cmap(f, chk, sibling), mine)
     assert off and "U+0063" in off[0]
     assert _gate(lambda f, chk: verifylib.check_family_cmap(f, chk, mine), sibling) == []
-    assert verifylib._MARK_DX_SPREAD == 110
+    assert verifylib._MARK_DX_SPREAD == 150

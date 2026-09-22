@@ -188,8 +188,8 @@ SHCJ は上流から外れた。
   （`USE_TYPO_METRICS` を読む DirectWrite / CoreText / HarfBuzz は 1257u の
   行を使うので影響せず、GDI 系だけ下端が切れうる状態）。454 まで下げて
   罫線とブロック要素を覆い、GDI の行は 1448 → 1614u（+11%）。欧文
-  ファミリーが同じインクに対して declare している値（`harmonize_latin` の
-  実測 1060 / 454）と揃えた。454 の外に残るのは U+3031 / U+3032
+  ファミリーが同じインクに対して declare している値（`build_latin.LATIN_WIN_METRICS`
+  の 1060 / 454）と揃えた。454 の外に残るのは U+3031 / U+3032
   （縦書きの繰り返し記号、−549）の 2 字だけ。この面のインクは 1808 /
   −1048 まであり、bbox を全部覆うと GDI の行が 2856u（typo の 2.3 倍）に
   なるため上は Source Han Sans の宣言値 1160 のままにした（Source Han Sans
@@ -503,7 +503,7 @@ SHCJ は上流から外れた。
   持つ文字にさらに結合文字を重ねると、その分だけ上に伸びる。`ĺ` + U+0344 は
   y 1284 まで達し、`usWinAscent` 1060 を 224 超える。欧文 1 面あたり、
   セル内に収まる組のうち宣言値の外に出るものが 29 → 3,087 組（上）・
-  108 → 983 組（下）。`update_bbox` / `fit_win_metrics` はアウトラインしか
+  108 → 983 組（下）。`update_bbox` / `pin_win_metrics` はアウトラインしか
   見ないので win は広がらない。**据え置き。** 積み重ねの性質上避けられず、
   宣言値を覆うところまで広げると GDI の行が伸びる（それ自体が別の記録済み
   項目）。置かずに 1 セル右へ飛ばすほうが悪い
@@ -672,7 +672,6 @@ scripts/build.py           # SHS + dist/latin
                             #   -> dist/GengouJP*.otf（JP / JP Term の 20 面）
 scripts/nerdpatch.py       # Nerd Fonts の記号フォントを接ぎ木
                             #   -> dist/nerd{,/latin}/*NFM-*.otf
-scripts/harmonize_latin.py # 欧文ファミリーの win メトリクスを面をまたいで揃える
 scripts/verify.py          # JP 面の回帰テスト
 scripts/verify_latin.py    # 欧文静的面の回帰テスト
 scripts/verify_latin_vf.py # 可変フォントの回帰テスト
@@ -717,6 +716,27 @@ TTFont に後付けしていた属性（`wght` / `master` / `erode` /
 関数も `_renumber_lookups` と `_lookup_records` の 2 つから後者だけに。
 verifier では `check_one_cell` を `check_widths_by_class` に畳んだ
 （Monaspace の曖昧幅記号と `.notdef` は「方針で 1 セル」の分類）。
+
+round 10 でさらに廃止・統合したもの（いずれも出力バイト同一）: 欧文
+ファミリーの win メトリクスを面ごとに測って家族で揃える仕組み
+（`fit_win_metrics` / `harmonize_win_metrics` / `scripts/harmonize_latin.py`
+とそのテスト、release の再検証ステップ、nerdpatch の再フィット）は、JP と
+同じく定数 `build_latin.LATIN_WIN_METRICS = (1060, 454)` を書く
+`pin_win_metrics` 1 つに（全ウェイトで同じ 2 グリフ U+2593 と U+E0A0 が
+極値。超えたらビルドが止まる）。`=` のバーを測る 105 行の輪郭極値ソルバー
+（`_contour_bounds` 以下 5 関数）は、moveTo で分けた輪郭ごとに BoundsPen を
+かける 15 行の `contour_boxes` に（全ドナー 9,000 グリフで一致）。
+`narrow_letters`（SHS のギリシャ・キリルを 1 セルに詰める。両ドナーが
+ブロック全体を描くので全面で 0 件、verifier が「ギリシャ・キリルは
+1 セル」を見る）は削除。`_pos_records` は `_lookup_records` に、
+`vmtx_donor` の `fullwidth` 引数は削除（どちらのドナーも 1000 / 880）。
+verify.py が verifylib と二重に持っていた検査（`is_italic`、typo == hhea、
+アライメントゾーン、GDEF のクラス、ウェイト名、等幅メタデータ、
+`.notdef`・半角の 1 セル、1 セルの Wide 集合）は共有版の呼び出しに
+（`check_monospace_metadata` の「win がボックスを覆う」は欧文の方針で、
+JP はピン留めなので引数で外す）。定義だけで呼ばれていなかった
+`check_letter_glyphs` は `check_cells` から全面で走る。CI の
+`lint_workflows.py` ステップはテストと重複していたので削除。
 
 build.py に残る処理（`build_face` の順）: SHS の読み込み、Gengou からの
 グリフ・GSUB・GPOS の取り込み（`graft_halfwidth` / `latin_ligatures` /

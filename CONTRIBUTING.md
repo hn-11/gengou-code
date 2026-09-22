@@ -96,7 +96,7 @@ FontMatrix・行メトリクス・name・家族の cmap、JP の縦組みで、�
 Fonts の接ぎ木も検証）、可変フォントと Gengou への接ぎ木を 1 ジョブ、
 並列に組んで 1 分程度。リリース
 `release.yml` はファミリー × ウェイト群の 6 ジョブのあと `package`
-ジョブが `harmonize_latin.py` → zip →
+ジョブが zip →
 GitHub Release を作り、5 分程度。所要時間を測るだけなら Run workflow の dry-run に
 チェックを入れるか、コミットメッセージに `[release-dry]` と書いたコミットを
 ブランチに push する。どちらもビルドと梱包まで走って Release は作らない）。複数の面をまとめて検証するときは

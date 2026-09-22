@@ -411,18 +411,22 @@ def test_recalc_codepage_range_sets_and_clears_sampled_bits():
 
 # --- per-contour bounds (the '=' bar probe) ------------------------------
 
-def test_contour_bounds_ignores_curve_control_points():
-    # a cubic that bulges only slightly: control points sit at y=100 but the
-    # curve itself never reaches beyond y=75
-    segs = [("curveTo", [(0, 100), (100, 100), (100, 0)], (0, 0))]
-    (x0, y0, x1, y1), = build._contour_bounds([segs])
-    assert (x0, y0, x1) == (0, 0, 100)
-    assert y1 == pytest.approx(75.0)
-
-
-def test_contour_bounds_open_contour_kept():
-    segs = [("lineTo", [(10, 20)], (0, 0))]
-    assert build._contour_bounds([segs]) == [(0, 0, 10, 20)]
+def test_contour_boxes_reads_the_curve_not_its_control_points():
+    """A cubic that bulges only slightly: the control points sit at
+    y=100 but the curve itself never reaches beyond y=75; an open
+    contour is a box too."""
+    class Glyph:
+        def draw(self, pen):
+            pen.moveTo((0, 0))
+            pen.curveTo((0, 100), (100, 100), (100, 0))
+            pen.closePath()
+            pen.moveTo((200, 0))
+            pen.lineTo((210, 20))
+            pen.endPath()
+    boxes = build.contour_boxes({"g": Glyph()}, "g")
+    assert len(boxes) == 2
+    assert boxes[0][:3] == (0, 0, 100) and boxes[0][3] == pytest.approx(75.0)
+    assert boxes[1] == (200, 0, 210, 20)
 
 
 # --- erosion for the Monaspace wght floor ---------------------------------
@@ -1105,78 +1109,6 @@ def test_notdef_to_cell_leaves_a_donor_without_one_alone():
     latin.setGlyphOrder([g for g in latin.getGlyphOrder() if g != ".notdef"])
     assert build.notdef_to_cell(font, latin, 600) is False
     assert font["hmtx"].metrics[".notdef"][0] == 1000
-
-
-def test_narrow_letters_puts_a_wide_cyrillic_on_the_cell():
-    """Source Code Pro Italic has no Cyrillic, so the italic faces keep
-    Source Han Sans's own, and grid_step rounded the widest of them up to
-    a full width — two terminal columns for a script every terminal
-    allots one. The advance goes to the cell for all of them; only the
-    outline whose ink does not fit is scaled."""
-    font = _cff_font_with_widths({"zhe": 918, "a": 602, "kanji": 1000})
-    font["cmap"].tables[0].cmap = {0x416: "zhe", 0x430: "a", 0x4E00: "kanji"}
-    gs = font.getGlyphSet()
-
-    def width(g):
-        pen = BoundsPen(gs)
-        gs[g].draw(pen)
-        return pen.bounds[2] - pen.bounds[0]
-
-    assert build.narrow_letters(font, 600) == 2
-    hmtx = font["hmtx"].metrics
-    assert hmtx["zhe"][0] == hmtx["a"][0] == 600
-    assert hmtx["kanji"][0] == 1000                  # not a letter
-    gs = font.getGlyphSet()
-    # 100 units of ink fit the cell, so neither is scaled: condensing
-    # costs stroke weight, and only a letter that overflows should pay it
-    assert width("zhe") == pytest.approx(100, abs=1)
-    assert width("a") == pytest.approx(100, abs=1)
-    # and fit_to_grid leaves them there, though the reference says 1000
-    assert build.fit_to_grid(font, 600, steps={"zhe": 1000, "a": 1000}) == 0
-    assert font["hmtx"].metrics["zhe"][0] == 600
-
-
-def test_narrow_letters_condenses_a_letter_to_the_cell_less_a_bearing():
-    """Only as far as it must: to the cell less the bearing the Latin
-    donor gives its own widest letters, so a condensed letter neither
-    abuts its neighbours nor loses more stroke weight than it has to."""
-    font = _cff_font_with_widths({"wide": 918})
-    cff = font["CFF "].cff
-    td = cff[cff.fontNames[0]]
-    pen = T2CharStringPen(918, None)
-    pen.moveTo((9, 0))            # 900 of ink in a 918 advance
-    pen.lineTo((909, 0))
-    pen.lineTo((909, 100))
-    pen.closePath()
-    td.CharStrings["wide"] = pen.getCharString(private=td.Private)
-    font["cmap"].tables[0].cmap = {0x416: "wide"}
-    assert build.narrow_letters(font, 600) == 1
-    assert font["hmtx"].metrics["wide"][0] == 600
-    pen = BoundsPen(font.getGlyphSet())
-    font.getGlyphSet()["wide"].draw(pen)
-    x0, x1 = pen.bounds[0], pen.bounds[2]
-    assert x1 - x0 == pytest.approx(600 - 2 * build.LETTER_BEARING, abs=1)
-    assert x0 + x1 == pytest.approx(600, abs=1)        # centred in the cell
-    assert x0 == pytest.approx(build.LETTER_BEARING, abs=1)
-
-
-def test_narrow_letters_leaves_the_latin_donor_s_own_glyphs_alone():
-    """In the upright faces Greek and Cyrillic come from Source Code Pro
-    and are a cell wide already; two of them (Җ җ) overhang the advance
-    by design, and squeezing those would make the JP face disagree with
-    its own Latin sibling."""
-    font = _cff_font_with_widths({"grafted": 600})
-    font["cmap"].tables[0].cmap = {0x496: "grafted"}
-    build.state_of(font).built = {"grafted"}
-    assert build.narrow_letters(font, 600) == 0
-
-
-def test_narrow_letters_leaves_a_shared_glyph_alone():
-    """In place, so condensing would narrow whatever else reaches it."""
-    font = _cff_font_with_widths({"shared": 918})
-    font["cmap"].tables[0].cmap = {0x416: "shared", 0x4E00: "shared"}
-    assert build.narrow_letters(font, 600) == 0
-    assert font["hmtx"].metrics["shared"][0] == 918
 
 
 def test_narrow_halfwidth_leaves_the_latin_donors_glyph_alone():

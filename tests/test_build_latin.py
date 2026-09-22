@@ -4,16 +4,15 @@ build_latin.py no longer cuts the Latin layer out of the 35 faces; it
 assembles Gengou from the Source Code Pro and Monaspace variable
 fonts directly (see the module docstring). These tests cover the pure
 logic left behind: zone-order repair on a CFF FDArray, the typo/win
-metrics helpers, per-family win-metric harmonization, donor credits,
-the SCP stylistic-set remap, and the two weight profiles / constants.
+metrics helpers, the pinned Latin win metrics, donor credits, the SCP
+stylistic-set remap, and the two weight profiles / constants.
 """
 
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 
-from fontTools.pens.ttGlyphPen import TTGlyphPen
-from fontTools.ttLib import TTFont
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -127,95 +126,47 @@ def test_use_typo_metrics_matches_hhea_and_sets_fsselection_bit7():
     assert os2.fsSelection & 0x40   # untouched bits survive
 
 
-def test_fit_win_metrics_takes_the_max_of_existing_bbox_and_given():
-    font = _metrics_font(win_ascent=500, win_descent=100)
-    font["head"].yMax = 700
-    font["head"].yMin = -50
-
-    build_latin.fit_win_metrics(font, ascent=600, descent=80)
-
-    os2 = font["OS/2"]
-    assert os2.usWinAscent == 700     # bbox (700) beats existing (500) and given (600)
-    assert os2.usWinDescent == 100    # existing (100) beats bbox (50) and given (80)
-
-
-def test_fit_win_metrics_given_value_wins_when_it_is_largest():
+def test_pin_win_metrics_sets_the_pinned_pair():
     font = _metrics_font(win_ascent=10, win_descent=10)
     font["head"].yMax = 20
     font["head"].yMin = -20
 
-    build_latin.fit_win_metrics(font, ascent=999, descent=888)
+    build_latin.pin_win_metrics(font)
 
     os2 = font["OS/2"]
-    assert os2.usWinAscent == 999
-    assert os2.usWinDescent == 888
+    assert (os2.usWinAscent, os2.usWinDescent) == build_latin.LATIN_WIN_METRICS
 
 
-def test_fit_win_metrics_defaults_are_zero():
-    font = _metrics_font(win_ascent=50, win_descent=50)
-    font["head"].yMax = 10
-    font["head"].yMin = -5
+def test_pin_win_metrics_overwrites_whatever_the_face_already_declared():
+    # a face that came in already covering more than the pin: pinning
+    # brings it down rather than taking the max, the way fit_win_metrics
+    # used to
+    font = _metrics_font(win_ascent=2000, win_descent=2000)
+    font["head"].yMax = 100
+    font["head"].yMin = -100
 
-    build_latin.fit_win_metrics(font)   # ascent=0, descent=0
+    build_latin.pin_win_metrics(font)
 
     os2 = font["OS/2"]
-    assert os2.usWinAscent == 50
-    assert os2.usWinDescent == 50
+    assert (os2.usWinAscent, os2.usWinDescent) == build_latin.LATIN_WIN_METRICS
 
 
-# --- harmonize_win_metrics ------------------------------------------------
+def test_pin_win_metrics_raises_naming_the_extents_when_ascent_is_exceeded():
+    font = _metrics_font(win_ascent=0, win_descent=0)
+    font["head"].yMax = 1061
+    font["head"].yMin = -100
 
-def _glyph_with_bbox(ymin, ymax):
-    pen = TTGlyphPen(None)
-    pen.moveTo((0, ymin))
-    pen.lineTo((100, ymin))
-    pen.lineTo((100, ymax))
-    pen.lineTo((0, ymax))
-    pen.closePath()
-    return pen.glyph()
+    with pytest.raises(RuntimeError, match="1061"):
+        build_latin.pin_win_metrics(font)
 
 
-def _write_metrics_font(path, win_ascent, win_descent, ymin, ymax):
-    font = make_font([".notdef", "a"], {ord("a"): "a"}, {"a": 600},
-                     glyphs={"a": _glyph_with_bbox(ymin, ymax)},
-                     os2={"usWinAscent": win_ascent, "usWinDescent": win_descent})
-    font.save(path)
+def test_pin_win_metrics_raises_naming_the_extents_when_descent_is_exceeded():
+    font = _metrics_font(win_ascent=0, win_descent=0)
+    font["head"].yMax = 100
+    font["head"].yMin = -455
 
-
-def test_harmonize_win_metrics_gives_every_face_the_same_max(tmp_path):
-    p1 = tmp_path / "a.ttf"
-    p2 = tmp_path / "b.ttf"
-    # p1 has the bigger usWinAscent, p2 the bigger usWinDescent; neither
-    # face's own bbox exceeds the eventual target, so the numbers stay
-    # exactly the plain max() of the two OS/2 tables
-    _write_metrics_font(p1, win_ascent=900, win_descent=200,
-                        ymin=-50, ymax=700)
-    _write_metrics_font(p2, win_ascent=1200, win_descent=150,
-                        ymin=-80, ymax=1100)
-
-    ascent, descent = build_latin.harmonize_win_metrics([str(p1), str(p2)])
-
-    assert (ascent, descent) == (1200, 200)
-
-    f1, f2 = TTFont(str(p1)), TTFont(str(p2))
-    assert (f1["OS/2"].usWinAscent, f1["OS/2"].usWinDescent) == (1200, 200)
-    assert (f2["OS/2"].usWinAscent, f2["OS/2"].usWinDescent) == (1200, 200)
-
-
-def test_harmonize_win_metrics_noop_when_already_matched(tmp_path):
-    p1 = tmp_path / "a.ttf"
-    p2 = tmp_path / "b.ttf"
-    _write_metrics_font(p1, win_ascent=1000, win_descent=200,
-                        ymin=-10, ymax=10)
-    _write_metrics_font(p2, win_ascent=1000, win_descent=200,
-                        ymin=-10, ymax=10)
-    before = p1.stat().st_mtime, p2.stat().st_mtime
-
-    ascent, descent = build_latin.harmonize_win_metrics([str(p1), str(p2)])
-
-    assert (ascent, descent) == (1000, 200)
-    # both faces already matched: neither file gets rewritten
-    assert (p1.stat().st_mtime, p2.stat().st_mtime) == before
+    with pytest.raises(RuntimeError, match="455"):
+        build_latin.pin_win_metrics(font)
 
 
 # --- credits_from ---------------------------------------------------------
