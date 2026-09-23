@@ -27,10 +27,9 @@ jobs:
       - run: pip install -r requirements.txt ruff pytest
       - run: ruff check scripts/ tests/
       - run: python -m pytest tests/ -q
-  # one weight and style per job, BOTH families: the Latin donor
-  # (build_latin.py, an intermediate: it is not verified or shipped as
-  # itself), then the JP face and its Term sibling on top (build.py),
-  # then both verified side by side; the Regular
+  # one weight and style per job, BOTH families: the JP face and its
+  # Term sibling (build.py, which builds their Latin donor first, in
+  # memory), then both verified side by side; the Regular
   # Upright job also grafts the Nerd Fonts symbols into the JP faces
   # (nerdpatch.py) and verifies that.
   #
@@ -55,9 +54,6 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/setup-build
-      # the Latin layer (Gengou Code) is assembled first
-      # from the VFs; build.py grafts it into Source Han Sans
-      - run: python scripts/build_latin.py "${{ matrix.face }}"
       - run: python scripts/build.py "${{ matrix.face }} base Term"
       - if: matrix.nerd
         run: python scripts/nerdpatch.py dist/*.otf
@@ -78,7 +74,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/setup-build
       - run: python scripts/build_latin_vf.py
-      - run: python scripts/nerdpatch.py dist/latin/*\[wght\].otf
+      - run: python scripts/nerdpatch.py dist/latin/*.otf
       - run: >-
           python scripts/verify.py
           "dist/latin/GengouCode[wght].otf" "dist/latin/GengouCode-Italic[wght].otf"

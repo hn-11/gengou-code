@@ -11,11 +11,10 @@ Source Sans 3 / Monaspace）を CI 上で合成して作られています。ソ
 pip install -r requirements.txt
 ```
 
-ビルドは2段階です。まず `scripts/build_latin.py` が Source Code Pro VF・
-Monaspace VF・Source Sans 3 VF Italic（斜体のギリシャ・キリル）から
-欧文レイヤー Gengou Code を `dist/latin` に組み、
-次に `scripts/build.py` がそれを Source Han Sans JP に接ぎ木します
-（`build.py` は両段階の共通ヘルパーと JP の接ぎ木、`vfsource.py` は
+`scripts/build.py` が、Source Code Pro VF・Monaspace VF・Source Sans 3 VF
+Italic（斜体のギリシャ・キリル）から欧文レイヤー Gengou Code をメモリ上で
+組み（`build_latin.py`。ファイルには書き出しません）、それを Source Han
+Sans JP に接ぎ木します（`build.py` は共通ヘルパーと JP の接ぎ木、`vfsource.py` は
 VF のインスタンス化と Monaspace の合成、`anchors.py` は欧文レイヤーが
 足す mark アンカー、`nerdpatch.py` は Nerd Fonts の接ぎ木、`verifylib.py`
 は 2 本の verifier（`verify_jp.py`・`verify_latin_vf.py`）が共有する検査）。
@@ -23,14 +22,13 @@ VF のインスタンス化と Monaspace の合成、`anchors.py` は欧文レ�
 
 | 変数 | 読むスクリプト | 内容 | 入手元 |
 |------|------|------|--------|
-| `SCP_VF_U` | `build_latin.py` / `build_latin_vf.py` | `SourceCodeVF-Upright.otf` へのパス | [Source Code Pro Releases](https://github.com/adobe-fonts/source-code-pro/releases) |
+| `SCP_VF_U` | `build.py` / `build_latin_vf.py` | `SourceCodeVF-Upright.otf` へのパス | [Source Code Pro Releases](https://github.com/adobe-fonts/source-code-pro/releases) |
 | `SCP_VF_I` | 同上 | `SourceCodeVF-Italic.otf` へのパス | 同上 |
 | `SS_VF_I` | 同上 | `SourceSans3VF-Italic.otf` へのパス（斜体のギリシャ・キリル） | [Source Sans Releases](https://github.com/adobe-fonts/source-sans/releases) |
 | `MONA_VF` | 同上 | Monaspace の可変フォント（例: `Monaspace Neon Var.ttf`） | [Monaspace Releases](https://github.com/githubnext/monaspace/releases) |
 | `SHS_DIR` | `build.py` | `SourceHanSansJP-<Weight>.otf` が入ったディレクトリ | [Source Han Sans Releases](https://github.com/adobe-fonts/source-han-sans/releases) |
 | `NF_SYMBOLS` | `nerdpatch.py` | `SymbolsNerdFontMono-Regular.ttf` へのパス | [Nerd Fonts Releases](https://github.com/ryanoasis/nerd-fonts/releases) の `NerdFontsSymbolsOnly.zip` |
-| `LATIN_DIR` | `build.py`（任意、既定 `dist/latin`） | `build_latin.py` の出力先 | — |
-| `GENGOU_VERSION` | ビルド 3 本と verify 3 本（任意） | リリース版番号（例 `6.0.0`）。未設定なら上流のリビジョンを name に残す | — |
+| `GENGOU_VERSION` | `build.py` / `build_latin_vf.py` と verify 3 本（任意） | リリース版番号（例 `6.0.0`）。未設定なら上流のリビジョンを name に残す | — |
 | `GENGOU_SKIP_AUTOHINT` | `build.py` / `nerdpatch.py`（任意） | `1` でヒント付けをスキップ（試しビルドの時短用） | — |
 
 取得元の URL パターンや正確なタグは `.github/actions/setup-build/action.yml`
@@ -47,8 +45,6 @@ PR を出して自分でマージし、そのタグで `release.yml` を叩き�
 ```sh
 # export しておく（`VAR=... \` の行継続は直後の 1 コマンドにしか効かない）
 export SCP_VF_U=... SCP_VF_I=... SS_VF_I=... MONA_VF=... SHS_DIR=...
-python scripts/build_latin.py           # dist/latin/GengouCode-*.otf（10 面）
-python scripts/build_latin.py "Regular" # Regular 系のみ
 python scripts/build.py                 # 両ファミリー
 python scripts/build.py "Regular"       # Regular 系のみ（動作確認用、速い）
 python scripts/build.py "Light Upright Term"   # 1 面だけ
@@ -57,14 +53,13 @@ python scripts/build.py "Light Upright Term"   # 1 面だけ
 フィルタは語の組み合わせで、面がすべての語に合うものを組みます:
 ウェイト名（`Light` `Regular` `Medium` `SemiBold` `Bold`）、書体
 （`Upright` / `Italic`）、変種（`Term` / 変種なしの基本ファミリーは
-`base`。`build_latin.py` は 1 ファミリーなので `base` 以外の変種語には
-何も合いません）。同じ種類の語を複数書けばそのいずれか
+`base`）。同じ種類の語を複数書けばそのいずれか
 （`"Light Regular base"` は基本ファミリーの Light と Regular の 4 面）。
 `"Regular"` は Regular と Regular Italic の全ファミリー、`"Light Italic"`
 はファミリーごとに 1 面、`""`（空文字列）だけなら基本ファミリーです。
 
 可変フォント版の Gengou Code は `python scripts/build_latin_vf.py`
-（`build_latin.py` と同じ環境変数）で `dist/latin/GengouCode[wght].otf` /
+（`SCP_VF_U` / `SCP_VF_I` / `SS_VF_I` / `MONA_VF`）で `dist/latin/GengouCode[wght].otf` /
 `GengouCode-Italic[wght].otf` を作ります。
 
 ## テスト・検証

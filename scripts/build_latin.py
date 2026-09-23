@@ -1,14 +1,15 @@
-#!/usr/bin/env python3
-"""Gengou Code: the Latin-only font, assembled straight from the variable
-fonts — Source Code Pro VF as the base, Monaspace VF for the punctuation,
-the ligatures and the one-cell arrows.
+"""Gengou Code's Latin layer, assembled straight from the variable fonts —
+Source Code Pro VF as the base, Monaspace VF for the punctuation, the
+ligatures and the one-cell arrows. A library, not a command: the
+recipe is shared by the two things built from it.
 
-This is the Latin layer every Gengou Code JP family carries, built once
-and on its own (docs/gengou-plan.md): build.py grafts these faces
-into Source Han Sans. They are that donor and nothing else -- Gengou
-Code itself ships as the variable fonts (build_latin_vf.py), which are
-built from the same donors (donor_sources) and the same graft. Each
-face is one of Source Code Pro's own named instances — Light 300 /
+- donor_face: one static face per weight and style, in memory, which
+  build.py builds first and grafts into Source Han Sans. It is that
+  donor and nothing else, and is never written out.
+- build_latin_vf.py: Gengou Code itself, the variable fonts, built from
+  the same donors (donor_sources) and the same graft.
+
+Each static face is one of Source Code Pro's own named instances — Light 300 /
 Regular 400 / Medium 500 / SemiBold 600 / Bold 700 (build.WEIGHT_CLASS),
 instanced at exactly that wght, no bar search — with Monaspace's wght
 matched to the instance's '=' bar. The Japanese faces follow the
@@ -25,14 +26,6 @@ baseline-aligned on '='; the ligature-paired symbols ← → ↑ ↓ ⇐ ⇒ ⇔
 ss01-ss08, cv99. The face is saved as it stands, unhinted and not
 subroutinized: build.py redraws every glyph it takes and hints them
 against the JP face's own zones.
-
-Usage:
-  python scripts/build_latin.py [FILTER]   # build.py's weight / style words
-                                           # ("base" is accepted and means
-                                           # nothing here: one family)
-Env (all required):
-  SCP_VF_U, SCP_VF_I, SS_VF_I, MONA_VF
-Env (optional): GENGOU_VERSION
 """
 
 import io
@@ -47,7 +40,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import anchors  # noqa: E402
 import build  # noqa: E402
 import vfsource  # noqa: E402
-from verifylib import static_faces  # noqa: E402
 
 CELL = build.CELL   # 600
 MONA_K = CELL / build.MONA_CELL
@@ -341,15 +333,17 @@ def donor_sources(env, italic):
     return (scp, mona, scp_source(env["SS_VF_I"]), upright_cmap(env["SCP_VF_U"]))
 
 
-def build_face(job):
-    """One static face: the Latin donor build.py grafts into Source Han
-    Sans, and nothing else -- it ships as nothing, so it carries only
-    what build.py reads off it (outlines, advances, GSUB/GPOS/GDEF, the
-    line metrics, italic angle and the donors' credits). The JP face
-    redraws every glyph it takes from here and hints them itself, and
-    recomputes the OS/2 ranges, heights, STAT and extents on its own
-    result, so none of that is done here."""
-    weight, italic, env, out_dir = job
+def donor_face(job):
+    """One static face, as the bytes of an OTF: the Latin donor build.py
+    grafts into Source Han Sans, and nothing else -- it is never written
+    out and ships as nothing, so it carries only what build.py reads off
+    it (outlines, advances, GSUB/GPOS/GDEF, the line metrics, italic
+    angle and the donors' credits). The JP face redraws every glyph it
+    takes from here and hints them itself, and recomputes the OS/2
+    ranges, heights, STAT and extents on its own result, so none of
+    that is done here. `job` is (weight, italic, env); returns (the
+    bytes, a one-line report)."""
+    weight, italic, env = job
     label = f"{weight}{' Italic' if italic else ''}"
     wght = build.WEIGHT_CLASS[weight]
     scp_src, mona_src, sans_src, upright = donor_sources(env, italic)
@@ -402,13 +396,13 @@ def build_face(job):
             model = scp_source(env["SCP_VF_U"]).at(wght)
         print(f"  stacked-accent anchors lifted as the upright's: "
               f"{anchors.mirror_stack_lift(base, model)}")
-    out = Path(out_dir) / f"{ps}.otf"
     # a plain save: build.py redraws and hints what it takes from here,
     # so hints or subroutines written now would only be thrown away
     base.recalcBBoxes = False
-    base.save(out)
-    return (f"{label}: wght {wght} bar {target:.1f} ligs={len(added)} "
-            f"glyphs={base['maxp'].numGlyphs} -> {out.name}")
+    buf = io.BytesIO()
+    base.save(buf)
+    return buf.getvalue(), (f"{label}: wght {wght} bar {target:.1f} ligs={len(added)} "
+                            f"glyphs={base['maxp'].numGlyphs} -> {ps}")
 
 
 def graft(base, mona, sans=None, upright=None):
@@ -459,34 +453,3 @@ def _copy_instance(scp):
 # ship italic faces silently missing two scripts, which is the state
 # this donor was added to end
 VF_ENV = ("SCP_VF_U", "SCP_VF_I", "SS_VF_I", "MONA_VF")
-
-
-def main():
-    only = sys.argv[1] if len(sys.argv) > 1 else None
-    env = build.env_paths(dict.fromkeys(VF_ENV))
-    out_dir = build.ROOT / "dist" / "latin"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    jobs = []
-    for weight, _ in build.FACES:
-        for italic in (False, True):
-            label = f"{weight}{' Italic' if italic else ''}"
-            # one family: the "base" variant word is the only one that
-            # matches (a Term face has no Latin of its own)
-            if not build.face_matches(only, weight, label, ""):
-                continue
-            jobs.append((weight, italic, env, str(out_dir)))
-    if not jobs:
-        sys.exit(f"no face matches {only!r}")
-    if only is None:
-        # a full build must not leave faces from an older roster for
-        # nerdpatch.py to pick up (same as build.py)
-        for stale in static_faces(out_dir, PS_FAMILY):
-            stale.unlink()
-    # a weight's two styles side by side, not one after the other
-    build.run_faces(jobs, build_face, pool_from=2,
-                    label=lambda job: f"{job[0]}{' Italic' if job[1] else ''}",
-                    on_result=lambda job, msg: print(msg))
-
-
-if __name__ == "__main__":
-    main()

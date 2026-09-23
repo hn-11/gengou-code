@@ -370,8 +370,7 @@ def test_sources_for_paths_names_and_everything(tmp_path, monkeypatch):
     latin.mkdir(parents=True)
     for name in ("GengouCodeJP-Light.otf", "GengouCodeJPTerm-Light.otf"):
         (dist / name).write_bytes(b"")
-    for name in ("GengouCode-Light.otf", "GengouCode-LightItalic.otf",
-                 "GengouCode[wght].otf", "GengouCode-Italic[wght].otf"):
+    for name in ("GengouCode[wght].otf", "GengouCode-Italic[wght].otf"):
         (latin / name).write_bytes(b"")
     monkeypatch.setattr(nerdpatch, "DIST", dist)
     monkeypatch.setattr(nerdpatch, "LATIN_DIR", latin)
@@ -379,8 +378,7 @@ def test_sources_for_paths_names_and_everything(tmp_path, monkeypatch):
     monkeypatch.setattr(nerdpatch, "LATIN_OUT", dist / "nerd" / "latin")
 
     everything = nerdpatch.sources_for([])
-    # the variable fonts, which GengouCode-NerdFont.zip ships, and not
-    # the statics, which are the JP faces' donors
+    # the variable fonts, which GengouCode-NerdFont.zip ships
     assert [p.name for p, _ in everything] == [
         "GengouCodeJP-Light.otf", "GengouCodeJPTerm-Light.otf",
         "GengouCode-Italic[wght].otf", "GengouCode[wght].otf"]
@@ -393,11 +391,6 @@ def test_sources_for_paths_names_and_everything(tmp_path, monkeypatch):
     assert [(p.name, out.name) for p, out in explicit] == [
         ("GengouCode[wght].otf", "latin"), ("GengouCodeJP-Light.otf", "nerd")]
     assert nerdpatch.sources_for(["nothing-like-this"]) == []
-    # a static Gengou Code face is the JP faces' donor, not a face that
-    # ships: named explicitly it is refused, not patched into a
-    # GengouCodeNF-Light.otf nothing verifies or packages
-    with pytest.raises(SystemExit, match="not a face that ships"):
-        nerdpatch.sources_for([str(latin / "GengouCode-Light.otf")])
 
 
 def test_sources_for_resolves_a_relative_path_before_routing(tmp_path, monkeypatch):

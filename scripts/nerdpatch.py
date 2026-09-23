@@ -635,9 +635,7 @@ def sources_for(args):
     face in dist/ goes to dist/nerd/, a Gengou Code face in dist/latin/ to
     dist/nerd/latin/), a name substring, or — with no argument — every
     face in dist/ (non-recursive) plus the two variable Gengou Code
-    fonts, which are what GengouCode-NerdFont.zip ships. A static Gengou
-    Code face in dist/latin/ is refused, named or not: it is the JP
-    faces' donor and ships as nothing, patched or otherwise.
+    fonts, which are what GengouCode-NerdFont.zip ships.
 
     An argument that names a file (a path, or anything ending .otf) and
     is not one is an error, not a silently dropped face: half a family
@@ -651,11 +649,6 @@ def sources_for(args):
     if named and words:
         sys.exit(f"pass faces or name parts, not both: {' '.join(args)}")
     if named:
-        statics = [a for a in named if Path(a).resolve().parent == LATIN_DIR.resolve()
-                   and not Path(a).name.endswith("[wght].otf")]
-        if statics:
-            sys.exit(f"not a face that ships: {' '.join(statics)} "
-                     f"(Gengou Code ships as its variable fonts)")
         return [(p.resolve(), LATIN_OUT if p.resolve().parent == LATIN_DIR.resolve() else OUT)
                 for p in map(Path, named)]
     sources = [(p, OUT) for p in sorted(DIST.glob("*.otf"))]

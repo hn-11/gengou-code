@@ -5,10 +5,10 @@ output printed whole once its run ends. Exits non-zero if any run did.
 Which gates a font gets is the font's own answer, not its path: a font
 with an fvar is the variable Gengou Code (verify_latin_vf.py), and a font
 that draws あ is a JP face (verify_jp.py). Those are the two kinds that
-ship. Anything else -- the static Latin faces build_latin.py makes as
-the JP faces' donor and the variable fonts' reference -- is refused: a
-build intermediate is held to account through what it becomes, and a
-gate set for it would be maintained for nobody. The rule used to be "latin
+ship. Anything else is refused: the Latin donor faces are a build
+intermediate held to account through the JP faces they become (they
+are no longer written out at all), and a gate set for anything else
+would be maintained for nobody. The rule used to be "latin
 somewhere in the path", which made dist/nerd/latin/ work by accident
 and would have handed a JP face dropped in that directory the Latin
 gates; and a variable font swept up by a pattern was dropped rather
@@ -74,9 +74,8 @@ def main():
         sys.exit(f"no such font: {' '.join(missing)}")
     if not paths:
         sys.exit("usage: verify.py FONT [FONT ...] (nothing matched)")
-    # refused, not skipped: a pattern that sweeps up a static Latin face
-    # was written for a gate set that no longer exists, and passing over
-    # it silently would read as that face having been checked
+    # refused, not skipped: passing over a font nobody verifies would
+    # read as that font having been checked
     unshipped = [p for p in paths if gates_for(p) is None]
     if unshipped:
         sys.exit(f"not a face that ships (a JP face or a variable font): "

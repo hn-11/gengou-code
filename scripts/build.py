@@ -2,9 +2,9 @@
 """Assemble Gengou Code JP from live upstreams.
 
 Gengou Code JP is an English terminal font with Japanese: the Latin layer
-is Gengou Code (dist/latin, scripts/build_latin.py — Source Code Pro's
-named instances with Monaspace's punctuation and ligatures), taken as
-it is, and Source Han Sans JP supplies everything Gengou Code does not
+is Gengou Code (scripts/build_latin.py — Source Code Pro's named
+instances with Monaspace's punctuation and ligatures, built here first,
+in memory, one per weight and style the faces need), taken as it is, and Source Han Sans JP supplies everything Gengou Code does not
 have. Source Code Pro sets the terms: the 600 cell, the stroke weight of
 each named weight (the Japanese face is the Source Han Sans weight whose
 strokes match), and the line metrics (984 / -273: the line pitch of an
@@ -49,11 +49,10 @@ Usage:
   full build never leaves faces from an older roster behind. A filtered run
   never deletes anything.
 
-Env (SHS_DIR required, the rest default):
+Env (all required):
   SHS_DIR   = dir with SourceHanSansJP-<Weight>.otf
-  LATIN_DIR = dist/latin (default) — scripts/build_latin.py's output; it
-              needs SCP_VF_U / SCP_VF_I / SS_VF_I / MONA_VF and must run
-              first
+  SCP_VF_U, SCP_VF_I, SS_VF_I, MONA_VF = the Latin layer's variable fonts
+              (build_latin.donor_face)
 
 Env (optional):
   GENGOU_VERSION = our own release version, e.g. "6.0.0" — stamps
@@ -67,6 +66,7 @@ import concurrent.futures
 import contextlib
 import copy
 import dataclasses
+import io
 import json
 import logging
 import math
@@ -123,14 +123,9 @@ WEIGHT_CLASS = {"Light": 300, "Regular": 400, "Medium": 500,
                 "SemiBold": 600, "Bold": 700}
 
 
-# The Latin donor faces scripts/build_latin.py writes under LATIN_DIR:
-# (family name, PostScript family). The released Gengou Code, exactly.
+# (family name, PostScript family) of the Latin layer: the released
+# Gengou Code, exactly.
 LATIN_FAMILY = ("Gengou Code", "GengouCode")
-
-
-def latin_face_path(latin_dir, weight, italic):
-    _, ps_family = LATIN_FAMILY
-    return Path(latin_dir) / f"{ps_family}-{weight}{'Italic' if italic else ''}.otf"
 
 
 # {family suffix: widen the full-width advances to two cells}
@@ -516,7 +511,7 @@ def set_cmap(font, mapping, add_new=False):
 
 def graft_halfwidth(base, latin):
     """Give `base` (Source Han Sans JP) its half-width layer: every
-    codepoint the Latin donor (Gengou Code, dist/latin) has gets the
+    codepoint the Latin donor (Gengou Code, build_latin.donor_face) has gets the
     donor's one-cell glyph, at the donor's own size — Latin, Greek,
     Cyrillic, box drawing, the ligature-paired arrows and operators,
     everything an English terminal font sets in one cell. The glyph
@@ -1591,7 +1586,7 @@ def recalc_codepage_range(font):
 MONA_AMBIGUOUS = "←→↑↓⇐⇒⇔≠≤≥…"
 
 
-def latin_ligatures(font, latin, latin_path, alts, ligatures):
+def latin_ligatures(font, latin, latin_bytes, alts, ligatures):
     """Append the ligature glyphs by copying them out of the Latin donor:
     each sequence is shaped there (HarfBuzz, calt+liga) to find its glyph,
     and again with cv99 for the alternate design. Drawn at CELL per input
@@ -1607,7 +1602,7 @@ def latin_ligatures(font, latin, latin_path, alts, ligatures):
     td, cmap, fd_index, private, vdon = ctx
     lgs = latin.getGlyphSet()
     order = latin.getGlyphOrder()
-    hbfont = hb.Font(hb.Face(hb.Blob.from_file_path(str(latin_path))))
+    hbfont = hb.Font(hb.Face(hb.Blob(latin_bytes)))
 
     def shaped(text, feats):
         buf = hb.Buffer()
@@ -3667,12 +3662,9 @@ def write_face(font, out, hint_glyphs):
 def build_face(job):
     """Build one output face. Plain data in and out, so it can run in a
     pool worker (unfiltered builds) as well as in-process."""
-    suffix, term, weight, shs_file, italic, env, out_dir, steps = job
+    suffix, term, weight, shs_file, italic, env, out_dir, steps, latin_bytes = job
     face_label = f"{weight}{' Italic' if italic else ''}"
-    latin_path = latin_face_path(env["LATIN_DIR"], weight, italic)
-    if not latin_path.exists():
-        raise FileNotFoundError(f"{latin_path}: run scripts/build_latin.py first")
-    latin = TTFont(latin_path)
+    latin = TTFont(io.BytesIO(latin_bytes))
     base = TTFont(Path(env["SHS_DIR"]) / shs_file)
     n_scp, replaced, default_map, marks = graft_halfwidth(base, latin)
     # before any grid pass, so the Term widening never sees a full-width
@@ -3690,7 +3682,7 @@ def build_face(job):
     # the outlines' real slant lives in the Latin donor (SCP Italic's)
     ref_angle = (latin["post"].italicAngle or -12.0) if italic else None
     alts = {}
-    added = latin_ligatures(base, latin, latin_path, alts, LIGATURES)
+    added = latin_ligatures(base, latin, latin_bytes, alts, LIGATURES)
     add_gsub(base, added, alts, LIGATURES, variant_maps, variant_names)
     # after add_gsub, which appends to the same LookupList: the copied
     # ccmp lookups' nested lookup indices are absolute, so whatever
@@ -3770,9 +3762,10 @@ def build_face(job):
 
 
 def main():
+    import build_latin  # imports this module: not at the top
+
     only = sys.argv[1] if len(sys.argv) > 1 else None
-    env = env_paths({"SHS_DIR": None,
-                     "LATIN_DIR": str(ROOT / "dist" / "latin")})
+    env = env_paths(dict.fromkeys(("SHS_DIR",) + build_latin.VF_ENV))
     out_dir = ROOT / "dist"
     out_dir.mkdir(exist_ok=True)
 
@@ -3801,7 +3794,19 @@ def main():
     # only when there is a face to build
     steps = reference_steps(Path(env["SHS_DIR"]) / REFERENCE_SHS, CELL,
                             Path(env["SHS_DIR"]) / INK_SHS)
-    jobs = [tuple(job) + (steps,) for job in jobs]
+    # the Latin donors first, one per weight and style the faces need
+    # (a JP face and its Term sibling share one), as bytes: they ship as
+    # nothing and are never written out
+    donors = {}
+
+    def keep(job, result):
+        donors[job[:2]], report = result
+        print(report)
+    run_faces([(w, i, env) for w, i in sorted({(job[2], job[4]) for job in jobs})],
+              build_latin.donor_face, pool_from=2,
+              label=lambda d: f"Latin {d[0]}{' Italic' if d[1] else ''}",
+              on_result=keep)
+    jobs = [tuple(job) + (steps, donors[job[2], job[4]]) for job in jobs]
     run_faces(jobs, build_face,
               label=lambda job: f"{job[2]} [{job[0] or 'base'}]",
               on_result=lambda job, msg: print(msg))

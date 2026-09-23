@@ -5,10 +5,7 @@
 # Gengou Code ships as the two variable fonts; the JP families ship as
 # statics, one zip per family (and per family for their Nerd Fonts
 # patches: a download is the family a user installs). No collections:
-# the release unit is the file a user installs. The static Gengou Code
-# faces build_latin.py writes are the JP faces' donors and ship as
-# nothing: each job builds the ones its own JP faces need and leaves
-# them behind.
+# the release unit is the file a user installs.
 #
 # Each faces job builds, patches and verifies what it uploads; the
 # package job assembles dist/ from the artifacts, zips and publishes.
@@ -38,8 +35,8 @@ env:
   # the runs that publish: a v* tag, or a dispatch without dry-run
   PUBLISH: ${{ github.event_name == 'push' && github.ref_type == 'tag' || github.event_name == 'workflow_dispatch' && !inputs.dry-run }}
 jobs:
-  # a style's weights per job (six jobs): their Latin donors, their JP
-  # faces in both families and the Nerd Fonts grafts. The two Bold jobs
+  # a style's weights per job (six jobs): their JP faces in both
+  # families and the Nerd Fonts grafts. The two Bold jobs
   # (two faces each, the lightest) also build one variable font each and
   # graft the symbols into it
   faces:
@@ -69,7 +66,6 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/setup-build
       - run: echo "GENGOU_VERSION=${GENGOU_VERSION_TAG#v}" >> "$GITHUB_ENV"
-      - run: python scripts/build_latin.py "${{ matrix.weights }} ${{ matrix.style }}"
       - name: Build the JP faces and graft the symbols into them
         run: |
           python scripts/build.py "${{ matrix.weights }} ${{ matrix.style }} base Term"
@@ -78,19 +74,16 @@ jobs:
         name: Build the variable font and graft the symbols into it
         run: |
           python scripts/build_latin_vf.py ${{ matrix.variable }}
-          python scripts/nerdpatch.py dist/latin/*\[wght\].otf
+          python scripts/nerdpatch.py dist/latin/*.otf
       # everything this job ships: the JP faces, their Nerd Fonts grafts
-      # and, in the Bold jobs, the variable font and its graft (the
-      # Latin donors ship as nothing and are verified as nothing)
-      - run: python scripts/verify.py 'dist/*.otf' 'dist/nerd/*.otf'
-      - if: matrix.variable
-        run: python scripts/verify.py 'dist/latin/*wght*.otf' 'dist/nerd/latin/*wght*.otf'
+      # and, in the Bold jobs, the variable font and its graft
+      - run: python scripts/verify.py 'dist/*.otf' 'dist/nerd/*.otf' 'dist/latin/*.otf' 'dist/nerd/latin/*.otf'
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: faces-${{ matrix.style }}-${{ strategy.job-index }}
           path: |
             dist/*.otf
-            dist/latin/*wght*.otf
+            dist/latin/*.otf
             dist/nerd/*.otf
             dist/nerd/latin/*.otf
           if-no-files-found: error
