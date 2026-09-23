@@ -352,7 +352,7 @@ def graft_symbols(font, symbols):
         name = build.alloc_glyph_name(font)
         written[name] = build.append_glyph(
             font, td, name, pen.getCharString(private=private),
-            fd_index, cell, None, vdon)
+            fd_index, cell, vdon)
         new[cp] = name
     if kept != set(TEXT_OVER_ICON):
         raise ValueError(

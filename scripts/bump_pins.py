@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Move the upstream pins in .github/actions/fetch-upstreams/action.yml forward.
+"""Move the upstream pins in .github/actions/setup-build/action.yml forward.
 
 Asks GitHub for each upstream's latest release and rewrites the pin block with
 those tags. Prints a markdown summary of what moved on stdout and writes
@@ -31,7 +31,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-ACTION = Path(".github/actions/fetch-upstreams/action.yml")
+ACTION = Path(".github/actions/setup-build/action.yml")
 
 # The lowest version this code may be released as. The weekly sync cuts
 # a PATCH bump of the newest tag, which is right for an upstream refresh

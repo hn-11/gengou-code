@@ -232,3 +232,14 @@ def test_main_names_a_missing_pin_before_it_reads_one(monkeypatch, tmp_path):
                         else TAGS[repo])
     with pytest.raises(SystemExit, match=r"missing pins: \['SCP_VF_ZIP'\]"):
         bump_pins.main()
+
+
+def test_the_pins_live_where_bump_pins_rewrites_them():
+    # the weekly sync rewrites this one file; moved or renamed without
+    # bump_pins.ACTION following it, every sync would stop at "no pins
+    # found" -- and the setup action that fetches the upstreams would
+    # keep building the old ones
+    action = ROOT / bump_pins.ACTION
+    assert action.is_file(), action
+    found = {m["key"] for m in bump_pins.PIN_RE.finditer(action.read_text())}
+    assert set(bump_pins.PINS) <= found, sorted(set(bump_pins.PINS) - found)

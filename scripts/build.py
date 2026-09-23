@@ -388,7 +388,7 @@ def note_redrawn(font, names):
     state_of(font).redrawn.update(names)
 
 
-def append_glyph(font, td, name, cs, fd_index, width, lsb=None, vdonor=None):
+def append_glyph(font, td, name, cs, fd_index, width, vdonor=None):
     """Append one built glyph. Returns its outline box (None if blank),
     which it measures anyway for the side bearing — update_bbox_after's
     caller wants it and should not pay for it twice.
@@ -413,8 +413,7 @@ def append_glyph(font, td, name, cs, fd_index, width, lsb=None, vdonor=None):
     else:                        # a plain, non-indexed CFF (the fixtures)
         td.CharStrings[name] = cs
     box = charstring_box(cs)
-    font["hmtx"].metrics[name] = (
-        width, (otRound(box[0]) if box else 0) if lsb is None else lsb)
+    font["hmtx"].metrics[name] = (width, otRound(box[0]) if box else 0)
     if "vmtx" in font and vdonor is not None:
         # the donor's vertical ORIGIN, not its top side bearing. tsb is
         # measured down from each glyph's OWN yMax, so copying it moves
@@ -476,7 +475,7 @@ def graft_outline(font, ctx, draws, width, simplify=True):
     draw_clean(draws, pen, simplify=simplify)
     name = alloc_glyph_name(font)
     append_glyph(font, td, name, pen.getCharString(private=private),
-                 fd_index, width, None, vdon)
+                 fd_index, width, vdon)
     return name
 
 
@@ -3144,7 +3143,7 @@ def narrow_halfwidth(font, cell):
             gs[name].draw(TransformPen(pen, (sx, 0, 0, 1, dx, 0)))
             made[name] = alloc_glyph_name(font)
             append_glyph(font, td, made[name], pen.getCharString(private=private),
-                         fd, cell, None, vdon)
+                         fd, cell, vdon)
             # append_glyph records it in both sets; take it out of the
             # Latin-FontDict one only, so add_latin_fd leaves this copy
             # in the FontDict it came from. It stays in `built`, which is
@@ -3213,7 +3212,7 @@ def glyph_bounds(font):
     return bounds
 
 
-def update_bbox(font, bounds=None):
+def update_bbox(font):
     """Recompute the font's extents from its outlines, in one pass:
     the CFF FontBBox, head's box and the hhea / vhea extents
     (advanceWidthMax, minLeftSideBearing, minRightSideBearing, xMaxExtent
@@ -3224,11 +3223,8 @@ def update_bbox(font, bounds=None):
     TTFont.recalcBBoxes off (fontTools would otherwise draw every glyph
     three more times per save — 7 s of a JP face's 0.3 s save — and
     recompile them all), so this is the one place the extents are set.
-    Returns the box, or None for a font with no ink. `bounds` — a
-    glyph_bounds() result for this font — skips the pass when the caller
-    already has one."""
-    if bounds is None:
-        bounds = glyph_bounds(font)
+    Returns the box, or None for a font with no ink."""
+    bounds = glyph_bounds(font)
     if not bounds:
         return None
     xmin = min(b[0] for b in bounds.values())

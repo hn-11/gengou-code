@@ -3,6 +3,10 @@ verify_latin.py, verify_latin_vf.py and golden.py, which verify.py
 dispatches to): a HarfBuzz shaper, the ok/FAIL check tally, the texts
 every driver shapes, the CFF hint probe, and the static-face listing
 nerdpatch.py shares.
+
+"round N, mutant X" in a gate's comment names the deliberately broken
+font that gate was written to catch. The harness that made them is no
+longer in the tree: `git show c5d8e1a:tools/mutants/README.md`.
 """
 
 import math
@@ -402,7 +406,7 @@ def check_gdi_family_name(tf, check):
           f"({len(fam)}: {fam!r})")
 
 
-def check_tables(tf, check, bounds, hmtx, cmap, codepages=False):
+def check_tables(tf, check, bounds, hmtx, cmap):
     """The numbers a rasterizer clips and lays out by, read back from
     the outlines: head's bounding box, hhea's four extents, OS/2's
     embedding permission, version and family bits, vendor id,
@@ -434,7 +438,7 @@ def check_tables(tf, check, bounds, hmtx, cmap, codepages=False):
           f"OS/2 usWidthClass {os2.usWidthClass} (want 5, medium)")
     if bounds is not None and hmtx is not None:
         _check_outline_metrics(tf, check, bounds, hmtx)
-    _check_os2_cmap(tf, check, cmap, codepages)
+    _check_os2_cmap(tf, check, cmap)
 
 
 def _check_outline_metrics(tf, check, bounds, hmtx):
@@ -460,7 +464,7 @@ def _check_outline_metrics(tf, check, bounds, hmtx):
               f"hhea {label} is the outlines' ({got} vs {round(want)})")
 
 
-def _check_os2_cmap(tf, check, cmap, codepages):
+def _check_os2_cmap(tf, check, cmap):
     """OS/2's permission, identity and repertoire bits, post's underline,
     and every Unicode cmap subtable."""
     os2 = tf["OS/2"]
@@ -479,15 +483,14 @@ def _check_os2_cmap(tf, check, cmap, codepages):
     check(stored == again, f"OS/2 Unicode ranges match the cmap "
                            f"({[hex(v) for v in stored]} vs "
                            f"{[hex(v) for v in again]})")
-    if codepages:
-        # a face that declares no 932/JIS disappears from GDI's font
-        # list for Japanese
-        pages = (os2.ulCodePageRange1, os2.ulCodePageRange2)
-        build.recalc_codepage_range(tf)
-        check(pages == (os2.ulCodePageRange1, os2.ulCodePageRange2),
-              f"OS/2 code page ranges match the cmap "
-              f"({[hex(v) for v in pages]} vs "
-              f"{[hex(os2.ulCodePageRange1), hex(os2.ulCodePageRange2)]})")
+    # a face that declares no 932/JIS disappears from GDI's font list
+    # for Japanese
+    pages = (os2.ulCodePageRange1, os2.ulCodePageRange2)
+    build.recalc_codepage_range(tf)
+    check(pages == (os2.ulCodePageRange1, os2.ulCodePageRange2),
+          f"OS/2 code page ranges match the cmap "
+          f"({[hex(v) for v in pages]} vs "
+          f"{[hex(os2.ulCodePageRange1), hex(os2.ulCodePageRange2)]})")
     # every Unicode cmap subtable agrees, not just the one HarfBuzz
     # picks: build.set_cmap writes them all, and the format 4 tables
     # the GDI paths read went unchecked — repointing every entry below

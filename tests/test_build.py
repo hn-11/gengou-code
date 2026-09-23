@@ -877,7 +877,7 @@ def test_append_glyph_takes_the_donor_s_vertical_origin_not_its_bearing():
     cff = font["CFF "].cff
     td = cff[cff.fontNames[0]]
     build.append_glyph(font, td, "new", pen.getCharString(private=td.Private),
-                       None, 600, None, "donor")
+                       None, 600, "donor")
     assert font["vmtx"].metrics["new"] == (1000, 737 - 400)
     assert font["vmtx"].metrics["donor"] == (1000, 637)      # untouched
     assert font["hmtx"].metrics["new"] == (600, 0)
@@ -2081,7 +2081,7 @@ def test_rehome_replaced_marks_puts_the_grafted_accent_in_the_donor_s_lookup():
     pen.lineTo((500, 100))
     pen.closePath()
     build.append_glyph(font, td, "theirs", pen.getCharString(private=td.Private),
-                       None, 0, None, None)
+                       None, 0, None)
     sub = otTables.MarkBasePos()
     sub.Format = 1
     sub.MarkCoverage = otTables.Coverage()

@@ -26,7 +26,7 @@ main の CI は 5 ジョブとも green、テスト 480、ruff clean。リリー
 | 3 | 欧文の可変フォント | **残す。メインに押し出す** |
 | 4 | Nerd Fonts 版の可変フォント | **済**（作った。NF の欧文 zip は可変 2 本に） |
 | 5 | Term ファミリー | **残す** |
-| 6 | 変異体ハーネス | **退避済み**（`tools/mutants/`）。7 で実際に使った（結果は 6 の節）。正式採用は未決 |
+| 6 | 変異体ハーネス | **削除した**（最後の姿は `c5d8e1a` の `tools/mutants/`） |
 | 7 | `verify_jp.main()` の分解 | **済**（案 B。双子は 5 組だった） |
 | 8 | `golden.py` | **済**（残す。CONTRIBUTING で「出力が変わる変更では使う」と定めた） |
 | 9 | 全角スペースの可視化 | **やらない** |
@@ -173,7 +173,12 @@ JP 側のビルドと検証がほぼ倍。
 そして VS Code やブラウザで 3:5 だとコメント内の表や罫線の桁が全角で崩れる——
 「ターミナル風にしたい人」より需要が広い。
 
-### 6. 変異体ハーネス（退避済み）
+### 6. 変異体ハーネス（削除した）
+
+**決定（オーナー）: 削除。** 役目（ラウンド 9〜12 の盲点探し）は門番と
+テストの形で残っていて、ハーネス自体は動かすたびに手直しが要り、数え方にも
+不具合があった。最後の姿はコミット `c5d8e1a` の `tools/mutants/`
+（`git show c5d8e1a:tools/mutants/README.md`）。以下は削除前の記録。
 
 `tools/mutants/` に 36 ファイル・352 KB。**使い方は
 `tools/mutants/README.md`**（何をする道具か・動かす前に直す 2 行・
@@ -381,9 +386,8 @@ JP 面の検証は 1 面約 24 秒（うち 13 秒はラウンド 12 で入れ�
    ために閉じた。中身はブランチ `docs/stacked-on-pr25` に残っている。
    作り直すなら新しい名前に合わせ、事実が変わる箇所（Powerline の範囲、
    バグ報告テンプレートの NF 版の欄）は戻すこと
-6. **変異体ハーネス（6）を採るか消すか。** 下の候補 1 を参照
 
-## 保守コスト削減の候補（調べたが実施していないもの）
+## 保守コスト削減の候補（オーナーと 1 件ずつ判断した）
 
 資産を減らす観点で全体を調べた（使われていないコードは AST と到達性の 2 通りで
 洗い、**0 件**だった）。実施したのは upstream-sync の不具合修正（#32）と、
@@ -393,13 +397,13 @@ CONTRIBUTING の CI 説明を `ci.yml` / `release.yml` の冒頭コメントへ�
 
 | # | 候補 | 減る量 | 判断 |
 |---|---|---|---|
-| 1 | `tools/mutants/` を消し、README のハッシュで履歴を指す | 7,887 行・360 KB（うち 13 ファイル 3,668 行はバイト単位の重複） | **消すのを推す**。CI にも ruff にも入らず、動かすには手直しが要り、G14 の数え方などの不具合もある（6 の節）。docstring の「mutant X」91 か所の参照先は git 履歴に残る。採るなら 4 世代を畳むのが先 |
-| 2 | ビルド手順が README・CONTRIBUTING・この文書の 3 か所にある | 約 60 行 | README は CONTRIBUTING へのリンクに。この文書の「ビルドと検証」も同様 |
-| 3 | `docs/gengou-plan.md` の §1〜§6（v5 以前の計画書） | 約 400 行 | 「据え置き」一覧だけ残して畳む。古い数字（6 ウェイト・12 面）が残っている |
-| 4 | 常に同じ値が渡る引数（`build.update_bbox(bounds=)`、`check_tables(codepages=)`、`append_glyph(lsb=)`） | 約 15 行 | 小さく安全。次に触るときに |
-| 5 | `fetch-upstreams` と `setup-build` の二段構え（outputs を経由して再 export） | 約 30 行 | paths 段が `$GITHUB_ENV` に直接書けば済む。CI 全体に効くので慎重に |
-| 6 | 欧文の 2 本の verifier（`verify_latin.py` / `verify_latin_vf.py`）の重複（GSUB tag 一覧、インク中心、合字セル） | 約 20〜30 行 | 7 と同じやり方で。検証ログの文言が変わる |
-| 7 | 外接箱を測る定型 3 行（約 28 か所）と似た関数 3 つ | 約 30 行 | 余裕があれば |
+| 1 | ~~`tools/mutants/` を消す~~ | 7,887 行 | **済**（削除した。`c5d8e1a` に残る） |
+| 2 | ビルド手順が README・CONTRIBUTING・この文書の 3 か所にある | 約 60 行 | **決定: ドキュメントの全面刷新として別途**（未着手） |
+| 3 | `docs/gengou-plan.md` の §1〜§6（v5 以前の計画書） | 約 400 行 | **決定: 2 と同じ刷新に含める**（未着手） |
+| 4 | ~~常に同じ値が渡る引数（`update_bbox(bounds=)`、`check_tables(codepages=)`、`append_glyph(lsb=)`）~~ | 約 15 行 | **済**（消した） |
+| 5 | ~~`fetch-upstreams` と `setup-build` の二段構え~~ | 約 30 行 | **済**（`setup-build` 1 つに統合。ピンもここ。`bump_pins.py` の書き換え先も変更） |
+| 6 | 欧文の 2 本の verifier（`verify_latin.py` / `verify_latin_vf.py`）の重複（GSUB tag 一覧、インク中心、合字セル） | 約 20〜30 行 | **決定: 検証体系の全面刷新**（配る欧文は可変だけになったので、静的面の検査の要否から組み直す） |
+| 7 | 外接箱を測る定型 3 行（約 28 か所）と似た関数 3 つ | 約 30 行 | **決定: 6 に含める** |
 
 **やらないほうがよいもの**: 箱の計算が 3 通りある件（`build.update_bbox`、
 `nerdpatch.update_bbox_after`、`build_latin_vf.master_extents`）。
@@ -411,5 +415,5 @@ CONTRIBUTING の CI 説明を `ci.yml` / `release.yml` の冒頭コメントへ�
 1. `README.md` — 何を作っているか
 2. `CONTRIBUTING.md` — 作法、テスト・検証の走らせ方
 3. `docs/gengou-plan.md` — 全ラウンドの記録。**「据え置き」は再発見しないこと**
-4. `tools/mutants/README.md` — 門番を検証する道具
+4. （変異体ハーネスは削除済み。`git show c5d8e1a:tools/mutants/README.md`）
 5. `scripts/verifylib.py` の docstring — 各門番がどの変異体のために存在するか
