@@ -91,15 +91,11 @@ name・家族の cmap、JP の縦組みと VORG（ドナーと突き合わせ）
 名前付きインスタンス・マスターの各ロケーションに instantiate して
 同じゲートを通します）。変更を提出する前に、少なくとも
 `Regular` 面で通ることを確認してください。CI（`.github/workflows/ci.yml`）でも push / PR 時に
-同じ検証が走ります（単体テストと lint を 1 ジョブ、Regular Upright / Regular Italic / Light Italic を
-ファミリー別に 1 ジョブずつ（Regular Upright の 2 ジョブは JP 面への Nerd
-Fonts の接ぎ木も検証）、可変フォントと Gengou Code への接ぎ木を 1 ジョブ、
-並列に組んで 1 分程度。リリース
-`release.yml` はファミリー × ウェイト群の 6 ジョブのあと `package`
-ジョブが zip →
-GitHub Release を作り、5 分程度。所要時間を測るだけなら Run workflow の dry-run に
-チェックを入れるか、コミットメッセージに `[release-dry]` と書いたコミットを
-ブランチに push する。どちらもビルドと梱包まで走って Release は作らない）。複数の面をまとめて検証するときは
+同じ検証が走ります。どのジョブが何を組むかは `ci.yml` と `release.yml` の
+冒頭のコメントにあります（ここには重ねて書きません。書くとずれるので）。
+リリースの所要時間を測るだけなら Run workflow の dry-run にチェックを入れるか、
+コミットメッセージに `[release-dry]` と書いたコミットをブランチに push します。
+どちらもビルドと梱包まで走って Release は作りません。複数の面をまとめて検証するときは
 `python scripts/verify.py 'dist/*.otf' 'dist/latin/*.otf'` が面ごとに
 プロセスを分けて走らせます（どの門番に掛けるかはフォント自身が決める）。
 

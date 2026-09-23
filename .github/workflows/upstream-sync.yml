@@ -31,11 +31,13 @@ concurrency:
 
 env:
   # Job names from ci.yml that must be green on the PR head before it merges.
+  # tests/test_workflows_parse.py holds this list to the names ci.yml's
+  # jobs actually report: a name no job reports stays "pending" below,
+  # and every sync ran out its 30 minutes on six such names, left from
+  # before ci.yml built both families in one job
   REQUIRED_CHECKS: >-
     ["lint-test",
-     "faces (Regular Upright base)", "faces (Regular Upright Term)",
-     "faces (Regular Italic base)", "faces (Regular Italic Term)",
-     "faces (Light Italic base)", "faces (Light Italic Term)",
+     "faces (Regular Upright)", "faces (Regular Italic)", "faces (Light Italic)",
      "variable + Nerd Font"]
   GH_TOKEN: ${{ github.token }}
 
