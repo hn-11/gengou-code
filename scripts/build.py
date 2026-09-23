@@ -112,7 +112,7 @@ COMBINING_MARKS = range(0x0300, 0x0370)
 # Provenance stamped into every face (name IDs 0/3/8/11, OS/2 achVendID).
 # The vendor ID is ours by convention only — Microsoft's registry is opt-in
 # and this one is not registered; it just has to stop being Adobe's 'ADBO'.
-PROJECT_URL = "https://github.com/hn-11/shoyu-code-pro-jp"
+PROJECT_URL = "https://github.com/hn-11/gengou-code"
 PROJECT_COPYRIGHT = f"Copyright 2026 hn-11 ({PROJECT_URL})"
 VENDOR_ID = "GNGO"
 
