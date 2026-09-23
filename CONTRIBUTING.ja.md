@@ -2,25 +2,22 @@
 
 [English](CONTRIBUTING.md)
 
-フォントは上流のリリース（Source Code Pro、Source Sans 3、Monaspace、
-Source Han Sans JP、Symbols Nerd Font Mono）から組みます。元のグリフは
-このリポジトリに入っていないので、ビルドには毎回それらのファイルが
-必要です。
+フォントは、元フォント（Source Code Pro、Source Sans 3、Monaspace、Source Han Sans JP、Symbols Nerd Font Mono）のリリースからビルドします。元のグリフはこのリポジトリに含まれていないため、ビルドのたびにこれらのファイルが必要です。
 
 ## 構成
 
 | パス | 役割 |
 |------|------|
-| `scripts/build_latin.py` | 欧文レイヤーの作り方。材料のフォント、Monaspace の記号と合字の接ぎ木、ウェイト・スタイルごとの静的な材料面（メモリ上） |
-| `scripts/build_latin_vf.py` | Gengou Code 本体（可変フォント）。同じ作り方で組む |
-| `scripts/build.py` | Gengou Code JP と JP Term。欧文の材料面を組んでから Source Han Sans に接ぎ木する。共通の関数もここ |
-| `scripts/vfsource.py` | 可変フォントのインスタンス化と、Monaspace のウェイト合わせ |
-| `scripts/anchors.py` | 欧文レイヤーが足す結合記号のアンカー |
-| `scripts/nerdpatch.py` | Nerd Fonts 版 |
-| `scripts/verify.py` | 組んだフォントの検査の入口。中身は `verify_jp.py`、`verify_latin_vf.py` と共通の `verifylib.py` |
-| `scripts/golden.py` | 2 つのビルドを面ごとに比べる |
-| `scripts/bump_pins.py` | 上流のピンを進める（`upstream-sync.yml` が使う） |
-| `data/mona_ligs.json` | 合字の一覧 |
+| `scripts/build_latin.py` | 欧文レイヤーの生成手順。元フォントの読み込み、Monaspaceの記号と合字の移植、ウェイト・スタイルごとの静的な欧文書体の生成（メモリ上） |
+| `scripts/build_latin_vf.py` | Gengou Code本体（可変フォント）を同じ手順で生成 |
+| `scripts/build.py` | Gengou Code JPとJP Termを生成。欧文書体を作ってからSource Han Sansに組み込む。共通の関数もここにある |
+| `scripts/vfsource.py` | 可変フォントのインスタンス化と、Monaspaceのウェイト合わせ |
+| `scripts/anchors.py` | 欧文レイヤーが追加する結合記号のアンカー |
+| `scripts/nerdpatch.py` | Nerd Fonts版の生成 |
+| `scripts/verify.py` | 生成したフォントの検査の入口。検査本体は`verify_jp.py`、`verify_latin_vf.py`と共通の`verifylib.py` |
+| `scripts/golden.py` | 2つのビルド結果を書体ごとに比較 |
+| `scripts/bump_pins.py` | 元フォントの固定バージョンを更新（`upstream-sync.yml`が使用） |
+| `data/mona_ligs.json` | 合字の定義 |
 
 ## ローカルでのビルド
 
@@ -28,31 +25,26 @@ Source Han Sans JP、Symbols Nerd Font Mono）から組みます。元のグリ�
 pip install -r requirements.txt
 export SCP_VF_U=... SCP_VF_I=... SS_VF_I=... MONA_VF=... SHS_DIR=... NF_SYMBOLS=...
 python scripts/build_latin_vf.py              # dist/latin/GengouCode[wght].otf, GengouCode-Italic[wght].otf
-python scripts/build.py                       # dist/GengouCodeJP*.otf（JP 2 ファミリー）
-python scripts/build.py "Regular"             # Regular と Regular Italic だけ（速い）
-python scripts/build.py "Light Upright Term"  # 1 面だけ
-python scripts/nerdpatch.py                   # dist/nerd/ に上の全部の NF 版
+python scripts/build.py                       # dist/GengouCodeJP*.otf（JPの2ファミリー）
+python scripts/build.py "Regular"             # RegularとRegular Italicのみ（短時間で済む）
+python scripts/build.py "Light Upright Term"  # 1書体のみ
+python scripts/nerdpatch.py                   # 上記すべてのNF版をdist/nerd/に生成
 ```
 
-| 変数 | 読むスクリプト | 値 |
-|------|----------------|----|
-| `SCP_VF_U` | `build.py`、`build_latin_vf.py` | `SourceCodeVF-Upright.otf` のパス（[Source Code Pro のリリース](https://github.com/adobe-fonts/source-code-pro/releases)） |
-| `SCP_VF_I` | 同上 | `SourceCodeVF-Italic.otf` のパス |
-| `SS_VF_I` | 同上 | `SourceSans3VF-Italic.otf` のパス（[Source Sans のリリース](https://github.com/adobe-fonts/source-sans/releases)）。直立だけ組むときも必須。斜体のギリシャ・キリルが黙って抜けるのを防ぐため |
-| `MONA_VF` | 同上 | `Monaspace Neon Var.ttf` のパス（[Monaspace のリリース](https://github.com/githubnext/monaspace/releases)） |
-| `SHS_DIR` | `build.py` | `SourceHanSansJP-<Weight>.otf` があるディレクトリ（[Source Han Sans のリリース](https://github.com/adobe-fonts/source-han-sans/releases)） |
-| `NF_SYMBOLS` | `nerdpatch.py` | `SymbolsNerdFontMono-Regular.ttf` のパス（[Nerd Fonts のリリース](https://github.com/ryanoasis/nerd-fonts/releases)の `NerdFontsSymbolsOnly.zip`） |
-| `GENGOU_VERSION` | ビルドと検査（任意） | リリースの版番号（例 `6.0.0`）。未設定なら name テーブルに上流のリビジョンが残る |
-| `GENGOU_SKIP_AUTOHINT` | `build.py`、`nerdpatch.py`（任意） | `1` でヒント付けを飛ばす（手元で速く組みたいとき）。その場合ヒントの検査は落ちるが、それで正常 |
+| 環境変数 | 使用するスクリプト | 値 |
+|----------|--------------------|----|
+| `SCP_VF_U` | `build.py`、`build_latin_vf.py` | `SourceCodeVF-Upright.otf`のパス（[Source Code Proのリリース](https://github.com/adobe-fonts/source-code-pro/releases)） |
+| `SCP_VF_I` | 同上 | `SourceCodeVF-Italic.otf`のパス |
+| `SS_VF_I` | 同上 | `SourceSans3VF-Italic.otf`のパス（[Source Sansのリリース](https://github.com/adobe-fonts/source-sans/releases)）。正体だけをビルドする場合も必須です。斜体のギリシャ文字・キリル文字が気付かないうちに欠けるのを防ぐためです |
+| `MONA_VF` | 同上 | `Monaspace Neon Var.ttf`のパス（[Monaspaceのリリース](https://github.com/githubnext/monaspace/releases)） |
+| `SHS_DIR` | `build.py` | `SourceHanSansJP-<Weight>.otf`を置いたディレクトリ（[Source Han Sansのリリース](https://github.com/adobe-fonts/source-han-sans/releases)） |
+| `NF_SYMBOLS` | `nerdpatch.py` | `SymbolsNerdFontMono-Regular.ttf`のパス（[Nerd Fontsのリリース](https://github.com/ryanoasis/nerd-fonts/releases)の`NerdFontsSymbolsOnly.zip`） |
+| `GENGOU_VERSION` | ビルドと検査（任意） | リリースのバージョン番号（例: `6.0.0`）。未設定の場合、nameテーブルには元フォントのリビジョンが残ります |
+| `GENGOU_SKIP_AUTOHINT` | `build.py`、`nerdpatch.py`（任意） | `1`を設定するとヒンティングを省略します（手元で短時間にビルドしたい場合）。このときヒントの検査は失敗しますが、想定どおりの動作です |
 
-上流の正確なタグと取得元の URL は `.github/actions/setup-build/action.yml`
-にあります。`.github/workflows/ci.yml` も上と同じコマンドを実行しています。
+元フォントの正確なタグと取得元のURLは、`.github/actions/setup-build/action.yml`に記載しています。`.github/workflows/ci.yml`も上記と同じコマンドを実行しています。
 
-ビルドのフィルタは語の並びで、書いた種類の語すべてに合う面を組みます。
-種類はウェイト（`Light` `Regular` `Medium` `SemiBold` `Bold`）、
-スタイル（`Upright` `Italic`）、ファミリー（`Term`、Gengou Code JP は
-`base`）の 3 つです。同じ種類の語を複数書くとそのどれか、という意味に
-なるので、`"Light Regular base"` は 4 面です。
+ビルド対象の絞り込みは単語の組み合わせで指定し、指定したすべての種類の単語に一致する書体をビルドします。単語の種類は、ウェイト（`Light` `Regular` `Medium` `SemiBold` `Bold`）、スタイル（`Upright` `Italic`）、ファミリー（`Term`、Gengou Code JPは`base`）の3つです。同じ種類の単語を複数指定すると、そのいずれかに一致するものが対象になります。たとえば`"Light Regular base"`は4書体です。
 
 ## 変更の確認
 
@@ -62,95 +54,62 @@ python scripts/verify.py dist/GengouCodeJP-Regular.otf
 python scripts/verify.py 'dist/*.otf' 'dist/nerd/*.otf' 'dist/latin/*.otf' 'dist/nerd/latin/*.otf'
 ```
 
-`verify.py` はフォントを見てどの検査に掛けるかを決めます。可変フォントは
-`verify_latin_vf.py`、和文を持つ面は `verify_jp.py` です。検査は見本では
-なくフォント全体を対象にします。全文字の送り幅と東アジアの文字幅、
-グリフがセルのどこにあるか、合字のセルと誤爆防止、結合記号、
-GSUB/GPOS/GDEF、メトリクス、名前などです。可変フォントは既定値、軸の
-両端、名前付きインスタンス、マスターの各位置で調べます。プルリクエストを
-出す前に、少なくとも Regular の面で通してください。CI でも同じ検査が
-走ります。どのジョブが何を組むかは `ci.yml` と `release.yml` の冒頭の
-コメントにあります。
+`verify.py`は、フォントの内容を見て適用する検査を決めます。可変フォントには`verify_latin_vf.py`、和文を含む書体には`verify_jp.py`を適用します。検査は一部の文字の抜き取りではなく、フォント全体を対象にします。全文字の送り幅と東アジアの文字幅の対応、各グリフのセル内での位置、合字のセル幅と誤適用の防止、結合記号、GSUB/GPOS/GDEF、メトリクス、名前などを確認します。可変フォントは、既定値、軸の両端、名前付きインスタンス、各マスターの位置で検査します。プルリクエストを出す前に、少なくともRegularの書体で検査を通してください。CIでも同じ検査を実行します。どのジョブで何をビルドするかは、`ci.yml`と`release.yml`の冒頭のコメントに記載しています。
 
-出力が変わる変更では、狙ったところだけが変わったことを示してください。
-変更前のコミットで組んだものを別のディレクトリに置いて比べます。
+出力が変わる変更では、意図した箇所だけが変わったことを示してください。変更前のコミットでビルドした結果を別のディレクトリに置き、次のように比較します。
 
 ```sh
-python scripts/golden.py <前の dist> dist
-python scripts/golden.py <前の dist>/latin dist/latin --only '*wght*'
-python scripts/golden.py <前の dist>/nerd dist/nerd
+python scripts/golden.py <変更前のdist> dist
+python scripts/golden.py <変更前のdist>/latin dist/latin --only '*wght*'
+python scripts/golden.py <変更前のdist>/nerd dist/nerd
 ```
 
-`golden.py` は cmap、送り幅、feature のタグ、コーパスのシェーピング、
-アウトライン、メタデータ、ヒントを比べます。グリフの番号が振り直されて
-いても構いません。サブディレクトリには降りないので、ディレクトリごとに
-実行します。出た差分とその理由をプルリクエストに書いてください。ビルドが
-2 回要るので、CI では走らせていません。
+`golden.py`は、cmap、送り幅、featureのタグ、テキストコーパスのシェーピング結果、アウトライン、メタデータ、ヒントを比較します。グリフの番号が振り直されていても問題ありません。サブディレクトリは対象にしないため、ディレクトリごとに実行してください。検出された差分とその理由をプルリクエストに記載してください。ビルドが2回必要なため、CIでは実行していません。
 
 ## 合字の追加・変更
 
-合字は `data/mona_ligs.json` で定義します。`build_latin.py` が Monaspace
-から欧文レイヤーに描き、`build.py` がその完成したグリフを JP の面に
-写します。1 項目の形:
+合字は`data/mona_ligs.json`で定義します。`build_latin.py`がMonaspaceから欧文レイヤーに合字を描き、`build.py`がその完成したグリフをJPの書体に移します。各項目の形式は次のとおりです。
 
 ```jsonc
 "!=": {
-  "cells": 2,                  // 幅（セル数。送り幅 = 600 × cells）
-  "glyphs": ["exclam_equal"],  // Monaspace 側のグリフ名。左から順に並べる
-  "group": "ss01"              // stylistic set。calt と liga には全グループが入る
+  "cells": 2,                  // 幅（セル数）。送り幅は600×cells
+  "glyphs": ["exclam_equal"],  // Monaspace側のグリフ名。左から順に並べる
+  "group": "ss01"              // stylistic set。calt/ligaにはすべてのグループが入る
 }
 ```
 
-キーは文字の並びそのものです。文字のどれかがフォントに無いか、グリフ名が
-Monaspace に無ければ、その項目は飛ばされます。Monaspace にそのグリフの
-`.alt` 版があれば、自動で `cv99` の別形になります。
+キーは合字にする文字列そのものです。いずれかの文字がフォントにない場合や、グリフ名がMonaspaceにない場合、その項目はスキップされます。Monaspaceにそのグリフの`.alt`版がある場合は、自動的に`cv99`の代替字形になります。
 
-追加の手順: Monaspace でグリフ名を調べ、項目を足し、Regular を組んで
-`verify.py` を通し、両方の README の stylistic set の表を直します。
+合字を追加する手順は次のとおりです。
 
-## 上流のバージョン
+1. Monaspaceでグリフ名を調べる。
+2. `data/mona_ligs.json`に項目を追加する。
+3. Regularをビルドし、`verify.py`で検査する。
+4. 英語版・日本語版の両方のREADMEで、stylistic setの表を更新する。
 
-上流のリリースは `.github/actions/setup-build/action.yml` の
-「Pin upstream releases」ステップで固定しています。タグと一緒に、取得する
-ファイルの SHA-256 も置いてあり、一致しなければビルドはそこで止まります。
-GitHub のリリースのファイルは、タグを変えずに差し替えられるからです。
+## 元フォントのバージョン
 
-`upstream-sync.yml` が毎週月曜に次のことをします。
+元フォントのリリースは、`.github/actions/setup-build/action.yml`の「Pin upstream releases」ステップで固定しています。タグと合わせて、取得するファイルのSHA-256も記載しており、一致しない場合はビルドがその時点で停止します。GitHubのリリースファイルは、タグを変えずに差し替えられるためです。
 
-1. `scripts/bump_pins.py` が各上流の最新リリースを調べ、ファイルを取得して
-   ハッシュを取る。ファイル名が変わっていたり、タグが同じなのにハッシュが
-   変わっていたりしたら止まる。
-2. `chore/upstream-sync` ブランチでプルリクエストを出す。
-3. `REQUIRED_CHECKS` の CI が通ったら squash マージする。
-4. パッチ番号を 1 つ上げて `release.yml` を実行する。
+`upstream-sync.yml`は毎週月曜日に次の処理を行います。
 
-新しい上流で見た目が悪くなったら、そのプルリクエストを閉じてください。
-ピンは据え置かれ、翌週また開きます。手でピンを上げるときは、タグと
-ハッシュを必ず一緒に書き換えます。
+1. `scripts/bump_pins.py`が各元フォントの最新リリースを調べ、ファイルを取得してハッシュを計算する。ファイル名が変わっていた場合や、タグが同じなのにハッシュが変わっていた場合は停止する。
+2. `chore/upstream-sync`ブランチでプルリクエストを作成する。
+3. `REQUIRED_CHECKS`に挙げたCIのジョブが成功したら、squashマージする。
+4. パッチバージョンを1つ上げて`release.yml`を実行する。
+
+新しいリリースで表示が悪くなった場合は、そのプルリクエストを閉じてください。固定バージョンはそのまま据え置かれ、翌週に再びプルリクエストが作成されます。手動で固定バージョンを更新する場合は、タグとハッシュを必ず一緒に書き換えてください。
 
 ## リリース
 
-git のタグがバージョンです。バージョンを書いたファイルはありません。
-上流の更新だけのリリースはパッチ版で、自動で出ます。フォントの中身が
-変わるリリースは、先に手でタグを切る必要があります。
-`scripts/bump_pins.py` の `MIN_RELEASE` より下の自動リリースは止まります。
-次は `v6.0.0` です。
+gitのタグがバージョンです。バージョンを記載したファイルはありません。元フォントの更新だけのリリースはパッチバージョンとして自動で公開されます。フォントの内容が変わるリリースは、先に手動でタグを作成する必要があります。`scripts/bump_pins.py`の`MIN_RELEASE`より低いバージョンの自動リリースは停止します。次のリリースは`v6.0.0`です。
 
-公開せずにリリースのワークフローを試すときは、Run workflow で dry-run に
-チェックを入れるか、コミットメッセージに `[release-dry]` を含めて push
-します。
+公開せずにリリースのワークフローを試す場合は、Run workflowでdry-runにチェックを入れるか、コミットメッセージに`[release-dry]`を含めてpushします。
 
-リリースノートはマージしたプルリクエストから作られるので、プルリク
-エストのタイトルがそのままノートの 1 行になります。フォントを使う人から
-見て何が変わるかをタイトルにしてください。v5.0.0 までのノートは各
-リリースのページと `git show v5.0.0:CHANGELOG.md` にあります。
+リリースノートはマージ済みのプルリクエストから生成するため、プルリクエストのタイトルがそのままリリースノートの1行になります。フォントの利用者から見て何が変わるのかが分かるタイトルを付けてください。v5.0.0までのリリースノートは、各リリースのページと`git show v5.0.0:CHANGELOG.md`で確認できます。
 
-## Issue とプルリクエスト
+## Issueとプルリクエスト
 
-不具合は `.github/ISSUE_TEMPLATE/` のテンプレートで報告してください。
-プルリクエストには、何を変えたかと、どう確かめたか（`verify.py` を
-掛けた面、出力が変わるなら `golden.py` の差分）を書いてください。
+不具合は`.github/ISSUE_TEMPLATE/`のテンプレートを使って報告してください。プルリクエストには、変更内容と確認方法（`verify.py`を実行した書体、出力が変わる場合は`golden.py`の差分）を記載してください。
 
-これまでの設計メモと測定値は履歴に残っています:
-`git show a7c86ec:docs/gengou-plan.md`。その中の「据え置き」の一覧は、
-検討したうえで意図的に手を付けなかったものの記録です。
+これまでの設計メモと測定値は履歴に残っており、`git show a7c86ec:docs/gengou-plan.md`で参照できます。その中の「据え置き」の一覧は、検討したうえで意図的に対応しなかった項目の記録です。
