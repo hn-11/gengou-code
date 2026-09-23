@@ -1,27 +1,28 @@
 ---
-name: バグ報告
-about: フォントやビルドの不具合を報告する
+name: Bug report
+about: Something wrong with a font or the build (English or Japanese is fine)
 title: ""
 labels: bug
 ---
 
-## 症状
+## What happened
 
-<!-- 何が起きたか -->
+<!-- What you saw. A screenshot helps a lot for rendering problems. -->
 
-## 再現手順
+## How to reproduce
 
-<!-- ビルドコマンド、対象ファミリー/ウェイト、使用しているエディタ・
-     ターミナルなど -->
+<!-- The text you typed, the app (editor, terminal) and its font settings,
+     or the build command you ran. -->
 
-## 期待する動作
+## What you expected
 
-## 環境
+## Environment
 
 - OS:
-- フォントのバージョン（リリースタグ or コミット）:
-- 対象ファミリー（Gengou Code JP / Gengou Code JP Term / Gengou Code、NF（Nerd Fonts 版）かどうか）:
+- Font version (release tag or commit):
+- Family (Gengou Code / Gengou Code JP / Gengou Code JP Term, and whether it's the NF build):
+- Weight and style:
 
-## 補足
+## Anything else
 
-<!-- スクリーンショットや `scripts/verify.py` の出力など -->
+<!-- Output of `scripts/verify.py`, if you built the fonts yourself. -->

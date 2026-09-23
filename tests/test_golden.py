@@ -1,6 +1,7 @@
 """Unit tests for scripts/golden.py, the golden-file regression tool
 every "byte-identical" / "no difference in rendered ink" claim in
-docs/gengou-plan.md was established with. It had no test of its own:
+the design notes (`git show a7c86ec:docs/gengou-plan.md`) was
+established with. It had no test of its own:
 a check that quietly stopped noticing a difference would fail silently
 forever after, so each test here pins ONE of golden.py's checks by
 building a golden/candidate pair that differs in exactly the thing
