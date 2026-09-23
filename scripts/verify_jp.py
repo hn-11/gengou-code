@@ -593,7 +593,7 @@ def check_names(face, check):
 
 def check_jp_tables(face, check):
     tf, cmap, hmtx, bounds = face.tf, face.cmap, face.hmtx, face.bounds
-    check_tables(tf, check, bounds, hmtx, cmap, codepages=True)
+    check_tables(tf, check, bounds, hmtx, cmap)
     # the tables a JP face is not a JP face without. Both sets were
     # behind an `if`: deleting vhea, vmtx and VORG dropped five checks
     # and passed, and the STAT table the grafts are built to preserve

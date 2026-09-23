@@ -2,7 +2,7 @@
 # releases, prove the bump builds, merge it, and ship it.
 #
 #   detect  -> scripts/bump_pins.py rewrites the pins in
-#              .github/actions/fetch-upstreams/action.yml (the single source
+#              .github/actions/setup-build/action.yml (the single source
 #              of truth) to whatever each upstream now calls `releases/latest`
 #   ingest  -> PR on chore/upstream-sync, gated by CI
 #   release -> squash-merge, then dispatch release.yml with the next patch tag

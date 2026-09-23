@@ -234,7 +234,7 @@ def main():
     # GengouCode.zip. head's box is checked below instead, against every
     # instance: a VF's box is the union over its masters, not one
     # location's ink
-    check_tables(tf, check, None, None, vf_cmap, codepages=True)
+    check_tables(tf, check, None, None, vf_cmap)
     # and no variable metrics: the advances are hmtx's at every
     # location, which is what every grid check here relies on (an HVAR
     # peaking between two instances widened 'e' at wght 450 and passed)

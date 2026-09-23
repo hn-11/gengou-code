@@ -371,7 +371,7 @@ def add_glyphs(font, mona, alts, ligatures, dy, cell=CELL):
                        simplify=not keeps_overlaps(mona))
             alt_name = alloc_glyph_name(font)
             append_glyph(font, td, alt_name, pen.getCharString(private=private),
-                         fd_index, width, None, vdon)
+                         fd_index, width, vdon)
             alts[name] = alt_name
             n_alt += 1
 

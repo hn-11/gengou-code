@@ -33,7 +33,7 @@ VF のインスタンス化と Monaspace の合成、`anchors.py` は欧文レ�
 | `GENGOU_VERSION` | ビルド 3 本と verify 3 本（任意） | リリース版番号（例 `6.0.0`）。未設定なら上流のリビジョンを name に残す | — |
 | `GENGOU_SKIP_AUTOHINT` | `build.py` / `build_latin.py`（任意） | `1` でヒント付けをスキップ（試しビルドの時短用） | — |
 
-取得元の URL パターンや正確なタグは `.github/actions/fetch-upstreams/action.yml`
+取得元の URL パターンや正確なタグは `.github/actions/setup-build/action.yml`
 と `.github/workflows/ci.yml` を参照してください（そのまま実行可能な
 リファレンスです）。
 
@@ -168,7 +168,7 @@ NF_SYMBOLS=... python scripts/nerdpatch.py [面のパス | 名前の一部]
 
 ## 上流のバージョンピンを更新する
 
-上流の固定タグは `.github/actions/fetch-upstreams/action.yml` の
+上流の固定タグは `.github/actions/setup-build/action.yml` の
 「Pin upstream releases」ステップ（`SHS_TAG` / `SCP_TAG` / `SCP_VF_ZIP` /
 `SS_TAG` / `MONA_TAG` / `NF_TAG`）に一元化されており、`ci.yml` /
 `release.yml` はこのアクションを共有しています。同じステップに各アセットの
@@ -204,7 +204,7 @@ Issue は起票しません。PR 自体が同じ情報に加えて「そのピ�
 あった場合は、README の該当箇所（`=`バーの実測値など）も見直してください。
 これは自動化の対象外です。
 
-手で追従する場合は `.github/actions/fetch-upstreams/action.yml` のピンを
+手で追従する場合は `.github/actions/setup-build/action.yml` のピンを
 書き換えます（キャッシュキーはピンから自動導出される）。**タグと
 SHA-256 は必ず対で書き換えてください**——片方だけ動かすと、ピンの中身と
 ビルドに使われるバイト列が食い違ったまま通ってしまいます。

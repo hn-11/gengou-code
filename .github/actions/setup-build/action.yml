@@ -1,12 +1,19 @@
 # The steps every build job of ci.yml / release.yml starts with: Python and
-# the requirements, and the pinned upstreams (fetch-upstreams, cached)
-# exported as the build scripts' environment variables — the Symbols Nerd
-# Font Mono among them (nerdpatch.py grafts it; no FontForge, no
-# font-patcher).
+# the requirements, then the pinned upstream font releases -- fetched,
+# checked against their sha256, cached -- exported as the build scripts'
+# environment variables: SHS_DIR, SCP_VF_U, SCP_VF_I, SS_VF_I, MONA_VF,
+# NF_SYMBOLS, NF_LICENSE.
+#
+# The pins are the single source of truth for which upstream releases are
+# built. To bump one: edit the "Pin upstream releases" step below, nowhere
+# else -- upstream-sync.yml (scripts/bump_pins.py) rewrites exactly that
+# block weekly.
 name: Set up a build job
 description: >
-  Python + requirements, the pinned upstream fonts exported as SHS_DIR /
-  SCP_VF_U / SCP_VF_I / SS_VF_I / MONA_VF / NF_SYMBOLS / NF_LICENSE.
+  Python + requirements, and the pinned Source Han Sans / Source Code Pro /
+  Source Sans / Monaspace / Nerd Fonts (Symbols Nerd Font Mono) releases,
+  exported as SHS_DIR / SCP_VF_U / SCP_VF_I / SS_VF_I / MONA_VF /
+  NF_SYMBOLS / NF_LICENSE.
 runs:
   using: composite
   steps:
@@ -16,16 +23,111 @@ runs:
         cache: pip
     - shell: bash
       run: pip install -r requirements.txt
-    - name: Fetch upstreams
-      id: upstreams
-      uses: ./.github/actions/fetch-upstreams
+    # --- pins live here, and only here (CONTRIBUTING names this step) ---
+    - name: Pin upstream releases
+      shell: bash
+      run: |
+        echo "SHS_TAG=2.005R" >> "$GITHUB_ENV"
+        echo "SCP_TAG=2.042R-u%2F1.062R-i%2F1.026R-vf" >> "$GITHUB_ENV"
+        echo "SCP_VF_ZIP=VF-source-code-VF-1.026R.zip" >> "$GITHUB_ENV"
+        # Source Sans supplies the Greek and Cyrillic of the italic faces
+        # alone: Source Code Pro Italic has no Cyrillic and one Greek
+        # letter (build_latin.add_missing_from_sans).
+        echo "SS_TAG=3.052R" >> "$GITHUB_ENV"
+        echo "MONA_TAG=v1.400" >> "$GITHUB_ENV"
+        echo "NF_TAG=v3.4.0" >> "$GITHUB_ENV"
+        # A GitHub release asset can be replaced without the tag moving, so
+        # the tag alone does not say which bytes were built. These do, and
+        # the fetch below refuses anything else. bump_pins.py rewrites them
+        # with the pins, and fails rather than rewriting one whose tag stayed
+        # put - that is the replacement this guards against.
+        echo "SHS_SHA=076a167394a2bf125a7ab13164a5ea1ce529b988d867c11052e83473b2a704f1" >> "$GITHUB_ENV"
+        echo "SCP_SHA=0660ba0cd1478f92cfcf2ad790b7aa29f8adb2daf15598f452a65ae61c9c9fb1" >> "$GITHUB_ENV"
+        echo "SS_SHA=d8e2ac355e06e6a0f0e0a0b1ac0c2451afa707584d7bb9d6b11ef9e4b749904c" >> "$GITHUB_ENV"
+        echo "MONA_SHA=b69a7f2a3c455c89dcb6cc23b61bb3fb8beecba728ccdebeccd80577e58de0c8" >> "$GITHUB_ENV"
+        echo "NF_SHA=8e617904b980fe3648a4b116808788fe50c99d2d495376cb7c0badbd8a564c47" >> "$GITHUB_ENV"
+    - name: Fetch upstreams (cached)
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      id: up
+      with:
+        path: upstreams
+        # Every pin, tags and hashes alike. The hashes, because a replaced
+        # asset under an unchanged tag moves the hash and the cache must
+        # not serve the old extraction. The tags, because they are what
+        # select the URLs: a tag bumped by hand without its hash would
+        # otherwise leave the key untouched, and the fetch step — which is
+        # where the hash is checked at all — is skipped on a cache hit. The
+        # pin file would then say one release while the build used another,
+        # and the mismatch would surface weeks later as a stale-pin error
+        # when the cache expired. SCP_TAG as well as SCP_VF_ZIP: bump_pins
+        # derives the zip name from the tag's -vf component alone, so a
+        # release that moves only the upright or italic one leaves the zip
+        # name, and its bytes, unchanged.
+        key: upstreams-${{ env.SHS_TAG }}-${{ env.SCP_TAG }}-${{ env.SCP_VF_ZIP }}-${{ env.SS_TAG }}-${{ env.MONA_TAG }}-${{ env.NF_TAG }}-${{ env.SHS_SHA }}-${{ env.SCP_SHA }}-${{ env.SS_SHA }}-${{ env.MONA_SHA }}-${{ env.NF_SHA }}
+    - if: steps.up.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        mkdir -p upstreams
+        # $3 is the pinned sha256: nothing is unzipped before the bytes
+        # match it, so a replaced or truncated asset stops the run here
+        # rather than becoming fonts nobody looks at again.
+        fetch() {
+          echo "fetching $2"
+          curl -sSfL -o "$1" "$2" || { echo "FAILED: $2"; exit 22; }
+          got=$(sha256sum "$1" | cut -d' ' -f1)
+          [ "$got" = "$3" ] || {
+            # one line: a shell continuation indented past the left edge of
+            # this block scalar would end the block, and YAML would read the
+            # rest of the file as a mapping
+            echo "::error::$2 is not the pinned asset (sha256 $got, pinned $3). Either the upstream replaced it under the same tag, or the pin is stale: check the release, then update the *_SHA pins in this action."
+            exit 1
+          }
+        }
+        fetch /tmp/shs.zip \
+          "https://github.com/adobe-fonts/source-han-sans/releases/download/${SHS_TAG}/17_SourceHanSansJP.zip" \
+          "$SHS_SHA"
+        unzip -qo /tmp/shs.zip -d upstreams/shs
+        fetch /tmp/scp.zip \
+          "https://github.com/adobe-fonts/source-code-pro/releases/download/${SCP_TAG}/${SCP_VF_ZIP}" \
+          "$SCP_SHA"
+        unzip -qo /tmp/scp.zip -d upstreams/scp
+        fetch /tmp/ss.zip \
+          "https://github.com/adobe-fonts/source-sans/releases/download/${SS_TAG}/VF-source-sans-${SS_TAG}.zip" \
+          "$SS_SHA"
+        unzip -qo /tmp/ss.zip -d upstreams/ss
+        fetch /tmp/mona.zip \
+          "https://github.com/githubnext/monaspace/releases/download/${MONA_TAG}/monaspace-variable-${MONA_TAG}.zip" \
+          "$MONA_SHA"
+        unzip -qo /tmp/mona.zip -d upstreams/mona
+        fetch /tmp/nf.zip \
+          "https://github.com/ryanoasis/nerd-fonts/releases/download/${NF_TAG}/NerdFontsSymbolsOnly.zip" \
+          "$NF_SHA"
+        unzip -qo /tmp/nf.zip -d upstreams/nf
     - name: Export upstream paths
       shell: bash
       run: |
-        echo "SHS_DIR=${{ steps.upstreams.outputs.shs_dir }}" >> "$GITHUB_ENV"
-        echo "SCP_VF_U=${{ steps.upstreams.outputs.scp_vf_u }}" >> "$GITHUB_ENV"
-        echo "SCP_VF_I=${{ steps.upstreams.outputs.scp_vf_i }}" >> "$GITHUB_ENV"
-        echo "SS_VF_I=${{ steps.upstreams.outputs.ss_vf_i }}" >> "$GITHUB_ENV"
-        echo "MONA_VF=${{ steps.upstreams.outputs.mona_vf }}" >> "$GITHUB_ENV"
-        echo "NF_SYMBOLS=${{ steps.upstreams.outputs.nf_symbols }}" >> "$GITHUB_ENV"
-        echo "NF_LICENSE=${{ steps.upstreams.outputs.nf_license }}" >> "$GITHUB_ENV"
+        # no zip's layout is ours to rely on: say so here, not with
+        # `cp ""` in the package job an hour later — and shs_dir needs
+        # saying most of all, because `dirname ""` is '.', which exists,
+        # so build.py's env check would wave an empty find straight
+        # through and fail six jobs later on ./SourceHanSansJP-*.otf
+        nf_symbols=$(find upstreams/nf -name 'SymbolsNerdFontMono-Regular.ttf' | sort | head -1)
+        nf_license=$(find upstreams/nf -iname 'LICENSE*' | sort | head -1)
+        shs_regular=$(find upstreams/shs -name 'SourceHanSansJP-Regular.otf' | head -1)
+        scp_vf_u=$(find upstreams/scp -name 'SourceCodeVF-Upright.otf' | head -1)
+        scp_vf_i=$(find upstreams/scp -name 'SourceCodeVF-Italic.otf' | head -1)
+        ss_vf_i=$(find upstreams/ss -name 'SourceSans3VF-Italic.otf' | head -1)
+        mona_vf=$(find upstreams/mona -name 'Monaspace Neon Var.ttf' | head -1)
+        for v in nf_symbols nf_license shs_regular scp_vf_u scp_vf_i ss_vf_i mona_vf; do
+          tags="SHS $SHS_TAG, SCP $SCP_TAG, Source Sans $SS_TAG, Monaspace $MONA_TAG, Nerd Fonts $NF_TAG"
+          [ -n "${!v}" ] || { echo "::error::$v not found in the upstream zips ($tags)"; exit 1; }
+        done
+        {
+          echo "NF_SYMBOLS=$nf_symbols"
+          echo "NF_LICENSE=$nf_license"
+          echo "SHS_DIR=$(dirname "$shs_regular")"
+          echo "SCP_VF_U=$scp_vf_u"
+          echo "SCP_VF_I=$scp_vf_i"
+          echo "SS_VF_I=$ss_vf_i"
+          echo "MONA_VF=$mona_vf"
+        } >> "$GITHUB_ENV"

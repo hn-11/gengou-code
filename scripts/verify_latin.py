@@ -89,7 +89,7 @@ def main():
     check_grid(check, hmtx.metrics, CELL)
     widths, bearings, bounds = hmtx_mismatches(tf)
     check_charstring_metrics(tf, check, widths, bearings)
-    check_tables(tf, check, bounds, tf["hmtx"].metrics, cmap, codepages=True)
+    check_tables(tf, check, bounds, tf["hmtx"].metrics, cmap)
 
     # every check above holds on a face whose glyphs are all blank, or
     # all drawn one cell to the right. `bounds` holds only the glyphs
