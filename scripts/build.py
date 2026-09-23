@@ -12,9 +12,9 @@ English terminal font, not a Japanese one).
 
   - Half-width layer:  every codepoint Gengou Code covers gets its one-cell
                        glyph — Latin, Greek, Cyrillic, box drawing, the
-                       ligature-paired arrows and operators included. The
-                       two-cell forms Source Han Sans had for some of
-                       them (JIS-style → α ─) stay reachable under fwid.
+                       ligature-paired arrows and operators included.
+                       There is no two-cell alternate: fwid and hwid are
+                       dropped (see build_face).
   - Full-width layer:  Source Han Sans JP, untouched: kanji, kana, the
                        full-width symbols Gengou Code has no glyph for (① ※
                        ...). Its proportional leftovers (half-width kana
@@ -515,8 +515,8 @@ def graft_halfwidth(base, latin):
     everything an English terminal font sets in one cell. The glyph
     Source Han Sans had for the codepoint (full-width for → ─ ≠ in the
     JIS tradition, proportional for A é α) is left in the font and
-    reported in `replaced`: build_face wires the two-cell forms under
-    fwid (fullwidth_forms).
+    reported in `replaced`, which the vertical features are re-pointed
+    from (repoint_features).
 
     Combining marks (U+0300-U+036F) are the one case that must NOT get
     CELL: SCP draws them as if standalone — a spacing clone centered in
@@ -1581,10 +1581,7 @@ def recalc_codepage_range(font):
 # The symbols that pair with a ligature take Monaspace's one-cell glyph
 # rather than SCP's (in Gengou Code, build_latin.py), so '←' beside '<-'
 # (and ≠ / !=, ≤ / <=, … / ...) shares its stroke weight and arrowhead.
-# Their two-cell forms live under fwid (stretch_arrows for the arrows).
 MONA_AMBIGUOUS = "←→↑↓⇐⇒⇔≠≤≥…"
-ARROWS_H = "←→⇐⇒⇔"   # shaft runs along x
-ARROWS_V = "↑↓"      # shaft runs along y
 
 
 def latin_ligatures(font, latin, latin_path, alts, ligatures):
@@ -1666,127 +1663,6 @@ def _xform_path(path, matrix):
     out = pathops.Path()
     path.draw(TransformPen(out.getPen(), matrix))
     return out
-
-
-def stretch_path(path, axis, extra):
-    """Change an arrow outline's length along `axis` (0 = x, 1 = y) by
-    `extra` units without touching its head or stroke. Lengthening: cut
-    at the midpoint of the ink, slide the far half out, fill the gap with
-    the shaft's own 2-unit cross-section scaled to the gap — so a double
-    shaft (⇒) stays a double shaft. Shortening (`extra` < 0): drop a
-    |extra|-long piece of shaft around the midpoint and close up. This
-    is how Monaspace's '-->' relates to '->'."""
-    if extra == 0:
-        return path
-    big = 1e5
-    x0, y0, x1, y1 = path.bounds
-    mid = (x0 + x1) / 2 if axis == 0 else (y0 + y1) / 2
-
-    def clip(a, b):   # slice of `path` between a and b along `axis`
-        rect = (_rect_path(a, -big, b, big) if axis == 0
-                else _rect_path(-big, a, big, b))
-        return pathops.op(path, rect, pathops.PathOp.INTERSECTION)
-
-    def shift(part, d):
-        return _xform_path(part, (1, 0, 0, 1, d, 0) if axis == 0
-                           else (1, 0, 0, 1, 0, d))
-
-    if extra > 0:
-        near = clip(-big, mid)
-        far = shift(clip(mid, big), extra)
-        slab = clip(mid - 1, mid + 1)
-        scale = (extra + 2) / 2          # 2 units wide -> extra + 2
-        t = (mid - 1) * (1 - scale)      # keep the near edge of the slab put
-        band = _xform_path(slab, (scale, 0, 0, 1, t, 0) if axis == 0
-                           else (1, 0, 0, scale, 0, t))
-        out = pathops.op(near, band, pathops.PathOp.UNION)
-    else:
-        cut = -extra
-        near = clip(-big, mid - cut / 2)
-        far = shift(clip(mid + cut / 2, big), -cut)
-        out = near
-    out = pathops.op(out, far, pathops.PathOp.UNION)
-    out.simplify()
-    return out
-
-
-# Full-width arrows are cut from the LIGATURE glyphs, not from Monaspace's
-# own arrow characters: Monaspace draws U+2192 smaller than its '->' (head
-# 516 vs 629 tall at our scale, centered higher), and the whole point is
-# that '→' beside '->' shares the head. (source ligature, transform).
-ARROW_SOURCE = {
-    "→": ("->", None), "←": ("<-", None),
-    "⇒": ("=>", None), "⇐": ("=>", "mirror"), "⇔": ("<=>", None),
-    "↑": ("->", "ccw"), "↓": ("->", "cw"),
-}
-
-
-def stretch_arrows(font, added, fullwidth, slant=0.0):
-    """The fwid forms of the arrows: full-width arrows built from the
-    ligature glyphs (ARROW_SOURCE) so they share head and stroke with
-    '->' '=>' '<=>', but keep Source Han Sans's full-width advance and
-    ink extent — the shaft is shortened or lengthened (stretch_path) to
-    SHS's ink length. ⇐ mirrors '=>', ↑ ↓ rotate '->' and take SHS's
-    height. Italic: the slant is taken out before mirroring / rotating /
-    resizing and put back after, so a slanted vertical shaft stays
-    straight. `fullwidth` is {codepoint: the two-cell glyph}
-    (fullwidth_forms()'s); the cmap is not touched. Returns
-    {codepoint: new glyph name}."""
-    td, _cmap, fd_index, private, vdon = append_context(font)
-    gs = font.getGlyphSet()
-    t = math.tan(math.radians(-slant))
-    swapped = {}
-    for ch in ARROWS_H + ARROWS_V:
-        cp = ord(ch)
-        seq, op = ARROW_SOURCE[ch]
-        if cp not in fullwidth or seq not in added:
-            continue
-        old = fullwidth[cp]
-        adv = font["hmtx"][old][0]
-        shs = _bounds(gs, old)
-        if shs is None:
-            continue
-        path = pathops.Path()
-        gs[added[seq]].draw(TransformPen(path.getPen(), (1, 0, -t, 1, 0, 0)))
-        if op == "mirror":
-            path = _xform_path(path, (-1, 0, 0, 1, 0, 0))
-        elif op == "ccw":
-            path = _xform_path(path, (0, 1, -1, 0, 0, 0))
-        elif op == "cw":
-            path = _xform_path(path, (0, -1, 1, 0, 0, 0))
-        path.simplify()
-        axis = 0 if ch in ARROWS_H else 1
-        b = path.bounds
-        have = (b[2] - b[0]) if axis == 0 else (b[3] - b[1])
-        want = (shs[2] - shs[0]) if axis == 0 else (shs[3] - shs[1])
-        if axis == 0 and t:
-            # putting the slant back widens the ink by however far the
-            # shape leans across its own height, and SHS's ink extent is
-            # what the finished arrow must match. Take it off the shaft
-            # here: de-slanted is the only state stretch_path can cut in
-            # without breaking a slanted shaft
-            lean = _xform_path(path, (1, 0, t, 1, 0, 0)).bounds
-            want -= (lean[2] - lean[0]) - have
-        path = stretch_path(path, axis, want - have)
-        path = _xform_path(path, (1, 0, t, 1, 0, 0))       # the slant back
-        # center on the advance; keep the ligature's baseline alignment for
-        # horizontal arrows, take SHS's own vertical center for ↑ ↓.
-        # Measured on the SLANTED outline: the box of a sheared shape is
-        # not the shear of its box, and centring on the upright one left
-        # every italic arrow tan(11°) of its own height to the right — 67u
-        # off centre, ⇐ 56u into the next cell, and ↑ 72u away from ↓
-        b = path.bounds
-        tx = adv / 2 - (b[0] + b[2]) / 2
-        ty = 0 if axis == 0 else (shs[1] + shs[3]) / 2 - (b[1] + b[3]) / 2
-        path = _xform_path(path, (1, 0, 0, 1, tx, ty))
-        pen = T2CharStringPen(pen_width(private, adv), gs)
-        path.draw(pen)
-        name = alloc_glyph_name(font)
-        append_glyph(font, td, name, pen.getCharString(private=private),
-                     fd_index, adv, None, vdon)
-        swapped[cp] = name
-    print(f"  full-width arrows from the ligatures (fwid): {len(swapped)}")
-    return swapped
 
 
 def grid_step(adv, ink, cell):
@@ -1890,7 +1766,8 @@ def fit_to_grid(font, cell, steps=None):
     Every glyph, not only the cmap'd ones: a feature puts glyphs on the
     page that no codepoint reaches, and 'locl' and 'ccmp' do it without
     being asked (Source Han Sans's locl form of ⋯ is 1052 units wide),
-    as do hwid's own 500-advance alternates.
+    and so did hwid's 500-advance alternates, before hwid was dropped
+    (they are in the font still; aalt reaches most of them).
 
     A tiling character is stretched into its step instead of centred
     in it (tiling_glyphs; the two that get here are the two-em and
@@ -2119,10 +1996,9 @@ TILING_RULE = ((0x221A, 0x221A), (0x23BE, 0x23CC), (0x2500, 0x257F))
 
 def tiling_glyphs(font):
     """{glyph: 'stretch' | 'rule'} for every glyph a tiling character
-    reaches — through the cmap, and one fwid substitution on from
-    there, which is where the two-cell forms of the box drawing live.
-    Not through vert: a rotated rule tiles vertically, and in Term its
-    width is centred like any other glyph's."""
+    reaches through the cmap. Not through vert: a rotated rule tiles
+    vertically, and in Term its width is centred like any other
+    glyph's."""
     cmap = font.getBestCmap()
     out = {}
     # the stretch blocks last, so the dashed rules inside the box-drawing
@@ -2133,16 +2009,6 @@ def tiling_glyphs(font):
                 name = cmap.get(cp)
                 if name is not None:
                     out[name] = how
-    if "GSUB" in font:
-        gsub = font["GSUB"].table
-        for fr in gsub.FeatureList.FeatureRecord:
-            if fr.FeatureTag != "fwid":
-                continue
-            for li in fr.Feature.LookupListIndex:
-                kind, subtables = _unwrap(gsub.LookupList.Lookup[li])
-                for src, dst in _subst_pairs(kind, subtables, "fwid"):
-                    if src in out and dst not in out:
-                        out[dst] = out[src]
     return out
 
 
@@ -2435,14 +2301,12 @@ def widen_fullwidth(font, cell, skip=()):
     The Latin layer is on the cell grid and passes through untouched —
     except that a multi-cell ligature can land on a whole number of full
     widths too (5 cells = 3000 = three full widths), so `skip` names the
-    ligature glyphs. The full-width forms this build appended for fwid
-    (stretch_arrows' arrows, fullwidth_forms' Source Han Sans glyphs)
-    are full-width and widen with the rest.
+    ligature glyphs.
 
     A tiling character (TILING_STRETCH / TILING_RULE, tiling_glyphs)
     whose ink reaches an edge of its own advance is drawn to meet a
-    neighbour there — ＿ ￣ 〰 ◢ and, under fwid, the box drawing and
-    block elements. Centring one of those would leave white at that
+    neighbour there — ＿ ￣ 〰 ◢, ⸺ ⸻ and the dashed overlines ﹉–﹏.
+    Centring one of those would leave white at that
     join, so it is lengthened on that side instead: extruded where the
     edge is a rule (extend_edges), stretched whole where it is a block,
     a pattern, a diagonal or a wave.
@@ -2533,151 +2397,6 @@ def widen_fullwidth(font, cell, skip=()):
     note_redrawn(font, redrawn)
     print(f"  full-width widened to {2 * cell}: {shifted} shifted with their hints, "
           f"{len(redrawn)} redrawn ({tiled} of them lengthened to keep tiling)")
-
-
-# How a tiling character is lengthened DOWN the page, by block. The
-# sideways classes do not transpose: ┄ tiles across the cell and ┆ down
-# the page, and ＿ ￣ 〰 ◢ tile sideways only — they have no one-cell
-# form to match, so their full-width glyph IS the default and
-# lengthening it would redraw the character (＿'s 41-unit rule came out
-# a 320-unit slab).
-#   scale — the block elements and the quadrants, whose whole point is a
-#   fraction of the cell (an eighth block must stay an eighth of the
-#   line, not gain the same 280 units as the full block), and the
-#   diagonals
-#   rule — the rest of the box drawing: extruded, so a stem or a double
-#   rule keeps its weight. The diagonals ╱ ╲ ╳ are scaled instead, as
-#   they are sideways: extruding a slant would grow a tail, and the
-#   one-cell default is already 1200 tall in a 600 cell — a steeper
-#   diagonal is the design for a line, not a distortion of it
-#   period — the vertical dashed rules, whose pattern has to repeat at
-#   the LINE's own pitch, not the band's: their em is mapped onto the
-#   line box instead, so a column of them keeps one rhythm across the
-#   join. Mapped onto the band like a block, ┊'s bottom dash and the
-#   next line's top dash overlapped by 57 units and merged into one
-#   471-unit dash among 264-unit ones
-#   tile — the shades, whose dots a 40% stretch would draw as ovals: the
-#   pattern is repeated a whole em up and down and cut to the band,
-#   which is what the cell above and the cell below would have shown
-VTILING_SCALE = ((0x2571, 0x2573), (0x2580, 0x2590), (0x2594, 0x259F))
-VTILING_PERIOD = ((0x2506, 0x2507), (0x250A, 0x250B), (0x254E, 0x254F))
-VTILING_TILE = ((0x2591, 0x2593),)
-VTILING_RULE = ((0x2500, 0x257F),)
-
-
-def vtiling_glyphs(font):
-    """{glyph: 'scale' | 'rule'} over the full-width forms of the
-    characters that tile down the page. Only the forms a fwid
-    substitution reaches: a character the Latin donor draws at one cell
-    already spans the line in its default form, and one with no
-    one-cell form at all (＿ ￣ 〰) is not drawn to stack."""
-    cmap = font.getBestCmap()
-    fwid = feature_map(font, "fwid")
-    out = {}
-    for blocks, how in ((VTILING_RULE, "rule"), (VTILING_SCALE, "scale"),
-                        (VTILING_PERIOD, "period"), (VTILING_TILE, "tile")):
-        for lo, hi in blocks:
-            for cp in range(lo, hi + 1):
-                full = fwid.get(cmap.get(cp))
-                if full is not None and full != cmap.get(cp):
-                    out[full] = how
-    return out
-
-
-def tile_vertically(font):
-    """Make the full-width box drawing and block elements as tall as a
-    line, so a column of them joins.
-
-    Under fwid those are Source Han Sans's own glyphs, drawn to its
-    1000-unit em, and the line is 1257 (copy_line_metrics gives the face
-    Source Code Pro's 984 / -273): a column of fwid │ broke at every
-    line and a run of fwid █ came out striped, 257 units of white in
-    every 1257. The one-cell defaults never had it — the Latin donor
-    draws its box drawing -400..1000, tall enough to overlap the line —
-    and that band is the target here.
-
-    A rule (vtiling_glyphs) is lengthened only where its ink reaches the
-    edge of the em it is drawn in (█'s own full-width extent, which is
-    the cell by definition) AND presents a rule there: the two tests
-    widen_fullwidth makes sideways, made on the outline transposed, so a
-    stem keeps its weight. A block element is mapped onto the band
-    instead, em edge to band edge, which is what keeps ▁ an eighth of
-    the line and ▀ a half of it; a dashed vertical is mapped onto the
-    LINE instead, so its pattern repeats at the pitch a column of cells
-    advances by; and a shade has its pattern repeated a whole em up and
-    down and cut to the band. Returns the number redrawn."""
-    cmap = font.getBestCmap()
-    gs = font.getGlyphSet()
-    fwid = feature_map(font, "fwid")
-    block = cmap.get(0x2588)
-    band = _bounds(gs, block) if block else None
-    em = _bounds(gs, fwid.get(block)) if fwid.get(block) else None
-    if band is None or em is None:
-        return 0
-    cff = font["CFF "].cff
-    td = cff[cff.fontNames[0]]
-    hmtx = font["hmtx"]
-    vmtx = font.get("vmtx")
-    scale = (band[3] - band[1]) / (em[3] - em[1])
-    # a pattern repeats at the line's pitch, not the band's: hhea's own
-    # box, which is what a column of cells advances by
-    hhea = font["hhea"]
-    line = (hhea.descent, hhea.ascent)
-    period = (line[1] - line[0]) / (em[3] - em[1])
-    redrawn = {}
-    for name, how in sorted(vtiling_glyphs(font).items()):
-        path = pathops.Path()
-        gs[name].draw(path.getPen())
-        if path.bounds is None:
-            continue
-        _, y0, _, y1 = path.bounds
-        origin = vmtx_origin(font, name) if vmtx is not None else 0
-        if how in ("scale", "period"):
-            sy, lo = ((scale, band[1]) if how == "scale"
-                      else (period, line[0]))
-            out = _xform_path(path, (1, 0, 0, sy, 0, lo - em[1] * sy))
-        elif how == "tile":
-            span = em[3] - em[1]
-            out = path
-            for dy in (-span, span):
-                out = pathops.op(out, _xform_path(path, (1, 0, 0, 1, 0, dy)),
-                                 pathops.PathOp.UNION)
-            out = pathops.op(out, _rect_path(-1e5, band[1], 1e5, band[3]),
-                             pathops.PathOp.INTERSECTION)
-        else:
-            down = y0 - band[1] if y0 <= em[1] + 2 else 0
-            up = band[3] - y1 if y1 >= em[3] - 2 else 0
-            # (x, y) -> (y, x): the top and bottom edges become the
-            # right and left ones, and the sideways machinery reads them
-            # as they are. Transposing back undoes the mirrored winding
-            flip = (0, 1, 1, 0, 0, 0)
-            tp = _xform_path(path, flip)
-            out = tp
-            if down > 0 and edge_is_rule(tp, "left"):
-                out = extend_edges(out, down, left=True, right=False)
-            if up > 0 and edge_is_rule(tp, "right"):
-                out = extend_edges(out, up, left=False, right=True)
-            if out is tp:
-                continue
-            out = _xform_path(out, flip)
-        adv = hmtx.metrics[name][0]
-        private = glyph_private(font, td, name)
-        pen = T2CharStringPen(pen_width(private, adv), gs)
-        out.draw(pen)
-        cs = redrawn[name] = pen.getCharString(private=private)
-        hmtx.metrics[name] = (adv, charstring_lsb(cs))
-        # the vertical origin is a top side bearing plus the glyph's own
-        # yMax, so growing upward would move it 120 units unless the
-        # bearing gives those back — and VORG, which states the origin
-        # outright, would no longer agree with vmtx
-        if vmtx is not None and name in vmtx.metrics:
-            vadv, _ = vmtx.metrics[name]
-            vmtx.metrics[name] = (vadv, origin - out.bounds[3])
-    for name, cs in redrawn.items():
-        td.CharStrings[name] = cs
-    note_redrawn(font, redrawn)
-    print(f"  full-width tiling glyphs lengthened to the line: {len(redrawn)}")
-    return len(redrawn)
 
 
 # name IDs we drop before writing our own (every platform/encoding, so no
@@ -3195,7 +2914,7 @@ def prune_orphan_lookups(font):
 
 def feature_map(font, tag):
     """{glyph: substitute} over every Single / Alternate subst reachable
-    under `tag` — Source Han Sans's own hwid / fwid forms. The first
+    under `tag` — Source Han Sans's own vertical forms, say. The first
     substitute wins where a glyph has more than one."""
     out = {}
     for src, dst in _feature_pairs(font, tag):
@@ -3428,36 +3147,11 @@ def narrow_halfwidth(font, cell):
     return len(new)
 
 
-def fullwidth_forms(font, replaced):
-    """{codepoint: Source Han Sans's two-cell glyph} for the codepoints
-    graft_halfwidth replaced: the glyph Source Han Sans's own fwid
-    feature maps the replaced one to, else the replaced glyph itself
-    when it is full-width; the rest (Greek in Source Han Sans JP) have
-    no two-cell form and are left out.
-
-    The fwid form first, because it is the designed two-cell glyph:
-    Source Han Sans draws ％ ＠ Ｍ ｍ ｗ ― differently from the % @ M m w
-    — it also has at a proportional advance, and fit_to_grid may since
-    have re-advanced those to a full width (an em dash's bar sits 100u
-    higher in the two-cell design). Nothing full-width is a fwid source,
-    so the order costs the natively two-cell glyphs nothing."""
-    hmtx = font["hmtx"]
-    fw = feature_map(font, "fwid")
-    out = {}
-    for cp, old in replaced.items():
-        for g in (fw.get(old), old):
-            if g is not None and hmtx[g][0] == FULLWIDTH:
-                out[cp] = g
-                break
-    return out
-
-
 def repoint_features(font, replaced, tags=("vert", "vrt2")):
     """Source Han Sans's own features substitute FROM the glyphs the
     graft replaced, so once the cmap points at Gengou Code's they never
-    fire. Re-point each of `tags` at the grafted glyph, the way
-    add_width_alternates does for fwid, so a vertical run still gets the
-    rotated forms of what Gengou Code took over.
+    fire. Re-point each of `tags` at the grafted glyph, so a vertical run
+    still gets the rotated forms of what Gengou Code took over.
 
     Only the vertical features: 'locl' is on by default, and re-pointing
     it would swap Gengou Code's own design for Source Han Sans's in
@@ -3486,21 +3180,6 @@ def repoint_features(font, replaced, tags=("vert", "vrt2")):
     if added:
         sort_feature_list(gsub)
     return added
-
-
-def add_width_alternates(font, fwid):
-    """Wire the full-width forms into GSUB's fwid: {default one-cell
-    glyph: full-width glyph} — Source Han Sans's own two-cell form of a
-    character Gengou Code sets in one cell (Greek, box drawing, ≠ ≤ ≥ …),
-    or the arrow redrawn from the ligatures (stretch_arrows). fwid
-    already exists in the Source Han Sans base; the new lookup is merged
-    into that record. Runs after add_gsub, so it re-sorts."""
-    if not fwid:
-        return
-    gsub = font["GSUB"].table
-    lookup = _new_lookup(gsub, otl.buildSingleSubstSubtable(fwid))
-    _add_feature(gsub, "fwid", [lookup])
-    sort_feature_list(gsub)
 
 
 def glyph_bounds(font):
@@ -4031,54 +3710,36 @@ def build_face(job):
     # the grid pass would give it
     n_half = narrow_halfwidth(base, CELL)
     # then Source Han Sans's proportional leftovers onto the grid — every
-    # glyph, so hwid's own 500-advance alternates and the locl forms no
+    # glyph, so hwid's 500-advance alternates and the locl forms no
     # codepoint reaches come along. It reads no features, so nothing
     # ties it to drop_features below
     n_fit = fit_to_grid(base, CELL, steps=steps)
     # kern would pull Japanese pairs off the cell in any shaper that
     # lays out a run (VS Code, a browser); halt and palt are alternate
-    # horizontal metrics, which a fixed cell has no use for. The
+    # horizontal metrics, which a fixed cell has no use for. fwid and
+    # hwid are the width alternates: an editor applies a feature to the
+    # whole buffer and a terminal applies none, so fwid could not give
+    # one character its two-cell form without turning every A into Ａ,
+    # and nothing could ask for it at all where a terminal draws. Only
+    # the features go: their glyphs stay, aalt reaching about a third of
+    # the full-width ones and most of the half-width ones, and nothing
+    # here prunes a glyph no lookup reaches (Regular: 250 of fwid's 357
+    # and 15 of hwid's 115 become such orphans), so the file does not
+    # shrink. The
     # vertical features are left alone (the faces keep vmtx/vhea)
-    drop_features(base, {"pwid", "palt", "kern", "halt"})
+    drop_features(base, {"pwid", "palt", "kern", "halt", "fwid", "hwid"})
     freed = prune_orphan_lookups(base)
     if freed:
         print("  lookups no feature reaches any more: "
               + ", ".join(f"{t} {n}" for t, n in sorted(freed.items())))
-    # the two-cell forms under fwid: the arrows redrawn from the
-    # ligatures so they share their head, everything else Source Han
-    # Sans's own — the full-width glyph the one-cell default replaced
-    # (→ ─ ≠), or its fwid form where the replaced glyph was proportional
-    # (A é: Source Han Sans's own fwid maps those to Ａ é). Greek has
-    # neither in Source Han Sans JP and stays one cell under fwid too
     n_vert = repoint_features(base, replaced)
-    fullwidth = fullwidth_forms(base, replaced)
-    arrows = stretch_arrows(base, added, fullwidth,
-                            ref_angle if ref_angle is not None else 0.0)
-    cmap_now = base.getBestCmap()
-    fwid_map = {}
-    for cp, old in fullwidth.items():
-        # several codepoints can share one grafted glyph (graft_halfwidth
-        # makes one per donor glyph), and then only one full-width form
-        # can be reached from it — fine while they agree, a silent loss
-        # if a future donor aliases two characters with different forms
-        src, want = cmap_now[cp], arrows.get(cp, old)
-        if fwid_map.setdefault(src, want) != want:
-            raise ValueError(
-                f"fwid for U+{cp:04X} cannot be wired: {src} is shared with "
-                f"another codepoint and already maps to {fwid_map[src]}, not "
-                f"{want}. The two need separate glyphs (see graft_halfwidth)")
-    add_width_alternates(base, fwid_map)
-    # and the full-width box drawing as tall as a line, before the Term
-    # pass lengthens the same glyphs sideways
-    n_tall = tile_vertically(base)
     if term:
         # the ligatures are the Latin layer's only multi-cell glyphs, so
         # the only ones an advance test cannot tell from a full width
         widen_fullwidth(base, CELL, skip=set(added.values()) | set(alts.values()))
     # the letters this face has that the Latin face did not: Source Han
-    # Sans's full-width Latin (the fwid forms add_width_alternates maps
-    # the letters to, on which an accent landed at the cell's right
-    # edge) and any letter of the Latin scripts the donor lacks. Fitted
+    # Sans's full-width Latin (Ａ, on which an accent landed at the
+    # cell's right edge) and any letter of the Latin scripts the donor lacks. Fitted
     # from the lookups imported above, as on the Latin face, and last,
     # on the ink every pass before has finished with
     import anchors
@@ -4099,10 +3760,10 @@ def build_face(job):
     out = Path(out_dir) / f"{ps}.otf"
     write_face(base, out, state_of(base).redrawn)
     return (f"{face_label}{f' [{suffix}]' if suffix else ''}: "
-            f"latin={n_scp} fwid={len(fullwidth)} vert={n_vert} "
+            f"latin={n_scp} vert={n_vert} "
             f"fitted={n_fit} half={n_half} "
             f"ligs={len(added)} ccmp={n_ccmp} locl={n_locl} mark={n_mark} loose={n_loose} "
-            f"tall={n_tall} -> {out.name}")
+            f"-> {out.name}")
 
 
 def main():
