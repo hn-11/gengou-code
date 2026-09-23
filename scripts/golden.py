@@ -50,8 +50,6 @@ FEATURE_SETS = [
     ("calt+liga", {"calt": True, "liga": True}),
     ("calt/liga off", {"calt": False, "liga": False}),
     ("ss02 only", {"calt": False, "liga": False, "ss02": True}),
-    ("hwid", {"hwid": True}),
-    ("fwid", {"fwid": True}),
     ("zero", {"zero": True}),
     ("cv01", {"cv01": True}),
 ]

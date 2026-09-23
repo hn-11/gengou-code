@@ -88,23 +88,18 @@ Source Han Sans にも 115 字あるが、それは Source Code Pro の 234 字�
 Source Han Sans の 600、声調記号 2 字は Source Han Sans の 250 を
 `fit_to_grid` が 1 セルに置く）、ターミナルは 2 桁分を空けるので
 左寄りに見える。
-Source Code Pro / Source Han Sans にこれより広い字形が無いため、
-`fwid` の代替も用意していない。
 
-JIS 流の全角字形は `fwid` で戻せる。矢印 7 種は合字グリフ（`->` `=>`
-`<=>` の鏡像・回転）から Source Han Sans のインク長に合わせて切り出した
-全角版、`≠` `≤` `≥` `…` や罫線は Source Han Sans 自身の全角グリフ、`A`
-など Source Han Sans が `fwid` の形を持つ文字はその形（`Ａ`）。
+**幅を切り替える機能は持たない。** JIS 流の全角の矢印や罫線に戻す
+`fwid`、半角に寄せる `hwid` は、v6.0.0 でどちらも落とした。VS Code などの
+エディタは feature をバッファ全体にしか掛けられないので、`fwid` を
+有効にすると 1 セルの字が全部全角になり（`A` まで `Ａ` になる）、
+「罫線だけ全角に」はそもそも頼めない。ターミナルは feature を掛けない。
+全角の形が要るなら、Unicode が全角として別に持つ文字（`＝` `｜` `＋` など）を
+使う。それらは Source Han Sans の全角のまま入っている。
 
-```jsonc
-// VS Code で矢印や罫線を全角に
-"editor.fontLigatures": "'fwid'"
-```
-
-横方向の送りを動かす機能は入れていない。Source Han Sans の `kern`
+横方向の送りを動かす機能も入れていない。Source Han Sans の `kern`
 （横組みでは既定 ON。`あ`+`て` をセルより 20u 詰める）と、代替メトリクスの
-`halt` / `palt` / `pwid` はビルド時に落としてある（Source Han Sans 自身の
-`hwid` は残る）。縦組みの機能（`vert` `vrt2` `vkrn` `vhal` `vpal`）は
+`halt` / `palt` / `pwid` はビルド時に落としてある。縦組みの機能（`vert` `vrt2` `vkrn` `vhal` `vpal`）は
 残してあり、縦書きは従来どおり。Term 面は、全角化で動いた字に付く
 結合マークの位置を横組み専用の `dist` で補正する。
 
@@ -383,7 +378,7 @@ Source Code Pro VF / Source Sans 3 VF / Monaspace VF の Releases から
 `GENGOU_SKIP_AUTOHINT=1` を立てるとスキップできる。Term の全角グリフ約1.7万個
 は描き直さず charstring の中で 100 ユニット右へ動かす（`shift_charstring`）
 ので、Source Han Sans 自身のヒントがそのまま残り、ヒント付けは各面で
-描き直したおよそ 2,250〜2,650 グリフ（欧文レイヤー、`fwid` の全角形、グリッドに
+描き直したおよそ 2,340〜2,440 グリフ（欧文レイヤー、グリッドに
 乗せ直した比例幅の残り、Term で伸ばした罫線など）だけで済む。ヒント付与後は cffsubr（AFDKO の
 `tx`、`requirements.txt` に同梱）で CFF をサブルーチン化している。
 
@@ -393,7 +388,8 @@ Source Code Pro VF / Source Sans 3 VF / Monaspace VF の Releases から
   `dist/latin` に出力）から来る。Source Han Sans JP（CID-keyed CFF）を
   土台に、Gengou Code が持つ全コードポイント（Regular で 1,335）へその
   グリフを 1 セルで接ぎ木し cmap を差し替える。Source Han Sans が持って
-  いた全角グリフは `fwid` の代替として残す。追加 CID は疎な空間の空きを
+  いた全角グリフはフォントに残り、縦組みの `vert` がそこから回転形を
+  引く（`repoint_features`）。追加 CID は疎な空間の空きを
   昇順割当（サブセット OTF の CID は不連続なため）
 - 太さの一致は Gengou Code 側（`build_latin.py`）で完結している——各面は
   SCP の名前付きインスタンスそのもので、その `=` バー厚に Monaspace VF の

@@ -265,8 +265,7 @@ def anchor_loose_letters(font, rules=None):
     cmap = font.getBestCmap()
     letters = accent_bases(cmap)
     # and what GSUB turns a letter into: the shaper substitutes before
-    # it positions, so the Serbian locl б takes the accent, not б, and
-    # a JP face's full-width Ａ (fwid) takes it, not A
+    # it positions, so the Serbian locl б takes the accent, not б
     letters |= _letter_variants(font, letters)
     bases = _canonical_bases(cmap)
     gid = font.getGlyphID
@@ -319,12 +318,11 @@ DOUBLE_SPAN = frozenset(range(0x035C, 0x0363))
 
 # the GSUB features whose output is still the letter, drawn another
 # way, and so still takes the letter's accent: a language form, a
-# stylistic or character variant, a case form, the JP faces' full-width
-# form (Source Han Sans's own fwid, a letter in a 1000 cell, on which an
-# unattached mark landed at the cell's right edge). Not a half-width or
-# vertical form, a superscript or a fraction figure -- those are other
-# glyphs drawn elsewhere, and their marks fall where they fall
-VARIANT_FEATURES = frozenset({"locl", "salt", "case", "fwid"}
+# stylistic or character variant, a case form. Not a width form (the JP
+# faces carry no fwid or hwid), a vertical form, a superscript or a
+# fraction figure -- those are other glyphs drawn elsewhere, and their
+# marks fall where they fall
+VARIANT_FEATURES = frozenset({"locl", "salt", "case"}
                              | {f"cv{i:02d}" for i in range(1, 100)}
                              | {f"ss{i:02d}" for i in range(1, 21)})
 

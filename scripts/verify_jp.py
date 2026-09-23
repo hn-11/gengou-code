@@ -21,9 +21,6 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import anchors  # noqa: E402
 import build  # noqa: E402
 from build import (  # noqa: E402
-    ARROW_SOURCE,
-    ARROWS_H,
-    ARROWS_V,
     FULLWIDTH,
     MONA_AMBIGUOUS,
     MONA_STANDALONE,
@@ -109,7 +106,7 @@ LOCL_ITALIC_GAP = {("cyrl", "sr"): "unchanged"}
 # 655..902 at Bold Italic
 VOICING_Y = (620, 940)
 # the ASCII punctuation whose full-width vertical form is its Unicode
-# vertical presentation form's glyph (check_width_forms)
+# vertical presentation form's glyph (check_vertical_forms)
 VERTICAL_AS_FULLWIDTH = frozenset(b"()[]{},")
 
 # drawn to tile, so a run of them must show no seam: the full-width low
@@ -140,7 +137,7 @@ FAMILY_METRICS = {
 DEFAULT_METRICS = (600, 1000)
 
 # Unicode calls these Wide, they end up one cell, and neither donor has
-# anything wider to offer under fwid (README, 幅の方針): six emoji only
+# anything wider to offer (README, 幅の方針): six emoji only
 # Source Code Pro carries at 600, five Bopomofo final letters only Source
 # Han Sans carries at 600, and two Hangul tone marks Source Han Sans
 # draws 250 wide that fit_to_grid centres in the cell -- verifylib's
@@ -184,24 +181,15 @@ def expected_metrics(tf):
     return DEFAULT_METRICS
 
 
-def check_width_forms(tf, check, shape):
-    """'fwid' and 'vert' give the glyph Unicode already encodes for the
-    form: the full-width form of an ASCII character is U+FF01.. and
-    the vertical form of a full-width punctuation mark is its
-    <vertical> presentation form (U+FE10.., U+FE30..). A substitution
-    re-pointed to the wrong glyph of the right width passed every
-    other gate (round 9, mutants J4, J5)."""
+def check_vertical_forms(tf, check, shape):
+    """'vert' gives the glyph Unicode already encodes for the form: the
+    vertical form of a full-width punctuation mark is its <vertical>
+    presentation form (U+FE10.., U+FE30..). A substitution re-pointed to
+    the wrong glyph of the right width passed every other gate (round 9,
+    mutant J5)."""
     cmap = tf.getBestCmap()
     order = tf.getGlyphOrder()
     off, probed = {}, 0
-    for cp in range(0x21, 0x7F):
-        wide = 0xFF01 + cp - 0x21
-        if cp not in cmap or wide not in cmap:
-            continue
-        infos, _ = shape(chr(cp), {"fwid": True})
-        probed += 1
-        if len(infos) != 1 or order[infos[0].codepoint] != cmap[wide]:
-            off[chr(cp)] = "fwid"
     for cp in list(range(0xFE10, 0xFE1A)) + list(range(0xFE30, 0xFE45)):
         form = unicodedata.decomposition(chr(cp))
         if not form.startswith("<vertical>") or cp not in cmap:
@@ -221,7 +209,7 @@ def check_width_forms(tf, check, shape):
         probed += 1
         if len(infos) != 1 or order[infos[0].codepoint] != cmap[cp]:
             off[chr(base)] = "vert"
-    check(probed and not off, f"fwid and vert give the encoded forms "
+    check(probed and not off, f"vert gives the encoded forms "
                               f"({probed} probed; off: {off})")
 
 
@@ -424,8 +412,6 @@ def check_term_sibling(tf, check, full):
             off[chr(cp)] = (tuple(round(v) for v in box), tuple(round(v) for v in want))
     check(n and not off, f"the Term face is its JP sibling, the kana and ideographs {shift:g} over "
                          f"({n} glyphs; off: {dict(list(off.items())[:4])})")
-
-
 
 
 class Face:
@@ -770,22 +756,6 @@ def check_hints(face, check):
     check_zones(tf, check, cmap)
 
 
-def check_fwid_forms(face, check):
-    exp_full, shape_infos = face.exp_full, face.shape
-    # the two-cell forms under fwid: the arrow redrawn from the ligature,
-    # ≠ and ─ from Source Han Sans, Ａ through Source Han Sans's own fwid
-    # form of the proportional A the one-cell A replaced
-    fwid_probes = "\u2192\u2260\u2500A"
-    off_fwid = {}
-    for ch in fwid_probes:
-        _infos, positions = shape_infos(ch, {"fwid": True})
-        got = positions[0].x_advance if positions else None
-        if got != exp_full:
-            off_fwid[ch] = got
-    check(not off_fwid, f"fwid restores the full-width forms "
-                        f"({len(fwid_probes)} probes; off: {off_fwid})")
-
-
 def check_cid_count(face, check):
     tf = face.tf
     # a CID-keyed font's CIDCount must cover every CID it uses: cffsubr
@@ -829,7 +799,9 @@ def check_feature_set(face, check):
           f"vert and vrt2 reach the characters that rotate (off: {vert_off})")
     # and the rest of what the build keeps: dropping a feature outright
     # looked the same as a working one from the outside
-    for tag in ("fwid", "hwid", "aalt", "dlig", "ruby",
+    for tag in ("fwid", "hwid"):
+        check(tag not in tags, f"GSUB has no {tag}")
+    for tag in ("aalt", "dlig", "ruby",
                 "jp78", "jp83", "jp90", "nlck", "locl", "ccmp"):
         check(tag in tags, f"GSUB carries {tag}")
     for tag in ("vkrn", "vhal", "vpal"):
@@ -883,108 +855,50 @@ def check_standalone_operators(face, check):
 
 
 def check_ambiguous_symbols(face, check):
-    tf, a_adv, shape_infos = face.tf, face.a_adv, face.shape
-    # the ligature-paired symbols (← → ≠ … etc.): one cell by default in
-    # both families, the full-width form under fwid; the full-width
-    # horizontal arrows are cut from the ligature they pair with
-    # (ARROW_SOURCE): same vertical extent, within 2u
-
-    def advance_of(text, feats):
-        _, positions = shape_infos(text, feats)
-        return positions[0].x_advance
-
-    full_adv = expected_metrics(tf)[1]
+    a_adv, shape_infos = face.a_adv, face.shape
+    # the ligature-paired symbols (← → ≠ … etc.): one cell in both
+    # families, shaped as well as mapped
     for ch in MONA_AMBIGUOUS:
-        got_default, got_alt = advance_of(ch, {}), advance_of(ch, {"fwid": True})
-        check(got_default == a_adv and got_alt == full_adv,
-              f"{ch!r} default {got_default} (want {a_adv}), "
-              f"fwid {got_alt} (want {full_adv})")
-
-
-def check_arrows(face, check):
-    tf, shape_infos, glyph_order, gs = face.tf, face.shape, face.order, face.gs
-    def extent(rows):
-        # a blank glyph has no rows: report it, do not abort the rest
-        if not rows:
-            return None, None
-        return min(a for a, _ in rows), max(b for _, b in rows)
-    for ch in ARROWS_H:
-        seq = ARROW_SOURCE[ch][0]
-        lig_ymin, lig_ymax = extent(y_rows(face, lig_glyph(face, f"a {seq} b")))
-        infos, _ = shape_infos(ch, {"fwid": True})
-        ymin, ymax = extent(y_rows(face, glyph_order[infos[0].codepoint]))
-        ok = (None not in (ymin, lig_ymin)
-              and abs(ymin - lig_ymin) <= 2 and abs(ymax - lig_ymax) <= 2)
-        check(ok, f"{ch!r} (fwid) y extent {ymin}..{ymax} "
-                  f"vs {seq!r} {lig_ymin}..{lig_ymax}")
-
-    # ... and each one sits centred in that advance with its ink inside
-    # it. stretch_arrows used to centre the DE-SLANTED outline, and the
-    # box of a sheared shape is not the shear of its box: in the italic
-    # faces every arrow came out tan(11°) of its own height to the right
-    # — 67u off centre, ⇐ 56u into the next cell, ↑ 72u away from ↓
-    gs = tf.getGlyphSet()
-    off_centre = {}
-    for ch in ARROWS_H + ARROWS_V:
-        infos, _ = shape_infos(ch, {"fwid": True})
-        name = glyph_order[infos[0].codepoint]
-        adv = tf["hmtx"][name][0]
-        pen = BoundsPen(gs)
-        gs[name].draw(pen)
-        box = pen.bounds
-        if box is None:
-            off_centre[ch] = "blank"
-        elif (abs((box[0] + box[2]) / 2 - adv / 2) > 2
-              or box[0] < -1 or box[2] > adv + 1):
-            off_centre[ch] = (round(box[0]), round(box[2]), adv)
-    check(not off_centre, f"every fwid arrow is centred inside its advance "
-                          f"({len(ARROWS_H + ARROWS_V)} probes; off: {off_centre})")
+        got = shape_infos(ch, {})[1][0].x_advance
+        check(got == a_adv, f"{ch!r} default {got} (want {a_adv})")
 
 
 def check_tiling(face, check):
     tf, shape_infos, glyph_order, gs = face.tf, face.shape, face.order, face.gs
     # characters drawn to TILE: a run of them must show no seam, in
-    # either family and at either width. Term widens a full width from
+    # either family. Term widens a full width from
     # 1000 to 1200, and centring the outline there left 100u of white at
     # every cell join — a rule of ＿ came out dashed and █ striped
     # (build.widen_fullwidth lengthens them instead)
     seam = {}
     for ch in TILING:
-        for feats in ({}, {"fwid": True}):
-            infos, _ = shape_infos(ch, feats)
-            name = glyph_order[infos[0].codepoint]
-            adv = tf["hmtx"][name][0]
-            pen = BoundsPen(gs)
-            gs[name].draw(pen)
-            box = pen.bounds
-            if box is None or box[0] > 2 or box[2] < adv - 2:
-                seam[ch, bool(feats)] = None if box is None else (
-                    round(box[0]), round(box[2]), adv)
+        infos, _ = shape_infos(ch, {})
+        name = glyph_order[infos[0].codepoint]
+        adv = tf["hmtx"][name][0]
+        pen = BoundsPen(gs)
+        gs[name].draw(pen)
+        box = pen.bounds
+        if box is None or box[0] > 2 or box[2] < adv - 2:
+            seam[ch] = None if box is None else (round(box[0]), round(box[2]), adv)
     check(not seam, f"every tiling character spans its whole advance "
-                    f"({2 * len(TILING)} probes; off: {seam})")
+                    f"({len(TILING)} probes; off: {seam})")
 
 
 def check_box_drawing_draws(face, check):
-    cmap, bounds, shape_infos, glyph_order = face.cmap, face.bounds, face.shape, face.order
+    cmap, bounds = face.cmap, face.bounds
     # every box-drawing and block character draws: the probes below
     # name fourteen of them, and a build that emptied any of the other
-    # 146 — or their full-width forms — shipped a font that set a
-    # terminal frame as whitespace and passed every gate
-    blank = []
-    for cp in range(0x2500, 0x25A0):
-        if cp not in cmap:
-            continue
-        infos, _p = shape_infos(chr(cp), {"fwid": True})
-        for name in (cmap[cp], glyph_order[infos[0].codepoint]):
-            if name not in bounds and name not in blank:
-                blank.append(name)
+    # 146 shipped a font that set a terminal frame as whitespace and
+    # passed every gate
+    blank = [cmap[cp] for cp in range(0x2500, 0x25A0)
+             if cp in cmap and cmap[cp] not in bounds]
     check(not blank, f"every box-drawing and block glyph draws "
-                     f"({2 * 160} probes; blank: {blank[:6]})")
+                     f"(160 probes; blank: {blank[:6]})")
 
 
 def check_dashed_rules(face, check):
-    cmap, hmtx, hhea, shape_infos, glyph_order, gs = (
-        face.cmap, face.hmtx, face.hhea, face.shape, face.order, face.gs)
+    cmap, hmtx, shape_infos, glyph_order, gs = (
+        face.cmap, face.hmtx, face.shape, face.order, face.gs)
     # a dashed rule's pattern must not break where two of them meet:
     # the gap across the join has to be the gap inside the glyph. Such
     # a rule is never faulted by the span test above — by construction
@@ -999,119 +913,47 @@ def check_dashed_rules(face, check):
         return sorted((c.bounds[axis], c.bounds[axis + 2])
                       for c in path.contours)
 
-    line_pitch = hhea.ascent - hhea.descent + hhea.lineGap
+    # across the line only: the vertical dashes are Source Code Pro's own
+    # drawing, and they do not repeat at this line pitch (┆ measures 134
+    # inside against 191 across, in the donor and here alike) — that is
+    # the donor's design, not ours
     pattern = {}
-    for block, axis in (((0x2504, 0x2505, 0x2508, 0x2509, 0x254C, 0x254D), 0),
-                        ((0x2506, 0x2507, 0x250A, 0x250B, 0x254E, 0x254F), 1)):
-        for cp in block:
-            if cp not in cmap:
-                continue
-            # down the page, only the full-width forms: the one-cell
-            # defaults are Source Code Pro's own drawing, and its
-            # vertical dashes do not repeat at this line pitch either
-            # (┆ measures 134 inside against 191 across, in the donor
-            # and here alike) — that is the donor's design, not ours
-            for feats in (({"fwid": True},) if axis else ({}, {"fwid": True})):
-                infos, _ = shape_infos(chr(cp), feats)
-                name = glyph_order[infos[0].codepoint]
-                pieces = dashes(name, axis)
-                if len(pieces) < 2:
-                    continue
-                pitch = hmtx[name][0] if axis == 0 else line_pitch
-                inside = [pieces[i + 1][0] - pieces[i][1]
-                          for i in range(len(pieces) - 1)]
-                join = pieces[0][0] + pitch - pieces[-1][1]
-                if max(abs(g - join) for g in inside) > 3:
-                    pattern[chr(cp), bool(feats)] = (
-                        [round(g) for g in inside], round(join))
+    for cp in (0x2504, 0x2505, 0x2508, 0x2509, 0x254C, 0x254D):
+        if cp not in cmap:
+            continue
+        infos, _ = shape_infos(chr(cp), {})
+        name = glyph_order[infos[0].codepoint]
+        pieces = dashes(name, 0)
+        if len(pieces) < 2:
+            continue
+        inside = [pieces[i + 1][0] - pieces[i][1] for i in range(len(pieces) - 1)]
+        join = pieces[0][0] + hmtx[name][0] - pieces[-1][1]
+        if max(abs(g - join) for g in inside) > 3:
+            pattern[chr(cp)] = ([round(g) for g in inside], round(join))
     check(not pattern, f"a dashed rule keeps its pattern across the join "
                        f"(inside vs across: {pattern})")
 
 
 def check_vertical_rules(face, check):
     hhea, shape_infos, glyph_order, gs = face.hhea, face.shape, face.order, face.gs
-    # and the same thing DOWN the page. A line is 1257 units tall here
-    # (Source Code Pro's metrics on a face whose Japanese is drawn to a
-    # 1000-unit em), so a full-width rule that stops at its own em
-    # leaves 257 units of white at every line: a column of fwid │ broke
-    # at each one and a run of fwid █ came out striped, while the
-    # one-cell defaults — which the Latin donor draws -400..1000 — did
-    # not (build.tile_vertically)
+    # and DOWN the page: a line is 1257 units tall here (Source Code
+    # Pro's metrics on a face whose Japanese is drawn to a 1000-unit em),
+    # and a rule has to reach both edges of it for a column of them to
+    # join. The Latin donor draws its box drawing -400..1000, which does.
     def spans_line(box):
         return box is not None and box[1] <= hhea.descent and box[3] >= hhea.ascent
 
     vseam = {}
     for ch in VTILING:
-        for feats in ({}, {"fwid": True}):
-            infos, _ = shape_infos(ch, feats)
-            pen = BoundsPen(gs)
-            gs[glyph_order[infos[0].codepoint]].draw(pen)
-            if not spans_line(pen.bounds):
-                vseam[ch, bool(feats)] = None if pen.bounds is None else (
-                    round(pen.bounds[1]), round(pen.bounds[3]))
+        infos, _ = shape_infos(ch, {})
+        pen = BoundsPen(gs)
+        gs[glyph_order[infos[0].codepoint]].draw(pen)
+        if not spans_line(pen.bounds):
+            vseam[ch] = None if pen.bounds is None else (
+                round(pen.bounds[1]), round(pen.bounds[3]))
     check(not vseam, f"every vertical rule spans the whole line "
                      f"({hhea.ascent}..{hhea.descent}; "
-                     f"{2 * len(VTILING)} probes; off: {vseam})")
-
-
-def check_line_edges(face, check):
-    cmap, hhea, shape_infos, glyph_order, gs = (
-        face.cmap, face.hhea, face.shape, face.order, face.gs)
-    # not only those four, and edge by edge: over the whole box-drawing
-    # and block range, a character whose one-cell default reaches the
-    # top or the bottom of the line must have a full-width form that
-    # reaches it too. Whole-span probes miss the corners — ╭ runs down
-    # and right, so only its foot is at the line's floor, and the four
-    # arcs ╭ ╮ ╯ ╰ were the ones left 137 units short at every line
-    # while ┌ ┐ ┘ └ joined
-    short, pairs = {}, 0
-    for cp in range(0x2500, 0x25A0):
-        if cp not in cmap:
-            continue
-        one = BoundsPen(gs)
-        gs[cmap[cp]].draw(one)
-        infos, _ = shape_infos(chr(cp), {"fwid": True})
-        full = glyph_order[infos[0].codepoint]
-        if one.bounds is None or full == cmap[cp]:
-            continue          # blank, or no separate full-width form
-        wide = BoundsPen(gs)
-        gs[full].draw(wide)
-        pairs += 1
-        if wide.bounds is None or (
-                one.bounds[1] <= hhea.descent < wide.bounds[1]
-                or one.bounds[3] >= hhea.ascent > wide.bounds[3]):
-            short[chr(cp)] = None if wide.bounds is None else (
-                round(wide.bounds[1]), round(wide.bounds[3]))
-    check(not short, f"a full-width form reaches the line's edge "
-                     f"wherever its one-cell default does ({pairs} pairs; "
-                     f"off: {short})")
-
-
-def check_rounded_corners(face, check):
-    cmap, shape_infos, glyph_order, gs = face.cmap, face.shape, face.order, face.gs
-    # and a rounded corner is the same corner: Source Han Sans draws ╭
-    # on exactly ┌'s bounding box, so the two must still agree once the
-    # tiling passes are done. They did not — the arc's leg bends, which
-    # read as a curve rather than a rule, so it was neither lengthened
-    # down the page nor extruded sideways in Term, where it came out
-    # stretched instead and its stem stood 48 units against every other
-    # fwid vertical's 40
-    corners = {}
-    for arc, corner in zip("\u256d\u256e\u256f\u2570", "\u250c\u2510\u2518\u2514"):
-        boxes = []
-        for ch in (arc, corner):
-            if ord(ch) not in cmap:
-                break
-            infos, _ = shape_infos(ch, {"fwid": True})
-            pen = BoundsPen(gs)
-            gs[glyph_order[infos[0].codepoint]].draw(pen)
-            boxes.append(pen.bounds)
-        if len(boxes) == 2 and (None in boxes or max(
-                abs(a - b) for a, b in zip(*boxes)) > 2):
-            corners[arc + corner] = [None if b is None else
-                                     tuple(round(v) for v in b) for b in boxes]
-    check(not corners, f"a rounded corner keeps its corner's box "
-                       f"(off: {corners})")
+                     f"{len(VTILING)} probes; off: {vseam})")
 
 
 def check_long_dashes(face, check):
@@ -1648,68 +1490,6 @@ def check_rules_not_slabs(face, check):
                      f"slabs (over 100u tall: {slabs})")
 
 
-def check_block_elements(face, check):
-    hmtx, shape_infos, glyph_order, gs = face.hmtx, face.shape, face.order, face.gs
-    # the block elements are fractions of the line, and under fwid they
-    # are Source Han Sans's, drawn to a 1000-unit em: mapped onto the
-    # 1400-unit band they keep their eighths, but EXTRUDED to it they
-    # all gained the same 280 units and ▁ drew 29% of the cell where it
-    # means an eighth
-    def fwid_box(ch):
-        infos, _ = shape_infos(ch, {"fwid": True})
-        pen = BoundsPen(gs)
-        gs[glyph_order[infos[0].codepoint]].draw(pen)
-        return pen.bounds
-
-    ramp = {}
-    full = fwid_box("\u2588")
-    if full is not None:
-        lo, hi = full[1], full[3]
-        band = hi - lo
-        # ▁ through █ grow UP from the floor an eighth at a time; ▔ and
-        # ▀ hang from the ceiling. Height alone is not the character: a
-        # ▀ drawn at the floor is a ▄, and measured by height only it
-        # passed
-        for ch, want, anchor in (
-                *((chr(0x2580 + k), band * k / 8, "bottom") for k in range(1, 9)),
-                ("\u2594", band / 8, "top"),     # ▔, an eighth from the top
-                ("\u2580", band / 2, "top")):    # ▀, the other half of ▄
-            box = fwid_box(ch)
-            edge = None if box is None else (box[1] - lo if anchor == "bottom"
-                                             else hi - box[3])
-            if box is None or abs((box[3] - box[1]) - want) > 2 or abs(edge) > 2:
-                ramp[ch] = None if box is None else (round(box[1]), round(box[3]))
-        # the same series across the cell: ▏ through ▉ grow right from
-        # x = 0 an eighth at a time, ▐ and ▕ hang off the right edge
-        def fwid_adv(ch):
-            infos, _ = shape_infos(ch, {"fwid": True})
-            return hmtx[glyph_order[infos[0].codepoint]][0]
-
-        for k in range(1, 8):
-            ch = chr(0x2590 - k)       # ▏ (U+258F) through ▉ (U+2589)
-            box, adv = fwid_box(ch), fwid_adv(ch)
-            if box is None or abs((box[2] - box[0]) - adv * k / 8) > 2 \
-                    or abs(box[0]) > 2:
-                ramp[ch] = None if box is None else (round(box[0]), round(box[2]))
-        for ch, part in (("\u2590", 1 / 2), ("\u2595", 1 / 8)):
-            box, adv = fwid_box(ch), fwid_adv(ch)
-            if box is None or abs((box[2] - box[0]) - adv * part) > 2 \
-                    or abs(box[2] - adv) > 2:
-                ramp[ch] = None if box is None else (round(box[0]), round(box[2]))
-        # and the quadrants sit in their own quarter of the cell
-        for ch, top, left in (("\u2598", True, True), ("\u259D", True, False),
-                              ("\u2596", False, True), ("\u2597", False, False)):
-            box = fwid_box(ch)
-            adv = hmtx[glyph_order[shape_infos(ch, {"fwid": True})[0][0].codepoint]][0]
-            want = ((lo + hi) / 2 if top else lo, hi if top else (lo + hi) / 2,
-                    0 if left else adv / 2, adv / 2 if left else adv)
-            got = None if box is None else (box[1], box[3], box[0], box[2])
-            if got is None or max(abs(a - b) for a, b in zip(got, want)) > 2:
-                ramp[ch] = None if got is None else tuple(round(v) for v in got)
-    check(not ramp, f"the fwid block elements step an eighth of the line "
-                    f"at a time, from the right edge (off: {ramp})")
-
-
 def check_term_growth(face, check):
     tf, cmap, hmtx, exp_full, bounds = face.tf, face.cmap, face.hmtx, face.exp_full, face.bounds
     # ... and nothing ELSE grew with the advance. A Source Han Sans glyph
@@ -1718,9 +1498,8 @@ def check_term_growth(face, check):
     # was stretched — which is how Ⅷ, ㌄ and a Bold 孰 shipped 20% wide
     # for two rounds while the ten tiling probes above stayed green. The
     # glyphs examined are the ones a reader can reach: the cmap, closed
-    # over every one-to-one and alternate substitution in the font. A
-    # single fwid hop is not enough — the vertical forms ｜ and ⎰ take
-    # under vert, the old shapes under jp78/jp83, and every aalt
+    # over every one-to-one and alternate substitution in the font —
+    # the vertical forms ｜ and ⎰ take under vert, the old shapes under jp78/jp83, and every aalt
     # alternate are 1200 wide too, and a pre-round-33 Term Bold stretched
     # six of them where the check saw four. The closure leaves out the
     # Latin donor's two-cell ligatures, which are 1200 wide in both
@@ -1913,12 +1692,11 @@ def main():
     check_donor_repertoire(check, cmap)
     # the Latin layer is the same glyphs here as in dist/latin
     check_donor_letters(tf, check, tf.getGlyphSet())
-    check_width_forms(tf, check, face.shape)
+    check_vertical_forms(tf, check, face.shape)
     check_term_sibling(tf, check, face.exp_full)
     check_ligature_cells(tf, face.shape, check, tf.getGlyphSet(), face.exp_half)
     check_vertical_layout(tf, check, face.shape, face.exp_full)
     check_hints(face, check)
-    check_fwid_forms(face, check)
     check_cases(tf, face.shape, check)
     check_features_work(face.shape, check, cmap)
     check_cid_count(face, check)
@@ -1926,13 +1704,10 @@ def main():
     check_cv11(face, check)
     check_standalone_operators(face, check)
     check_ambiguous_symbols(face, check)
-    check_arrows(face, check)
     check_tiling(face, check)
     check_box_drawing_draws(face, check)
     check_dashed_rules(face, check)
     check_vertical_rules(face, check)
-    check_line_edges(face, check)
-    check_rounded_corners(face, check)
     check_long_dashes(face, check)
     check_ccmp_composes(face, check)
     check_ccmp_context(face, check)
@@ -1954,7 +1729,6 @@ def main():
     check_grafted_bopomofo_accents(face, check)
     check_variants_reach_ccmp(face, check)
     check_rules_not_slabs(face, check)
-    check_block_elements(face, check)
     check_term_growth(face, check)
     check_bar_weights(face, check)
     check_overlaps(face, check)
