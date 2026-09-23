@@ -361,7 +361,6 @@ export GENGOU_VERSION=6.0.0
 export GENGOU_SKIP_AUTOHINT=1        # ローカル用。これを立てると
                                      # 「carries hints」FAIL が出るのは正常
 
-python scripts/build_latin.py "Regular Upright"     # 欧文静的面（数秒）
 python scripts/build_latin_vf.py                    # 可変フォント 2 本
 python scripts/build.py "Regular Upright base Term" # JP + Term（1 面 1 分弱）
 python scripts/nerdpatch.py dist/*.otf              # Nerd Fonts 版
@@ -449,6 +448,7 @@ JP 面の門番で捕まる。
 | 5 | `nerdpatch.py` に静的欧文面を明示で渡すと拒否する（docstring も実際の動作に） | **済** |
 | 6 | 古いコメント（release.yml 冒頭、build_latin の docstring ほか）と `.gitignore` | **済** |
 | 7 | 材料の開き方を `build_latin.donor_sources()` 1 か所に（静的面と可変が同じ材料を使うことを構造で保証。3 で失う比較の代わり） | **済** |
+| 8 | 静的面をファイルにしない: `build.py` が必要なウェイト・スタイルの分だけメモリ上で組み、JP 面と Term 面に同じものを渡す。ビルドは 1 段に（`build_latin.py` はコマンドでなくなり、`LATIN_DIR` も消えた） | **済** |
 
 - **示したこと**: 変更前後で全面を組み、配る 44 本（JP 20・JP NF 20・可変 2・
   可変 NF 2）を表ごとに比べて **`head` の日時以外はバイト単位で同一**。
@@ -457,6 +457,9 @@ JP 面の門番で捕まる。
   リリース全体では静的面の構築がおよそ 220 → 50 CPU 秒（二重構築の解消込み）
 - リリースの package ジョブは検証をしなくなった（各 faces ジョブが自分の
   出す物を検証する）。artifact に静的面を載せない
+- 8 も同じく、配る 44 本が `head` の日時以外バイト単位で同一。全面の
+  ビルドは静的面の段と JP の段の合計 1 分 56 秒が 1 段 1 分 48 秒に
+  （静的面を JP 面と Term 面で共有するため、二度組むことはない）
 
 ## 読む順序
 

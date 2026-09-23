@@ -63,18 +63,6 @@ def test_group_names_all_remap_nontrivially():
         assert build._remap_scp_tag(tag) is not None, tag
 
 
-# --- Latin donor face paths (LATIN_FAMILY) --------------------------------
-
-def test_latin_face_path_regular_upright():
-    got = build.latin_face_path("dist/latin", "Regular", False)
-    assert got == Path("dist/latin") / "GengouCode-Regular.otf"
-
-
-def test_latin_face_path_bold_italic():
-    got = build.latin_face_path("dist/latin", "Bold", True)
-    assert got == Path("dist/latin") / "GengouCode-BoldItalic.otf"
-
-
 # --- the weight roster ----------------------------------------------------
 
 def test_faces_are_source_code_pro_named_instances_with_a_partner_each():

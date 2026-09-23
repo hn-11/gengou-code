@@ -342,15 +342,14 @@ v5.0.0 までの `Sumi Moji JP`（v4.0.0 までは 2:3 の基本ファミリー�
 
 4つの上流（Source Han Sans JP / Source Code Pro VF / Source Sans 3 VF /
 Monaspace VF）と、Nerd Fonts 版のための `Symbols Nerd Font Mono` を
-取得して環境変数で場所を渡す。ビルドは2段階: まず `scripts/build_latin.py`
-が VF から Gengou Code（`dist/latin`）を組み、その完成品を `scripts/build.py`
-が Source Han Sans に接ぎ木する。具体的なコマンドは
+取得して環境変数で場所を渡す。`scripts/build.py` が VF から Gengou Code の
+静的面をメモリ上で組み（`build_latin.py`、ファイルには出さない）、それを
+Source Han Sans に接ぎ木する。具体的なコマンドは
 `.github/workflows/ci.yml` の手順がそのまま実行可能なリファレンス。
 
 ```sh
 pip install -r requirements.txt
 export SCP_VF_U=... SCP_VF_I=... SS_VF_I=... MONA_VF=... SHS_DIR=...
-python scripts/build_latin.py           # dist/latin/GengouCode-*.otf（10 面）
 python scripts/build_latin_vf.py        # dist/latin/GengouCode[wght].otf, -Italic[wght].otf
 python scripts/build.py                 # 両ファミリー（JP / Term × 10 面）
 python scripts/build.py "Regular"       # Regular系のみ（動作確認用）
@@ -361,14 +360,12 @@ python scripts/golden.py <前の dist> dist                  # 出力が変わ�
 NF_SYMBOLS=... python scripts/nerdpatch.py                 # Nerd Fonts 版
 ```
 
-`SCP_VF_U` / `SCP_VF_I` / `SS_VF_I` / `MONA_VF` は欧文を組む 2 つの
-スクリプト（`build_latin.py` と `build_latin_vf.py`）が使い、それぞれ
+`SCP_VF_U` / `SCP_VF_I` / `SS_VF_I` / `MONA_VF` は欧文を組む
+`build.py`（`build_latin.py` 経由）と `build_latin_vf.py` が使い、それぞれ
 Source Code Pro VF / Source Sans 3 VF / Monaspace VF の Releases から
 取得する。`SS_VF_I` は斜体のギリシャ・キリルにしか使わないが、直立だけを
 組む場合も必須（欠けたまま斜体を組むと 2 文字体系が黙って抜けるため）。
-`build.py` は Source Code Pro / Monaspace の VF に直接触らず、代わりに
-`SHS_DIR`（Source Han Sans JP）と `LATIN_DIR`（既定 `dist/latin`、
-`build_latin.py` の出力先）を見る。`verify_jp.py` と `verify_latin_vf.py` は
+`build.py` はほかに `SHS_DIR`（Source Han Sans JP）を見る。`verify_jp.py` と `verify_latin_vf.py` は
 `SCP_VF_U` / `SCP_VF_I` があれば `=` のバーを Source Code Pro の
 インスタンスと突き合わせる。
 `GENGOU_VERSION`（例 `6.0.0`）を立てると name テーブルにその版番号を刻む
@@ -386,8 +383,8 @@ Source Code Pro VF / Source Sans 3 VF / Monaspace VF の Releases から
 
 ## 仕組み
 
-- 欧文レイヤーは Gengou Code（`scripts/build_latin.py`、VF から先に組んで
-  `dist/latin` に出力）から来る。Source Han Sans JP（CID-keyed CFF）を
+- 欧文レイヤーは Gengou Code（`scripts/build_latin.py`、VF から先に
+  メモリ上で組む）から来る。Source Han Sans JP（CID-keyed CFF）を
   土台に、Gengou Code が持つ全コードポイント（Regular で 1,335）へその
   グリフを 1 セルで接ぎ木し cmap を差し替える。Source Han Sans が持って
   いた全角グリフはフォントに残り、縦組みの `vert` がそこから回転形を

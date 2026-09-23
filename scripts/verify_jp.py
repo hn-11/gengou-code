@@ -1683,7 +1683,7 @@ def main():
     # here too -- and the JP faces are where a dropped codepoint would
     # otherwise hide, their own repertoire being ten times the donor's
     check_donor_repertoire(check, cmap)
-    # the Latin layer is the same glyphs here as in dist/latin
+    # the Latin layer is the same glyphs here as in its donor
     check_donor_letters(tf, check, tf.getGlyphSet())
     check_vertical_forms(tf, check, face.shape)
     check_term_sibling(tf, check, face.exp_full)
