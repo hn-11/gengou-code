@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Regression test for the variable Gengou Code (dist/latin/GengouCode[wght].otf
-/ GengouCode-Italic[wght].otf): fvar/STAT/name shape, and that every named
-instance shapes ligatures the same way the static faces do and lands on
-the same '=' bar / 'A' bounds as the matching static face (when that face
-is built), and — with SCP_VF_U / SCP_VF_I set — that the font reproduces
-Source Code Pro exactly at and between the named weights.
+/ GengouCode-Italic[wght].otf): fvar/STAT/name shape, that every named
+instance shapes the ligatures, and — with SCP_VF_U / SCP_VF_I set — that
+each named instance's '=' bar is SCP's own at that weight and the font
+reproduces Source Code Pro exactly at and between the named weights.
 
 Usage: python scripts/verify_latin_vf.py [FONT]
   FONT defaults to dist/latin/GengouCode[wght].otf.
@@ -61,7 +60,6 @@ from verifylib import (  # noqa: E402
     ink_spill,
     make_shaper,
     mean_ink_offset,
-    static_faces,
     vf_region_peaks,
 )
 
@@ -126,8 +124,7 @@ def main():
     styles = [name.getDebugName(i.subfamilyNameID) for i in instances]
     check(len(instances) == len(WEIGHTS), f"{len(instances)} named instances (want {len(WEIGHTS)}): {styles}")
     # ... and they are NAMED: only the count was asserted, so a VF whose
-    # menu read "Weight 300" passed — and then failed to find the
-    # matching static face below, which was a silent skip too
+    # menu read "Weight 300" passed
     want_styles = [("Italic" if w == "Regular" else w + " Italic")
                    if "Italic" in (name.getDebugName(2) or "") else w
                    for w in WEIGHTS]
@@ -164,7 +161,7 @@ def main():
         check(len(wght_values) == len(WEIGHTS), f"STAT has {len(wght_values)} wght values (want {len(WEIGHTS)})")
         stat_vals = sorted(av.Value for av in wght_values)
         check(stat_vals == sorted(want_coords),
-              f"STAT wght values {stat_vals} == the static faces' usWeightClass values")
+              f"STAT wght values {stat_vals} == the named weights' usWeightClass values")
         check(len(ital_values) == 1, f"STAT has {len(ital_values)} ital value (want 1)")
         elidable = [av for av in wght_values if av.Flags & 0x2]
         check(len(elidable) == 1
@@ -268,8 +265,8 @@ def main():
     # value wrong only away from the default is exactly what this file
     # is here to see, and reading the VF's own tables shows only the
     # default value -- instantiating resolves every delta into a plain
-    # font the same four checks the statics get can read. The Light
-    # Italic instance is where the statics' own weight extreme first
+    # font the same four checks the JP faces get can read. The Light
+    # Italic instance is where the family's weight extreme first
     # showed a leaning ascender; it is the one a default-only gate
     # misses, and it is a named instance here.
     # the default, the two ends, every named instance -- and every
@@ -294,7 +291,7 @@ def main():
         check_ligature_cells(inst, shape_at, check, gs_at, build.CELL, label=f" at wght {round(loc, 2):g}")
         check_blank_glyphs(inst, check, gs_at)
     check_features_work(shape_default, check, vf_cmap)
-    # the nameIDs a static face is held to; 13 and 14 are the licence
+    # the nameIDs a JP face is held to; 13 and 14 are the licence
     # and its URL, and dropping all seven passed this file
     check_name_ids(tf, check, (3, 4, 8, 9, 11, 13, 14))
     check_version_stamp(tf, check)
@@ -400,12 +397,10 @@ def main():
     cmap = tf.getBestCmap()
     equals = cmap[ord("=")]
     # Monaspace's own wght floor, as this VF carries it: the '=' bar at the
-    # axis minimum. A static face whose bar is thinner than that could only
-    # have got there by erosion (build_latin.py, static faces only — a VF
-    # master can't erode, see build_latin_vf.py), so its bar is not
-    # comparable; its SCP-side glyphs still are.
+    # axis minimum. Where SCP's bar is thinner than that, Monaspace cannot
+    # follow it (a VF master can't erode, see build_latin_vf.py) and the
+    # bar sits at the floor instead
     floor_bar = build.bar_thickness(tf.getGlyphSet(location={"wght": axis.minValue}), equals)
-    any_static = bool(static_faces(ROOT / "dist" / "latin", "GengouCode"))
     for inst_desc in instances:
         style = name.getDebugName(inst_desc.subfamilyNameID) or "?"
         loc = dict(inst_desc.coordinates)
@@ -413,43 +408,26 @@ def main():
             got = len(make_shaper(vf_bytes, loc)(text, on)[0])
             check(got == want, f"[{style}, wght={loc.get('wght', '?'):.0f}] "
                                f"{text!r}: {got} glyphs (want {want})")
-        # the matching static face (build_latin.py): same '=' bar (this is
-        # the bar-matching every weight is placed by) and the same 'A'
-        # (an SCP-only glyph — no Monaspace/erosion involved); the
-        # position check — the exact-outline check against SCP is below
-        weight = style.replace(" Italic", "").replace("Italic", "Regular")
-        static_name = f"GengouCode-{weight}{'Italic' if is_italic else ''}.otf"
-        static_path = ROOT / "dist" / "latin" / static_name
-        if static_path.exists():
-            ref = TTFont(str(static_path))
-            gs = tf.getGlyphSet(location=loc)
-            bar_i = build.bar_thickness(gs, equals)
-            bar_r = build.bar_thickness(ref, ref.getBestCmap()[ord("=")])
-            if bar_r < floor_bar:
-                check(abs(bar_i - floor_bar) <= 1,
-                      f"[{style}] static {static_name} '=' bar {bar_r:.1f} is eroded "
-                      f"below Monaspace's floor {floor_bar:.1f}; instanced bar "
-                      f"{bar_i:.1f} sits at the floor (want within 1u of it)")
-            else:
-                # 1.5u: '=' is Monaspace's, bar-matched at the static's
-                # exact wght but interpolated between masters here, and
-                # Monaspace's bar is not linear in SCP's design coordinate
-                check(abs(bar_i - bar_r) <= 1.5,
-                      f"[{style}] instanced '=' bar {bar_i:.1f} vs static "
-                      f"{static_name} {bar_r:.1f} (delta {bar_i - bar_r:+.1f}, want <=1.5u)")
-            # 1u: the static face is the VF's blend rounded point by
-            # point (build_latin.round_outlines) — half a unit, plus a
-            # curve extreme moving with its rounded control points
-            bi, br = bounds(gs, cmap, "A"), bounds(ref.getGlyphSet(), ref.getBestCmap(), "A")
-            check(close(bi, br, 1), f"[{style}] instanced 'A' bounds {bi} vs static "
-                                    f"{static_name} 'A' bounds {br} (want within 1u)")
+        if scp is None:
+            continue
+        # the bar-matching every weight is placed by: Monaspace's '=' at
+        # this instance on SCP's own '=' at the SCP wght it maps to
+        s_wght = to_scp(loc["wght"])
+        bar_i = build.bar_thickness(tf.getGlyphSet(location=loc), equals)
+        bar_s = build.bar_thickness(scp.getGlyphSet(location={"wght": s_wght}),
+                                    scp.getBestCmap()[ord("=")])
+        if bar_s < floor_bar:
+            check(abs(bar_i - floor_bar) <= 1,
+                  f"[{style}] SCP's '=' bar {bar_s:.1f} at wght {s_wght:.1f} is below "
+                  f"Monaspace's floor {floor_bar:.1f}; instanced bar {bar_i:.1f} "
+                  f"sits at the floor (want within 1u of it)")
         else:
-            # a silent skip in the release package job, where all ten
-            # statics ARE there, means the only per-weight comparison
-            # this file has was lost, not that it did not apply
-            check(not any_static,
-                  f"bar/bounds compare: {static_name} is missing while the "
-                  f"rest of the family is built")
+            # 1.5u: Monaspace is bar-matched at the masters and
+            # interpolated between them here, and its bar is not linear
+            # in SCP's design coordinate
+            check(abs(bar_i - bar_s) <= 1.5,
+                  f"[{style}] instanced '=' bar {bar_i:.1f} vs SCP's {bar_s:.1f} at wght "
+                  f"{s_wght:.1f} (delta {bar_i - bar_s:+.1f}, want <=1.5u)")
     # exactness against SCP itself, at the named weights AND between them:
     # our blend at user U must equal SCP's blend at the SCP wght our avar
     # maps U to (see build_latin_vf.scp_design_axis / user_axis), to 1u

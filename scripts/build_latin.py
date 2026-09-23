@@ -5,23 +5,26 @@ the ligatures and the one-cell arrows.
 
 This is the Latin layer every Gengou Code JP family carries, built once
 and on its own (docs/gengou-plan.md): build.py grafts these faces
-into Source Han Sans as they are. Each face is one of Source Code Pro's
-own named instances — Light 300 / Regular 400 / Medium 500 / SemiBold
-600 / Bold 700 (build.WEIGHT_CLASS), instanced at exactly that wght, no
-bar search — with Monaspace's wght matched to the instance's '=' bar.
-The Japanese faces follow the Latin's weight (build.FACES), not the
-other way round: Source Code Pro is the benchmark.
+into Source Han Sans. They are that donor and nothing else -- Gengou
+Code itself ships as the variable fonts (build_latin_vf.py), which are
+built from the same donors (donor_sources) and the same graft. Each
+face is one of Source Code Pro's own named instances — Light 300 /
+Regular 400 / Medium 500 / SemiBold 600 / Bold 700 (build.WEIGHT_CLASS),
+instanced at exactly that wght, no bar search — with Monaspace's wght
+matched to the instance's '=' bar. The Japanese faces follow the
+Latin's weight (build.FACES), not the other way round: Source Code Pro
+is the benchmark.
 
 The base is the SCP VF instance converted to a static CID-keyed CFF
-(fontTools CFF2ToCFF): SCP's own outlines, alignment zones, GSUB
-(cv01-cv17, zero, salt, its stylistic sets moved to ss11-ss17) and GPOS
-(mark positioning) survive untouched; the hints do not survive the
-instancer, so the whole font is re-hinted against SCP's zones. On top:
-the 61 ligatures and the 32 ASCII punctuation glyphs from Monaspace,
-weight-matched to the same bar and baseline-aligned on '='; the
-ligature-paired symbols ← → ↑ ↓ ⇐ ⇒ ⇔ ≠ ≤ ≥ … as Monaspace's one-cell
-glyphs; calt/liga with the context guards, ss01-ss08, cv99. otfautohint
-hints everything against SCP's zones; cffsubr subroutinizes.
+(fontTools CFF2ToCFF): SCP's own outlines, GSUB (cv01-cv17, zero, salt,
+its stylistic sets moved to ss11-ss17) and GPOS (mark positioning)
+survive untouched. On top: the 61 ligatures and the 32 ASCII
+punctuation glyphs from Monaspace, weight-matched to the same bar and
+baseline-aligned on '='; the ligature-paired symbols ← → ↑ ↓ ⇐ ⇒ ⇔ ≠ ≤ ≥
+… as Monaspace's one-cell glyphs; calt/liga with the context guards,
+ss01-ss08, cv99. The face is saved as it stands, unhinted and not
+subroutinized: build.py redraws every glyph it takes and hints them
+against the JP face's own zones.
 
 Usage:
   python scripts/build_latin.py [FILTER]   # build.py's weight / style words
@@ -29,7 +32,7 @@ Usage:
                                            # nothing here: one family)
 Env (all required):
   SCP_VF_U, SCP_VF_I, SS_VF_I, MONA_VF
-Env (optional): GENGOU_VERSION, GENGOU_SKIP_AUTOHINT
+Env (optional): GENGOU_VERSION
 """
 
 import io
@@ -74,8 +77,7 @@ def round_outlines(font):
     """Every charstring redrawn through build.draw_clean and a
     T2CharStringPen: the overlaps merged, the points rounded where
     they are (absolute coordinates), the advance kept, hints dropped
-    (the instancer had dropped them already; otfautohint puts them
-    back). A CFF font's operands are relative, so rounding them one by
+    (the instancer had dropped them already). A CFF font's operands are relative, so rounding them one by
     one — what fontTools' instancer does — drifts an outline several
     units along a path; rounding the absolute points keeps each within
     half a unit of the VF's blend, which is what HarfBuzz renders the
@@ -106,7 +108,8 @@ _INT_PRIVATE = ("BlueValues", "OtherBlues", "FamilyBlues", "FamilyOtherBlues",
 
 def fix_zone_order(font):
     """Sort and round the alignment zones and stem widths on every
-    FontDict.
+    FontDict -- of each variable font master (build_latin_vf.scp_base_at),
+    whose zones varLib blends into the shipped CFF2.
 
     Instancing a CFF2 blends each zone edge separately, and at some
     weights a pair comes out inverted (SCP Regular: OtherBlues [-217,
@@ -313,12 +316,43 @@ def pin_win_metrics(font):
     font["OS/2"].usWinAscent, font["OS/2"].usWinDescent = LATIN_WIN_METRICS
 
 
+def scp_source(path):
+    """A Source Code Pro VF as a vfsource.VFSource: wght only, bars in
+    SCP's own units (scale 1.0)."""
+    return vfsource._vf_source(path, 1.0, {"wght": 0})
+
+
+def donor_sources(env, italic):
+    """The donors one style is built from, as (scp, mona, sans, upright):
+    the style's Source Code Pro VF, Monaspace (scaled to our cell, its
+    other axes pinned at the regular width and no slant), for an italic
+    Source Sans Italic and the codepoints the upright draws that bound
+    it (else None, None). The static faces and the variable fonts both
+    take them from here, so the two are matched against the same donors
+    by construction -- nothing compares the one with the other."""
+    scp = scp_source(env["SCP_VF_I" if italic else "SCP_VF_U"])
+    mona = vfsource._vf_source(env["MONA_VF"], MONA_K,
+                               {"wght": 0, "wdth": 100, "slnt": 0})
+    if not italic:
+        return scp, mona, None, None
+    # Source Code Pro Italic draws no Cyrillic and one Greek letter, so
+    # the italic takes both scripts from Source Sans 3 Italic, bounded
+    # by what the upright draws (add_missing_from_sans)
+    return (scp, mona, scp_source(env["SS_VF_I"]), upright_cmap(env["SCP_VF_U"]))
+
+
 def build_face(job):
+    """One static face: the Latin donor build.py grafts into Source Han
+    Sans, and nothing else -- it ships as nothing, so it carries only
+    what build.py reads off it (outlines, advances, GSUB/GPOS/GDEF, the
+    line metrics, italic angle and the donors' credits). The JP face
+    redraws every glyph it takes from here and hints them itself, and
+    recomputes the OS/2 ranges, heights, STAT and extents on its own
+    result, so none of that is done here."""
     weight, italic, env, out_dir = job
     label = f"{weight}{' Italic' if italic else ''}"
     wght = build.WEIGHT_CLASS[weight]
-    scp_src = vfsource._vf_source(env["SCP_VF_I" if italic else "SCP_VF_U"], 1.0,
-                               {"wght": 0})
+    scp_src, mona_src, sans_src, upright = donor_sources(env, italic)
     # SCP's exact blend at its named instance's wght; round_outlines
     # rounds it point by point below (the instancer's own operand
     # rounding drifts an outline several units along a path —
@@ -328,26 +362,18 @@ def build_face(job):
     # the stroke weight Monaspace is matched to: this instance's own bar
     target = build.bar_thickness(scp, scp.getBestCmap()[ord("=")])
     ref_angle = (scp["post"].italicAngle or -12.0) if italic else None
-    mona_src = vfsource._vf_source(env["MONA_VF"], MONA_K,
-                                {"wght": 0, "wdth": 100, "slnt": 0})
     mona = mona_src.matched(target, ref_angle)
     # the italic faces' Greek and Cyrillic, matched on the same '=' bar
     # as Monaspace is. No slant argument: Source Sans ships a drawn
     # italic at the same -11 degrees, so there is no residual to shear
-    sans = (vfsource._vf_source(env["SS_VF_I"], 1.0, {"wght": 0}).matched(target)
-            if italic else None)
+    sans = sans_src.matched(target) if italic else None
     credits = credits_from(("Source Code Pro", scp), ("Monaspace", mona),
                            *([("Source Sans", sans)] if italic else []))
 
     base = static_base(_copy_instance(scp))
     round_outlines(base)
-    fix_zone_order(base)
-    added = graft(base, mona, sans, upright_cmap(env["SCP_VF_U"]) if sans else None)
+    added = graft(base, mona, sans, upright)
     use_typo_metrics(base)
-    base["OS/2"].recalcUnicodeRanges(base)
-    build.recalc_codepage_range(base)
-    build.set_monospace_metadata(base)
-    build.set_latin_heights(base)
     ps = build.set_names(base, "", weight, italic,
                          ref_angle if ref_angle is not None else -12.0,
                          version=env.get("GENGOU_VERSION"), credits=credits,
@@ -355,7 +381,7 @@ def build_face(job):
     anchors.classify_unicode_marks(base)
     # after classify_unicode_marks, which is what makes the shaper treat
     # these as marks (and so zero their spacing advance) in the first
-    # place; before the bbox, which the new anchors do not move
+    # place
     loose = anchors.anchor_loose_letters(base)
     if loose < LOOSE_FLOOR:
         # a count, not a truthiness test: one rule turned away leaves the
@@ -373,19 +399,14 @@ def build_face(job):
     print(f"  marks given a lookup's anchor: {anchors.anchor_loose_marks(base)}")
     if italic:
         with vfsource.unrounded_cff2_instancing():
-            model = vfsource._vf_source(env["SCP_VF_U"], 1.0, {"wght": 0}).at(wght)
+            model = scp_source(env["SCP_VF_U"]).at(wght)
         print(f"  stacked-accent anchors lifted as the upright's: "
               f"{anchors.mirror_stack_lift(base, model)}")
-    build.add_stat(base, weight, italic)
-    build.prune_orphan_names(base)
-    build.update_bbox(base)
-    pin_win_metrics(base)
     out = Path(out_dir) / f"{ps}.otf"
-    # every glyph: fontTools' CFF2 instancing leaves the SCP outlines
-    # without their hints (the VF's charstrings carry them inside blended
-    # subroutines that the instancer flattens), so the whole font is
-    # hinted here against SCP's own alignment zones
-    build.write_face(base, out, base.getGlyphOrder())
+    # a plain save: build.py redraws and hints what it takes from here,
+    # so hints or subroutines written now would only be thrown away
+    base.recalcBBoxes = False
+    base.save(out)
     return (f"{label}: wght {wght} bar {target:.1f} ligs={len(added)} "
             f"glyphs={base['maxp'].numGlyphs} -> {out.name}")
 
