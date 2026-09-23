@@ -32,6 +32,10 @@ from conftest import make_cff_font  # noqa: E402
     ("5.0.0;GNGO;GengouCodeJP-Regular", "5.0.0;GNGO;GengouCodeJPNF-Regular"),
     ("Version 5.0.0;Gengou Code JP;SHS 2.005", "Version 5.0.0;Gengou Code JP NF;SHS 2.005"),
     ("Source Han Sans", "Source Han Sans"),
+    # a variable font's own: nameID 6 is its default instance's, and 25
+    # is the bare prefix its instances are named from
+    ("GengouCode-Roman", "GengouCodeNF-Roman"),
+    ("GengouCode", "GengouCodeNF"),
 ])
 def test_nf_name(name, want):
     assert nerdpatch.nf_name(name) == want
@@ -231,6 +235,61 @@ def test_graft_symbols_appends_one_cell_icons_the_face_lacks(monkeypatch):
     assert face["maxp"].numGlyphs == 6
 
 
+def _variable_face():
+    """_face's glyphs in a variable font's CFF2 (one FontDict, no
+    FDSelect, as FontBuilder writes it), under a wght axis."""
+    fb = FontBuilder(1000, isTTF=False)
+    fb.setupGlyphOrder([".notdef", "A", "uniE0B0"])
+    fb.setupCharacterMap({ord("A"): "A", 0xE0B0: "uniE0B0"})
+    charstrings = {}
+    for name, box in ((".notdef", None), ("A", (50, 0, 550, 655)),
+                      ("uniE0B0", (0, -280, 600, 1040))):
+        pen = T2CharStringPen(None, None, CFF2=True)
+        if box:
+            _rect(pen, *box)
+        charstrings[name] = pen.getCharString()
+    fb.setupCFF2(charstrings)
+    fb.setupHorizontalMetrics({".notdef": (600, 0), "A": (600, 50), "uniE0B0": (600, 0)})
+    fb.setupHorizontalHeader(ascent=984, descent=-273)
+    fb.setupNameTable({"familyName": "Gengou Code", "styleName": "Regular",
+                       "psName": "GengouCode-Roman"})
+    fb.setupOS2()
+    fb.setupPost()
+    fb.setupFvar([("wght", 200, 400, 700, "Weight")], [])
+    buf = io.BytesIO()
+    fb.save(buf)
+    buf.seek(0)
+    return TTFont(buf)
+
+
+def test_graft_symbols_appends_to_a_variable_font(monkeypatch):
+    # the variable Gengou Code faces are CFF2: the icons go in as CFF2
+    # charstrings with no width (the advance is hmtx's alone) and no
+    # blend (an icon is the same at every weight), the Powerline glyph
+    # is redrawn in place, and the font saves and reads back
+    monkeypatch.setattr(nerdpatch, "TEXT_OVER_ICON", frozenset({ord("A")}))
+    face = _variable_face()
+    grafted, rehint, _written, _dropped = nerdpatch.graft_symbols(face, _symbols())
+    assert (grafted, rehint) == (4, ["uniE0B0"])
+    assert nerdpatch.rename(face) == "GengouCodeNF-Roman"
+    buf = io.BytesIO()
+    face.save(buf)
+    buf.seek(0)
+    back = TTFont(buf)
+    assert "CFF2" in back and "CFF " not in back
+    cmap = back.getBestCmap()
+    for loc in ({"wght": 200}, {"wght": 700}):
+        gs = back.getGlyphSet(location=loc)
+        pen = BoundsPen(gs)
+        gs[cmap[0xE0B0]].draw(pen)
+        assert pen.bounds == (0, -273, 600, 984)            # stretched to the line
+        pen = BoundsPen(gs)
+        gs[cmap[0xE000]].draw(pen)
+        assert (pen.bounds[0], pen.bounds[2]) == (0, 600)
+    assert {back["hmtx"][cmap[cp]][0] for cp in (0xE000, 0xE0B0, 0xF0001)} == {600}
+    assert back["name"].getDebugName(1) == "Gengou Code NF"
+
+
 def test_graft_symbols_keeps_every_glyph_on_one_vertical_origin(monkeypatch):
     """A top side bearing is measured DOWN from the glyph's own yMax. The
     separator drawn over Source Code Pro's own is a different height, and
@@ -311,7 +370,8 @@ def test_sources_for_paths_names_and_everything(tmp_path, monkeypatch):
     latin.mkdir(parents=True)
     for name in ("GengouCodeJP-Light.otf", "GengouCodeJPTerm-Light.otf"):
         (dist / name).write_bytes(b"")
-    for name in ("GengouCode-Light.otf", "GengouCode-LightItalic.otf", "GengouCode[wght].otf"):
+    for name in ("GengouCode-Light.otf", "GengouCode-LightItalic.otf",
+                 "GengouCode[wght].otf", "GengouCode-Italic[wght].otf"):
         (latin / name).write_bytes(b"")
     monkeypatch.setattr(nerdpatch, "DIST", dist)
     monkeypatch.setattr(nerdpatch, "LATIN_DIR", latin)
@@ -319,13 +379,15 @@ def test_sources_for_paths_names_and_everything(tmp_path, monkeypatch):
     monkeypatch.setattr(nerdpatch, "LATIN_OUT", dist / "nerd" / "latin")
 
     everything = nerdpatch.sources_for([])
+    # the variable fonts, which GengouCode-NerdFont.zip ships, and not
+    # the statics, which are the JP faces' donors
     assert [p.name for p, _ in everything] == [
         "GengouCodeJP-Light.otf", "GengouCodeJPTerm-Light.otf",
-        "GengouCode-Light.otf", "GengouCode-LightItalic.otf"]      # no VF
+        "GengouCode-Italic[wght].otf", "GengouCode[wght].otf"]
     assert [out.name for _, out in everything] == ["nerd", "nerd", "latin", "latin"]
     assert [p.name for p, _ in nerdpatch.sources_for(["Term"])] == ["GengouCodeJPTerm-Light.otf"]
     assert [p.name for p, _ in nerdpatch.sources_for(["Term", "Italic"])] == [
-        "GengouCodeJPTerm-Light.otf", "GengouCode-LightItalic.otf"]
+        "GengouCodeJPTerm-Light.otf", "GengouCode-Italic[wght].otf"]
     explicit = nerdpatch.sources_for([str(latin / "GengouCode-Light.otf"),
                                       str(dist / "GengouCodeJP-Light.otf")])
     assert [(p.name, out.name) for p, out in explicit] == [

@@ -25,6 +25,7 @@ import build  # noqa: E402
 import build_latin_vf  # noqa: E402
 from verifylib import (  # noqa: E402
     DONOR_LETTERS,
+    NERD_FONT_MARK,
     Checker,
     check_blank_glyphs,
     check_cells,
@@ -46,6 +47,7 @@ from verifylib import (  # noqa: E402
     check_monospace_metadata,
     check_name_composition,
     check_name_ids,
+    check_nerd_font_icons,
     check_pair_positioning,
     check_private,
     check_style_bits,
@@ -184,11 +186,15 @@ def main():
     fam, sub = name.getDebugName(1), name.getDebugName(2)
     ps6, ps25 = name.getDebugName(6), name.getDebugName(25)
     is_italic = sub == "Italic"
-    check(fam == "Gengou Code", f"nameID1 family {fam!r}")
+    # the Nerd Fonts variant (nerdpatch.py) carries its marker in every
+    # record, the variations prefix included
+    is_nf = (fam or "").endswith(NERD_FONT_MARK)
+    mark = NERD_FONT_MARK.strip() if is_nf else ""
+    check(fam == f"Gengou Code{NERD_FONT_MARK if is_nf else ''}", f"nameID1 family {fam!r}")
     check(sub in ("Regular", "Italic"), f"nameID2 subfamily {sub!r}")
-    check(ps6 == f"GengouCode-{'Italic' if is_italic else 'Roman'}",
+    check(ps6 == f"GengouCode{mark}-{'Italic' if is_italic else 'Roman'}",
           f"nameID6 PostScript name {ps6!r}")
-    check(ps25 == "GengouCode", f"nameID25 variations PS prefix {ps25!r}")
+    check(ps25 == f"GengouCode{mark}", f"nameID25 variations PS prefix {ps25!r}")
     check(name.getDebugName(16) is None and name.getDebugName(17) is None,
           "no nameID 16/17 (fvar+STAT already describe the family)")
     n0 = name.getDebugName(0) or ""
@@ -505,6 +511,11 @@ def main():
                            f"SCP's own to 1u (off: {dict(list(off.items())[:3])})")
     else:
         print("  (skip SCP exactness check: set SCP_VF_U / SCP_VF_I)")
+
+    if is_nf:
+        # the icons are the same outline at every weight (nerdpatch
+        # grafts them unblended), so the default location answers for all
+        check_nerd_font_icons(tf, check)
 
     print("FAILED" if check.failed else "all checks passed")
     sys.exit(check.exit_code())

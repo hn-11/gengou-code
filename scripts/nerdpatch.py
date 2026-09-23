@@ -109,7 +109,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build  # noqa: E402
 from build import _bounds, _unwrap_pos  # noqa: E402
 from build_latin import pin_win_metrics  # noqa: E402
-from verifylib import static_faces  # noqa: E402
 
 DIST = build.ROOT / "dist"
 LATIN_DIR = DIST / "latin"
@@ -164,11 +163,13 @@ def nf_name(s, marker=NF_MARKER):
     PostScript name is always Family-Style, so its variant runs into
     the family and a "-" comes next; a display name never has one
     there. Reading the space inside the family instead would work only
-    while the family is two words."""
-    if re.search(r"GengouCode(?:JP(?:Term)?)?NF-|Gengou Code(?: JP(?: Term)?)?"
+    while the family is two words. The one PostScript form with no style
+    after it is a variable font's nameID 25, its instances' prefix
+    ("GengouCode"), and it ends the string instead."""
+    if re.search(r"GengouCode(?:JP(?:Term)?)?NF(?:-|$)|Gengou Code(?: JP(?: Term)?)?"
                  + re.escape(marker) + r"\b", s):   # already carries the marker
         return s
-    ps, hit = re.subn(r"(GengouCode(?:JP(?:Term)?)?)(?=-)",
+    ps, hit = re.subn(r"(GengouCode(?:JP(?:Term)?)?)(?=-|$)",
                       r"\1" + marker.replace(" ", ""), s, count=1)
     if hit:
         return ps
@@ -254,6 +255,16 @@ def icon_transform(cp, ink, ctx):
     return (k, 0, 0, k, (cell - k * (x0 + x1)) / 2, (asc + desc) / 2 - k * (y0 + y1) / 2)
 
 
+def _pen(font, private, width, glyphs):
+    """A charstring pen for one icon: its width encoded against
+    `private` in a CFF, none at all in a variable font's CFF2 (the
+    advance is hmtx's alone there, and an icon's is the same at every
+    weight, so it needs no blend either)."""
+    if "CFF2" in font:
+        return T2CharStringPen(None, glyphs, CFF2=True)
+    return T2CharStringPen(build.pen_width(private, width), glyphs)
+
+
 def graft_symbols(font, symbols):
     """Append every symbol codepoint the face lacks as a one-cell glyph
     drawn from the symbols font (quadratic outlines become cubic on the
@@ -323,7 +334,7 @@ def graft_symbols(font, symbols):
             # cannot take a contribution back out of an aggregate, so it
             # has to be told what it is losing
             dropped.update(glyph_extent_state(font, [name]))
-            pen = T2CharStringPen(build.pen_width(own, cell), sgs)
+            pen = _pen(font, own, cell, sgs)
             sgs[scm[cp]].draw(TransformPen(pen, xform))
             cs = pen.getCharString(private=own)
             td.CharStrings[name] = cs
@@ -336,7 +347,7 @@ def graft_symbols(font, symbols):
             replaced[name] = cp
             written[name] = box
             continue
-        pen = T2CharStringPen(build.pen_width(private, cell), sgs)
+        pen = _pen(font, private, cell, sgs)
         sgs[scm[cp]].draw(TransformPen(pen, xform))
         name = build.alloc_glyph_name(font)
         written[name] = build.append_glyph(
@@ -392,6 +403,8 @@ def rename(font):
                 name.setName(s + sep + credit, nid, rec.platformID,
                              rec.platEncID, rec.langID)
     ps = name.getDebugName(6)
+    if "CFF2" in font:
+        return ps       # a CFF2 carries no names of its own to follow
     cff = font["CFF "].cff
     cff.fontNames[0] = ps
     # set_names keeps the CFF TopDict's own names in step with the name
@@ -571,12 +584,18 @@ def patch_face(src, out_dir, symbols_path):
     # use areas: the declared ranges are how a fallback picker finds them
     font["OS/2"].recalcUnicodeRanges(font)
     ps = rename(font)
+    variable = "CFF2" in font
     # widened by what the graft wrote rather than measured over all
     # 30,000 glyphs (6.2 s of a JP face, two thirds of it spent on the
     # 19,500 this pass never touched). False when one of the redrawn
     # Powerline glyphs was holding an extreme up, and then there is
-    # nothing for it but to measure
-    if not update_bbox_after(font, written, dropped):
+    # nothing for it but to measure -- except in a variable font, whose
+    # extents are the union over its masters and which no measurement
+    # at one location can reproduce (build.update_bbox would shrink it
+    # to the default's). There the box only widens: what the redrawn
+    # Powerline glyphs gave up stays inside it, which a clipping bound
+    # can afford and a narrower one could not
+    if not update_bbox_after(font, written, {} if variable else dropped):
         build.update_bbox(font)
     if out_dir == LATIN_OUT:
         # LATIN_WIN_METRICS already covers the icons (their extremes
@@ -584,11 +603,20 @@ def patch_face(src, out_dir, symbols_path):
         # The JP faces keep Source Han Sans's own pinned pair (build.py,
         # not this one) untouched
         pin_win_metrics(font)
-    out = Path(out_dir) / f"{ps}.otf"
-    # the icons carry no hints (font-patcher's did not either); only the
-    # Powerline glyphs redrawn over Source Code Pro's own had hints to
-    # lose, and they get them back
-    build.write_face(font, out, sorted(rehint))
+    if variable:
+        # named for the file it came from (GengouCode[wght].otf ->
+        # GengouCodeNF[wght].otf), as the PostScript name of a variable
+        # font is its default instance's. Saved as build_latin_vf.py
+        # saves it: a CFF2 carries no hints and is not subroutinized
+        out = Path(out_dir) / Path(src).name.replace(
+            build.LATIN_FAMILY[1], build.LATIN_FAMILY[1] + NF_MARKER.strip(), 1)
+        font.save(out)
+    else:
+        out = Path(out_dir) / f"{ps}.otf"
+        # the icons carry no hints (font-patcher's did not either); only
+        # the Powerline glyphs redrawn over Source Code Pro's own had
+        # hints to lose, and they get them back
+        build.write_face(font, out, sorted(rehint))
     print(f"  {Path(src).name}: {n} icons grafted, {time.monotonic() - t0:.0f} s -> {out.name}")
     return out
 
@@ -606,8 +634,9 @@ def sources_for(args):
     """[(face, output dir)] for the command line: explicit paths (a JP
     face in dist/ goes to dist/nerd/, a Gengou Code face in dist/latin/ to
     dist/nerd/latin/), a name substring, or — with no argument — every
-    face in dist/ (non-recursive) plus the static Gengou Code faces
-    specifically: never the variable fonts (a VF is not patched).
+    face in dist/ (non-recursive) plus the two variable Gengou Code
+    fonts, which are what GengouCode-NerdFont.zip ships. A static Gengou
+    Code face is patched only when it is named.
 
     An argument that names a file (a path, or anything ending .otf) and
     is not one is an error, not a silently dropped face: half a family
@@ -624,7 +653,7 @@ def sources_for(args):
         return [(p.resolve(), LATIN_OUT if p.resolve().parent == LATIN_DIR.resolve() else OUT)
                 for p in map(Path, named)]
     sources = [(p, OUT) for p in sorted(DIST.glob("*.otf"))]
-    sources += [(p, LATIN_OUT) for p in static_faces(LATIN_DIR, build.LATIN_FAMILY[1])]
+    sources += [(p, LATIN_OUT) for p in sorted(LATIN_DIR.glob(f"{build.LATIN_FAMILY[1]}*[[]wght[]].otf"))]
     return [(p, out) for p, out in sources if not words or any(w in p.name for w in words)]
 
 

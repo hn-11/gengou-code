@@ -43,11 +43,10 @@ env:
   PUBLISH: ${{ github.event_name == 'push' && github.ref_type == 'tag' || github.event_name == 'workflow_dispatch' && !inputs.dry-run }}
 jobs:
   # a family's weights, both styles, per job (six jobs): its Latin donors,
-  # its JP faces, and the Nerd Fonts grafts — the JP faces' own, plus a
-  # share of the ten Gengou Code ones, grafted while the JP faces build:
-  # the base job the job's uprights, the Term job its italics. The two
-  # Bold jobs (two faces each, the lightest) also build one variable
-  # font each, for the package job to pick up
+  # its JP faces and their Nerd Fonts grafts. The two Bold jobs (two faces
+  # each, the lightest) also build one variable font each and graft the
+  # symbols into it, for the package job to verify against every static
+  # and ship
   faces:
     if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[release-dry]')
     runs-on: ubuntu-latest
@@ -65,10 +64,6 @@ jobs:
         weights: [Light Regular, Medium SemiBold, Bold]
         include:
           - style: Upright
-            latin_nf: Upright
-          - style: Italic
-            latin_nf: Italic
-          - style: Upright
             weights: Bold
             variable: upright
           - style: Italic
@@ -80,41 +75,20 @@ jobs:
       - uses: ./.github/actions/setup-build
       - run: echo "GENGOU_VERSION=${GENGOU_VERSION_TAG#v}" >> "$GITHUB_ENV"
       - run: python scripts/build_latin.py "${{ matrix.weights }}"
-      - name: Build the JP faces and graft the symbols into everything
-        env:
-          LATIN_NF: ${{ matrix.latin_nf }}
+      - name: Build the JP faces and graft the symbols into them
         run: |
-          # this job's share of the Gengou Code grafts: its weights' uprights
-          # or italics, the style this job builds
-          faces=""
-          for w in ${{ matrix.weights }}; do
-            case "$LATIN_NF" in
-              Upright) faces="$faces dist/latin/GengouCode-$w.otf" ;;
-              Italic) faces="$faces dist/latin/GengouCode-${w}Italic.otf" ;;
-            esac
-          done
-          # an empty list would mean "patch everything" — the same faces
-          # the foreground run below writes, at the same time
-          [ -n "$faces" ] || { echo "no Gengou Code faces for LATIN_NF='$LATIN_NF'"; exit 1; }
-          python scripts/nerdpatch.py $faces > nerd-latin.log 2>&1 &
-          latin=$!
-          # neither the JP build nor the foreground graft may take the
-          # step down before the background one is waited on: its log
-          # lives only here
-          jp=0
-          python scripts/build.py "${{ matrix.weights }} ${{ matrix.style }} base Term" \
-            && python scripts/nerdpatch.py dist/*.otf || jp=$?
-          wait $latin || { cat nerd-latin.log; exit 1; }
-          cat nerd-latin.log
-          [ "$jp" = 0 ] || exit "$jp"
+          python scripts/build.py "${{ matrix.weights }} ${{ matrix.style }} base Term"
+          python scripts/nerdpatch.py dist/*.otf
       - if: matrix.variable
-        run: python scripts/build_latin_vf.py ${{ matrix.variable }}
-      # the statics and NF faces; a variable font, when this job built one,
-      # is dist/latin/GengouCode*[wght].otf and rides along (verify_latin_vf
-      # runs in the package job, against every static)
-      - run: >-
-          python scripts/verify.py
-          'dist/*.otf' 'dist/nerd/*.otf' 'dist/latin/GengouCode-*.otf' 'dist/nerd/latin/*.otf'
+        name: Build the variable font and graft the symbols into it
+        run: |
+          python scripts/build_latin_vf.py ${{ matrix.variable }}
+          python scripts/nerdpatch.py dist/latin/*\[wght\].otf
+      # the statics only: a variable font is held to every static of its
+      # family (verify_latin_vf), and only the package job has them all
+      - run: |
+          statics=$(ls dist/latin/GengouCode-*.otf | grep -v '\[wght\]')
+          python scripts/verify.py 'dist/*.otf' 'dist/nerd/*.otf' $statics
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: faces-${{ matrix.style }}-${{ strategy.job-index }}
@@ -147,7 +121,8 @@ jobs:
       - name: Verify the variable fonts against the static faces
         run: |
           python scripts/verify.py \
-            "dist/latin/GengouCode[wght].otf" "dist/latin/GengouCode-Italic[wght].otf"
+            "dist/latin/GengouCode[wght].otf" "dist/latin/GengouCode-Italic[wght].otf" \
+            "dist/nerd/latin/GengouCodeNF[wght].otf" "dist/nerd/latin/GengouCodeNF-Italic[wght].otf"
       - run: |
           cp LICENSE dist/LICENSE
           cp LICENSE dist/nerd/LICENSE
@@ -164,7 +139,8 @@ jobs:
             (cd nerd && zip -q "../$fam-NerdFont.zip" "$fam"NF-*.otf LICENSE LICENSE-NerdFonts)
           done
           (cd latin && zip -q ../GengouCode.zip 'GengouCode[wght].otf' 'GengouCode-Italic[wght].otf' LICENSE)
-          (cd nerd/latin && zip -q ../../GengouCode-NerdFont.zip *.otf LICENSE LICENSE-NerdFonts)
+          (cd nerd/latin && zip -q ../../GengouCode-NerdFont.zip \
+            'GengouCodeNF[wght].otf' 'GengouCodeNF-Italic[wght].otf' LICENSE LICENSE-NerdFonts)
       # every asset, on a dry run too (a missing one is a failure here, not
       # a warning from the release step). By name and by content: `zip`
       # exits 0 when its *.otf argument matches nothing, because LICENSE
@@ -174,7 +150,7 @@ jobs:
         run: |
           want="GengouCodeJP:10 GengouCodeJPTerm:10 GengouCode:2
                 GengouCodeJP-NerdFont:10 GengouCodeJPTerm-NerdFont:10
-                GengouCode-NerdFont:10"
+                GengouCode-NerdFont:2"
           for spec in $want; do
             zip="dist/${spec%%:*}.zip"
             n="${spec##*:}"

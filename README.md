@@ -198,7 +198,10 @@ stylistic set も同じ挙動なので許容している。グループを跨い
 全面に Nerd Fonts のアイコングリフを追加した変種も生成する。アイコンは
 1 セルに収める。ファミリー名は `Gengou Code JP NF` / `Gengou Code JP Term NF` /
 `Gengou Code NF`（PostScript 名 `GengouCodeJPNF-*` など。`Cascadia Mono NF` と
-同じ流儀）。
+同じ流儀）。欧文の Gengou Code NF は可変フォントで、アイコンは
+CFF2 の中にウェイトで変化しないグリフとして入っている（Nerd Fonts の
+アイコン 10,396 個はウェイトでも斜体でも輪郭が同一なので、変化させる
+データが要らない）。
 
 本家の命名（`Gengou Code JP Term Nerd Font Mono`）にしないのは、Windows GDI の
 `LOGFONT.lfFaceName`（31 文字）に入らない面が出るため（ファミリー名だけで
@@ -287,7 +290,7 @@ instancer の整数丸めを切ってインスタンス化する。重なり除�
 グリフが墨面積で 24〜71%（中央値 45%。斜体は 30〜84%、中央値 56%）太い。同じインスタンスの中で、文字は Regular の 56% まで軽くなる
 のに記号は 86〜92% に留まるので、**Light では文字と記号の濃さが揃わない**。
 静的 Light は erosion で両方を揃えている。静的面は JP 面のドナーと
-Nerd Fonts 版の入力で、単体では配布しない。
+可変フォントの検証の相手で、単体では配布しない。
 
 **源合**（げんごう）は、源ノ角ゴシックと Source Code Pro が共有する
 `Source` の訳字「源」と、合字の「合」——4 つの上流を合わせる「合成」の
@@ -305,14 +308,13 @@ OFL のライセンス全文（LICENSE）を同梱している。
   落として、必要な面だけ入れる（TTC は配らない: リリースの単位は
   インストールするファイルの単位）。
 - **`GengouCodeJP-NerdFont.zip` / `GengouCodeJPTerm-NerdFont.zip`**: 同じ
-  ファミリー分けの Nerd Fonts 版（ファミリー名 `Gengou Code JP Nerd Font
-  Mono` など）。ターミナルのプロンプト装飾（アイコン表示）に使う場合は
+  ファミリー分けの Nerd Fonts 版（ファミリー名 `Gengou Code JP NF` など）。ターミナルのプロンプト装飾（アイコン表示）に使う場合は
   こちら。
 - **`GengouCode.zip`**: 和文を含まない欧文のみの Gengou Code。可変フォント
   2面（`GengouCode[wght].otf` / `GengouCode-Italic[wght].otf`）。
-- **`GengouCode-NerdFont.zip`**: Gengou Code の Nerd Fonts 版（`Gengou Code Nerd
-  Font Mono`）。可変フォントには接ぎ木しないので、こちらは 5 ウェイト ×
-  2 スタイルの静的 10 面。
+- **`GengouCode-NerdFont.zip`**: Gengou Code の Nerd Fonts 版（`Gengou Code NF`）。
+  `GengouCode.zip` と同じく可変フォント 2 面（`GengouCodeNF[wght].otf` /
+  `GengouCodeNF-Italic[wght].otf`）。アイコンはどのウェイトでも同じ形。
 
 ダウンロードしてインストールし、
 
