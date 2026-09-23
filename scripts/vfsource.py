@@ -201,8 +201,8 @@ class VFSource:
         # the surplus per side, in this font's units, and mona_glyphset()
         # erodes the outlines by it — see erode_path(). A VF master can't
         # take that path (erosion is a pathops boolean op on a fixed
-        # outline, not an interpolatable deformation — see docs/
-        # gengou-plan.md 段階2): a master clamps at the floor (the
+        # outline, not an interpolatable deformation — see
+        # `git show a7c86ec:docs/gengou-plan.md`, 段階2): a master clamps at the floor (the
         # binary search already can't go past the axis bounds) and only
         # reports the shortfall, leaving `erode` unset so mona_glyphset()
         # hands back the outline as instanced.

@@ -2016,7 +2016,7 @@ def check_tie_bars(tf, shape, check, gs, label=""):
 # base anchors are, build_latin.graft), and Source Code Pro Italic has
 # no Greek 'locl' of its own. So the italic sets the Latin accent on a
 # Greek capital -- raised, as after every capital -- and composes no
-# breathing mark. docs/gengou-plan.md carries the measurements.
+# breathing mark. `git show a7c86ec:docs/gengou-plan.md` carries the measurements.
 GREEK_ITALIC_GAP = {"\u0392": "the Latin accent",
                     "\u03c1\u0313\u0301": 3, "\u03b1\u0313\u0300": 3}
 

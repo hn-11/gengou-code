@@ -76,7 +76,7 @@ keep the square cell — the same relative size a reader gets today by
 adding Symbols Nerd Font Mono to a terminal as a fallback font, and the
 side no icon ever spills its cell on. Making it exact needs
 font-patcher's per-group tables, which is the whole complexity this
-module exists without; docs/gengou-plan.md carries the measurement.
+module exists without; `git show a7c86ec:docs/gengou-plan.md` carries the measurement.
 
 Names: "<Family> NF", PostScript "<PSFamily>NF-" in every record, as
 Cascadia Code's Nerd Fonts faces are named (nf_name, NF_MARKER).

@@ -95,7 +95,7 @@ WIN_METRICS = build.WIN_METRICS
 # -- true before this build gave them 234 letters from Source Sans --
 # can stay live and fail on anything NEW. Both are the same root: the
 # second donor's own features are not imported, only its outlines and
-# its base anchors. docs/gengou-plan.md carries the measurements.
+# its base anchors. `git show a7c86ec:docs/gengou-plan.md` carries the measurements.
 # Keyed by what was MEASURED, not by the probe alone: the language
 # check records two quite different failures under one key -- "renders
 # the other language's letterform" and "shaped into more than one
@@ -140,7 +140,7 @@ FAMILY_METRICS = {
 DEFAULT_METRICS = (600, 1000)
 
 # Unicode calls these Wide, they end up one cell, and neither donor has
-# anything wider to offer (README, 幅の方針): six emoji only
+# anything wider to offer (README, Gengou Code JP): six emoji only
 # Source Code Pro carries at 600, five Bopomofo final letters only Source
 # Han Sans carries at 600, and two Hangul tone marks Source Han Sans
 # draws 250 wide that fit_to_grid centres in the cell -- verifylib's
@@ -1612,13 +1612,13 @@ def check_overlaps(face, check):
 def check_win_metrics(face, check):
     tf = face.tf
     # the win metrics, pinned, not merely positive (copy_line_metrics,
-    # README 行の高さ). They are the GDI line height as much as a
+    # README, Gengou Code JP). They are the GDI line height as much as a
     # clipping bound, and this family's ink reaches 1808/-1048 —
     # covering it would give a 2856u line, more than twice the 1257u
     # every renderer that honours USE_TYPO_METRICS uses. The descent
     # does cover the Latin layer's box drawing (-400) and shade blocks
-    # (-454); docs/gengou-plan.md carries the measurement and the two
-    # codepoints left outside
+    # (-454); `git show a7c86ec:docs/gengou-plan.md` carries the
+    # measurement and the two codepoints left outside
     os2 = tf["OS/2"]
     check((os2.usWinAscent, os2.usWinDescent) == WIN_METRICS,
           f"win metrics are the pinned {WIN_METRICS}, got "
