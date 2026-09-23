@@ -31,7 +31,7 @@ VF のインスタンス化と Monaspace の合成、`anchors.py` は欧文レ�
 | `NF_SYMBOLS` | `nerdpatch.py` | `SymbolsNerdFontMono-Regular.ttf` へのパス | [Nerd Fonts Releases](https://github.com/ryanoasis/nerd-fonts/releases) の `NerdFontsSymbolsOnly.zip` |
 | `LATIN_DIR` | `build.py`（任意、既定 `dist/latin`） | `build_latin.py` の出力先 | — |
 | `GENGOU_VERSION` | ビルド 3 本と verify 3 本（任意） | リリース版番号（例 `6.0.0`）。未設定なら上流のリビジョンを name に残す | — |
-| `GENGOU_SKIP_AUTOHINT` | `build.py` / `build_latin.py`（任意） | `1` でヒント付けをスキップ（試しビルドの時短用） | — |
+| `GENGOU_SKIP_AUTOHINT` | `build.py` / `nerdpatch.py`（任意） | `1` でヒント付けをスキップ（試しビルドの時短用） | — |
 
 取得元の URL パターンや正確なタグは `.github/actions/setup-build/action.yml`
 と `.github/workflows/ci.yml` を参照してください（そのまま実行可能な
@@ -98,8 +98,8 @@ name・家族の cmap、JP の縦組みと VORG（ドナーと突き合わせ）
 どちらもビルドと梱包まで走って Release は作りません。複数の面をまとめて検証するときは
 `python scripts/verify.py 'dist/*.otf' 'dist/nerd/*.otf'` が面ごとに
 プロセスを分けて走らせます（どの門番に掛けるかはフォント自身が決める。検証するのは
-配る面――JP 面とその NF 版、可変フォント――だけで、欧文の静的面は JP 面の材料と
-可変フォントの比較相手なので、渡すと「配布物ではない」と止まります）。
+配る面――JP 面とその NF 版、可変フォント――だけで、欧文の静的面は JP 面の材料
+なので、渡すと「配布物ではない」と止まります）。
 
 **フォントの出力が変わる変更では、`scripts/golden.py` で「変わってよい所だけが
 変わった」ことを示してください。** 門番が答えるのは「壊れていないか」で、
@@ -108,7 +108,7 @@ name・家族の cmap、JP の縦組みと VORG（ドナーと突き合わせ）
 
 ```sh
 python scripts/golden.py <前の dist> dist                 # JP 面
-python scripts/golden.py <前の dist>/latin dist/latin     # 欧文の静的面
+python scripts/golden.py <前の dist>/latin dist/latin --only '*wght*'  # 可変フォント
 python scripts/golden.py <前の dist>/nerd dist/nerd       # Nerd Fonts 版
 ```
 

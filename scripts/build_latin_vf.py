@@ -96,8 +96,6 @@ import build  # noqa: E402
 import build_latin  # noqa: E402
 import vfsource  # noqa: E402
 
-CELL = build_latin.CELL     # 600, SCP's own advance
-MONA_K = build_latin.MONA_K  # 600/1240
 FAMILY, PS_FAMILY = build.LATIN_FAMILY   # "Gengou Code", "GengouCode"
 
 STYLES = {
@@ -105,14 +103,6 @@ STYLES = {
     "upright": ("SCP_VF_U", False, f"{PS_FAMILY}[wght].otf"),
     "italic": ("SCP_VF_I", True, f"{PS_FAMILY}-Italic[wght].otf"),
 }
-
-
-def scp_source(scp_path):
-    """The SCP VF as a vfsource.VFSource: wght only, bars in SCP's own units
-    (scale 1.0). Its matched() search is the one build_latin.py's static
-    faces are placed by, so matched_wght() puts the VF's named instances
-    exactly where the statics are."""
-    return vfsource._vf_source(scp_path, 1.0, {"wght": 0})
 
 
 def weight_positions():
@@ -246,7 +236,7 @@ def mona_floor_wght(scp, mona_source, slant):
     tracks SCP's bar — without this master the VF would interpolate
     Monaspace linearly from the floor at wght 200 up to the 400 master,
     putting e.g. Light's punctuation too heavy. `scp` is a
-    scp_source()."""
+    build_latin.scp_source()."""
     return scp.matched_wght(mona_source.floor_bar(slant))
 
 
@@ -422,7 +412,7 @@ def build_style(style, env, out_dir):
     if len(scp_masters) != 3:
         raise RuntimeError(f"{style}: expected 3 SCP master locations, "
                            f"confirmed {scp_masters}")
-    scp = scp_source(scp_path)
+    scp, mona_source, sans_source, upright = build_latin.donor_sources(env, italic)
     axis = next(a for a in vf_meta["fvar"].axes if a.axisTag == "wght")
     if round(axis.defaultValue) not in scp_masters:
         raise RuntimeError(f"{style}: axis default {axis.defaultValue} is not "
@@ -439,14 +429,6 @@ def build_style(style, env, out_dir):
     lo_u, default_u, hi_u, axis_map, to_scp = user_axis(
         weight_pos, scp_design, scp_breaks, axis.minValue)
     ref_angle = (vf_meta["post"].italicAngle or -12.0) if italic else None
-    mona_source = vfsource._vf_source(env["MONA_VF"], MONA_K,
-                                   {"wght": 0, "wdth": 100, "slnt": 0})
-    # Source Code Pro Italic draws no Cyrillic and one Greek letter, so
-    # the italic masters take both scripts from Source Sans 3 Italic,
-    # bounded by what the upright faces draw (build_latin)
-    sans_source = (vfsource._vf_source(env["SS_VF_I"], 1.0, {"wght": 0})
-                   if italic else None)
-    upright = build_latin.upright_cmap(env["SCP_VF_U"]) if italic else None
     floor = mona_floor_wght(scp, mona_source, ref_angle)
     wghts = master_scp_wghts(scp_masters, to_scp, axis.minValue, default_u, hi_u,
                              extra=[floor])
@@ -503,7 +485,7 @@ def build_style(style, env, out_dir):
         # the stacked-accent lift the upright gives each mark, read
         # off the upright VF at this master's own weight -- a variable
         # anchor in the result, as it is in the upright
-        upright_src = vfsource._vf_source(env["SCP_VF_U"], 1.0, {"wght": 0})
+        upright_src = build_latin.scp_source(env["SCP_VF_U"])
         with vfsource.unrounded_cff2_instancing():
             lifted = {w: anchors.mirror_stack_lift(bases[w], upright_src.at(w)) for w in wghts}
         print(f"[{style}] stacked-accent anchors lifted as the upright's: {lifted}")

@@ -3506,7 +3506,6 @@ def autohint_face(path, glyph_names):
     seconds rather than the minutes hinting 19,000 glyphs takes. That is
     the grafted Latin, the ligatures, and whatever fit_to_grid and
     widen_fullwidth moved.
-    The Latin faces pass every glyph — the instancer drops SCP's hints.
     GENGOU_SKIP_AUTOHINT=1 skips it for quick local iterations."""
     if os.environ.get("GENGOU_SKIP_AUTOHINT"):
         print("  autohint skipped (GENGOU_SKIP_AUTOHINT)")
@@ -3656,7 +3655,7 @@ def run_faces(jobs, worker, label, on_result, pool_from=3):
 
 def write_face(font, out, hint_glyphs):
     """Save `font` to `out`, then hint `hint_glyphs` (otfautohint) and
-    subroutinize the file in place — the tail every static face shares.
+    subroutinize the file in place — the tail every shipped static face shares.
     The caller has run update_bbox: the save does not recompute the
     extents (see there)."""
     font.recalcBBoxes = False
