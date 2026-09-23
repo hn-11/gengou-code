@@ -6,7 +6,7 @@
 name: Set up a build job
 description: >
   Python + requirements, the pinned upstream fonts exported as SHS_DIR /
-  SCP_VF_U / SCP_VF_I / MONA_VF / NF_SYMBOLS / NF_LICENSE.
+  SCP_VF_U / SCP_VF_I / SS_VF_I / MONA_VF / NF_SYMBOLS / NF_LICENSE.
 runs:
   using: composite
   steps:
@@ -25,6 +25,7 @@ runs:
         echo "SHS_DIR=${{ steps.upstreams.outputs.shs_dir }}" >> "$GITHUB_ENV"
         echo "SCP_VF_U=${{ steps.upstreams.outputs.scp_vf_u }}" >> "$GITHUB_ENV"
         echo "SCP_VF_I=${{ steps.upstreams.outputs.scp_vf_i }}" >> "$GITHUB_ENV"
+        echo "SS_VF_I=${{ steps.upstreams.outputs.ss_vf_i }}" >> "$GITHUB_ENV"
         echo "MONA_VF=${{ steps.upstreams.outputs.mona_vf }}" >> "$GITHUB_ENV"
         echo "NF_SYMBOLS=${{ steps.upstreams.outputs.nf_symbols }}" >> "$GITHUB_ENV"
         echo "NF_LICENSE=${{ steps.upstreams.outputs.nf_license }}" >> "$GITHUB_ENV"

@@ -1,4 +1,4 @@
-Sumi Moji JP / Sumi Moji
+Gengou Code JP / Gengou Code
 
 Copyright 2026 hn-11 (https://github.com/hn-11/shoyu-code-pro-jp)
 
@@ -14,13 +14,19 @@ This Font Software is a derivative work combining:
     with Reserved Font Name 'Source'.
     https://github.com/adobe-fonts/source-code-pro
 
+  - Source Sans 3 (the Greek and Cyrillic of the italic faces, which
+    Source Code Pro Italic does not draw)
+    Copyright 2010-2023 Adobe (http://www.adobe.com/),
+    with Reserved Font Name 'Source'.
+    https://github.com/adobe-fonts/source-sans
+
   - Monaspace (the ligatures, the standalone ASCII punctuation, and
     the full-width arrows cut from the ligatures)
     Copyright (c) 2023 GitHub, Inc.,
     with Reserved Font Name 'Monaspace'.
     https://github.com/githubnext/monaspace
 
-The 'Nerd Font Mono' variants carry, in addition, the icon glyphs of
+The Nerd Fonts ('NF') variants carry, in addition, the icon glyphs of
 
   - Symbols Nerd Font Mono
     Copyright (c) 2014, Ryan L McIntyre and the Nerd Fonts contributors
@@ -32,8 +38,8 @@ superseded by this file; each collected icon set keeps its own license,
 listed in the nerd-fonts repository.
 
 In accordance with the Reserved Font Name requirements of the license,
-this derivative is distributed under the names 'Sumi Moji JP' (with the
-Japanese glyphs) and 'Sumi Moji' (the Latin layer alone), which contain
+this derivative is distributed under the names 'Gengou Code JP' (with the
+Japanese glyphs) and 'Gengou Code' (the Latin layer alone), which contain
 none of the reserved names.
 
 The build scripts in this repository are licensed under the same terms.

@@ -54,7 +54,7 @@ glyph and only `--careful` keeps it. Here the face's is kept, because
 outside Powerline that overlap is not icons — it is text. The two fonts
 share exactly eight codepoints: those seven Powerline glyphs, replaced,
 and U+2665 BLACK HEART SUIT, which both donors (Source Code Pro in a
-Sumi Moji face, Source Han Sans in a JP one) draw as the character it
+Gengou Code face, Source Han Sans in a JP one) draw as the character it
 is and Nerd Fonts draws as an Octicon. A prompt wants the
 Octicon separators; prose wants its own heart. graft_symbols pins that
 one codepoint (TEXT_OVER_ICON) and fails the build when the overlap
@@ -76,22 +76,23 @@ keep the square cell — the same relative size a reader gets today by
 adding Symbols Nerd Font Mono to a terminal as a fallback font, and the
 side no icon ever spills its cell on. Making it exact needs
 font-patcher's per-group tables, which is the whole complexity this
-module exists without; docs/sumi-moji-plan.md carries the measurement.
+module exists without; docs/gengou-plan.md carries the measurement.
 
-Names: "<Family> Nerd Font Mono", PostScript "<PSFamily>NFM-", Nerd
-Fonts' own convention for a font whose icons are one cell wide (nf_name).
+Names: "<Family> NF", PostScript "<PSFamily>NF-" in every record, as
+Cascadia Code's Nerd Fonts faces are named (nf_name, NF_MARKER).
 Everything else — STAT, OS/2, post, the hints, the GSUB — is the source
 face's, untouched; the icons carry no hints (font-patcher's did not
 either).
 
 Usage:
   python scripts/nerdpatch.py [FACE.otf ... | NAME-SUBSTRING ...]
-    no argument: every JP face in dist/ and every static Sumi Moji face
+    no argument: every JP face in dist/ and every static Gengou Code face
     in dist/latin/ (never the variable fonts). Output: dist/nerd/ for the
-    JP faces, dist/nerd/latin/ for Sumi Moji.
+    JP faces, dist/nerd/latin/ for Gengou Code.
 Env (required): NF_SYMBOLS = path to SymbolsNerdFontMono-Regular.ttf
 """
 
+import math
 import os
 import re
 import sys
@@ -106,7 +107,8 @@ from fontTools.ttLib.tables._c_m_a_p import CmapSubtable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build  # noqa: E402
-from build_latin import fit_win_metrics  # noqa: E402
+from build import _bounds, _unwrap_pos  # noqa: E402
+from build_latin import pin_win_metrics  # noqa: E402
 from verifylib import static_faces  # noqa: E402
 
 DIST = build.ROOT / "dist"
@@ -133,7 +135,7 @@ PROGRESS = frozenset(range(0xEE00, 0xEE06))
 LINE_BOX = frozenset(POWERLINE) | PROGRESS
 STRETCHED = SEPARATORS | PROGRESS
 
-# Powerline aside, the codepoints Symbols Nerd Font Mono and a Sumi Moji
+# Powerline aside, the codepoints Symbols Nerd Font Mono and a Gengou Code
 # face both draw. The face's glyph wins there (see the divergence in the
 # module docstring), so this is the set of characters an icon does NOT
 # take over. Pinned, so an upstream that widens the overlap fails the
@@ -141,15 +143,37 @@ STRETCHED = SEPARATORS | PROGRESS
 TEXT_OVER_ICON = frozenset({0x2665})            # BLACK HEART SUIT
 
 
-def nf_name(s):
+# The marker is Cascadia's "NF", not Nerd Fonts' "Nerd Font Mono": GDI
+# looks a family up by nameID 1 through LOGFONT.lfFaceName, which holds
+# 31 characters and a NUL, and spelled out the marker puts the non-RIBBI
+# faces of the longest family over it ("Gengou Code JP Term Nerd Font Mono
+# SemiBold" is 43). Abbreviating nameID 1 alone, as font-patcher's
+# --windows does, left GDI's pickers naming the face differently from
+# every other one; "NF" in every record is one name everywhere, and
+# "Gengou Code JP Term NF SemiBold" is 31, the limit exactly.
+NF_MARKER = " NF"
+
+
+def nf_name(s, marker=NF_MARKER):
     """The Nerd Fonts name of one of our names: the marker spliced in
-    after the family, variant token included ("Sumi Moji JP Term Nerd
-    Font Mono", "SumiMojiJPTermNFM-Bold"). A name that already carries
-    it comes back unchanged."""
-    if "Nerd Font Mono" in s or "NFM" in s:   # already carries the marker
+    after the family, variant token included ("Gengou Code JP Term NF",
+    "GengouCodeJPTermNF-Bold"). A name that already carries it comes back
+    unchanged.
+
+    The two forms are told apart by what follows the family: a
+    PostScript name is always Family-Style, so its variant runs into
+    the family and a "-" comes next; a display name never has one
+    there. Reading the space inside the family instead would work only
+    while the family is two words."""
+    if re.search(r"GengouCode(?:JP(?:Term)?)?NF-|Gengou Code(?: JP(?: Term)?)?"
+                 + re.escape(marker) + r"\b", s):   # already carries the marker
         return s
-    s = re.sub(r"(Sumi Moji(?: JP(?: Term)?)?)", r"\1 Nerd Font Mono", s, count=1)
-    return re.sub(r"(SumiMoji(?:JP(?:Term)?)?)", r"\1NFM", s, count=1)
+    ps, hit = re.subn(r"(GengouCode(?:JP(?:Term)?)?)(?=-)",
+                      r"\1" + marker.replace(" ", ""), s, count=1)
+    if hit:
+        return ps
+    return re.sub(r"Gengou Code(?: JP(?: Term)?)?", lambda m: m.group(0) + marker,
+                  s, count=1)
 
 
 def icon_context(font, symbols):
@@ -234,8 +258,13 @@ def graft_symbols(font, symbols):
     """Append every symbol codepoint the face lacks as a one-cell glyph
     drawn from the symbols font (quadratic outlines become cubic on the
     way, exactly), and redraw the Powerline glyphs the face already has
-    from the symbols too. Returns (icons grafted, the names redrawn over
-    the face's own glyphs — the only ones that had hints to lose)."""
+    from the symbols too.
+
+    Returns (icons grafted, the names redrawn over the face's own glyphs
+    — the only ones that had hints to lose —, {name: box} for every
+    glyph written, and what the redrawn ones were before). The last two
+    are update_bbox_after's, so the extents can be widened by what
+    this touched instead of measured over all 30,000 glyphs."""
     scm, sgs = symbols.getBestCmap(), symbols.getGlyphSet()
     ctx = icon_context(font, symbols)
     cell = ctx[3]
@@ -256,6 +285,7 @@ def graft_symbols(font, symbols):
     # codepoint sharing that glyph cannot have it too — it gets its own,
     # appended below, rather than the first one's symbol
     new, replaced, kept = {}, {}, set()
+    written, dropped = {}, {}
     for cp in sorted(scm):
         if cp in cmap and cp not in LINE_BOX:
             # the face already draws this one as text: font-patcher's
@@ -289,6 +319,10 @@ def graft_symbols(font, symbols):
             origin = (build.vmtx_origin(font, name)
                       if "vmtx" in font and name in font["vmtx"].metrics
                       else None)
+            # what it was, before the outline goes: update_bbox_after
+            # cannot take a contribution back out of an aggregate, so it
+            # has to be told what it is losing
+            dropped.update(glyph_extent_state(font, [name]))
             pen = T2CharStringPen(build.pen_width(own, cell), sgs)
             sgs[scm[cp]].draw(TransformPen(pen, xform))
             cs = pen.getCharString(private=own)
@@ -300,12 +334,14 @@ def graft_symbols(font, symbols):
                     font["vmtx"].metrics[name][0],
                     otRound(origin - (box[3] if box else 0)))
             replaced[name] = cp
+            written[name] = box
             continue
         pen = T2CharStringPen(build.pen_width(private, cell), sgs)
         sgs[scm[cp]].draw(TransformPen(pen, xform))
         name = build.alloc_glyph_name(font)
-        build.append_glyph(font, td, name, pen.getCharString(private=private),
-                           fd_index, cell, None, vdon)
+        written[name] = build.append_glyph(
+            font, td, name, pen.getCharString(private=private),
+            fd_index, cell, None, vdon)
         new[cp] = name
     if kept != set(TEXT_OVER_ICON):
         raise ValueError(
@@ -320,8 +356,8 @@ def graft_symbols(font, symbols):
     # the Term faces carry a contextual rule whose backtrack is every
     # glyph the widening did not move; these icons are one cell and were
     # appended after it ran, so they have to join it (build.py)
-    build.extend_realign_bases(font, new.values())
-    return len(new) + len(replaced), list(replaced)
+    extend_realign_bases(font, new.values())
+    return len(new) + len(replaced), list(replaced), written, dropped
 
 
 # what the face has to say about its fourth donor once the icons are in:
@@ -342,8 +378,9 @@ def rename(font):
     name = font["name"]
     for rec in name.names:
         s = rec.toUnicode()
-        if "Sumi" in s:
-            name.setName(nf_name(s), rec.nameID, rec.platformID, rec.platEncID, rec.langID)
+        if "Gengou" in s:   # the display and the PostScript form
+            name.setName(nf_name(s), rec.nameID, rec.platformID,
+                         rec.platEncID, rec.langID)
     for nid, sep, credit in ((0, " ", NF_NOTICE), (9, "; ", NF_DESIGNER)):
         records = [r for r in name.names if r.nameID == nid]
         if not records:      # a face with no such record gets one
@@ -362,8 +399,9 @@ def rename(font):
     # would otherwise file this face under the plain family
     td = cff[ps]
     for attr, nid in (("FamilyName", 16), ("FullName", 4)):
-        if hasattr(td, attr):
-            setattr(td, attr, name.getDebugName(nid) or name.getDebugName(1))
+        val = name.getDebugName(nid) or name.getDebugName(1)
+        if hasattr(td, attr) and val:
+            setattr(td, attr, val)
     return ps
 
 
@@ -527,20 +565,25 @@ def patch_face(src, out_dir, symbols_path):
     font = TTFont(src)
     font.recalcBBoxes = False
     symbols = _symbols(symbols_path)
-    n, rehint = graft_symbols(font, symbols)
+    n, rehint, written, dropped = graft_symbols(font, symbols)
     font["OS/2"].recalcAvgCharWidth(font)
     # 10,000 codepoints joined the cmap, most of them in the two private
     # use areas: the declared ranges are how a fallback picker finds them
     font["OS/2"].recalcUnicodeRanges(font)
     ps = rename(font)
-    os2, head = font["OS/2"], font["head"]
-    covered = (os2.usWinAscent >= head.yMax and os2.usWinDescent >= -head.yMin)
-    build.update_bbox(font)
-    if covered:
-        # the source's win metrics covered its box (Sumi Moji's policy):
-        # keep covering it with the icons in. The JP faces keep Source
-        # Han Sans's values, which never covered its outliers
-        fit_win_metrics(font)
+    # widened by what the graft wrote rather than measured over all
+    # 30,000 glyphs (6.2 s of a JP face, two thirds of it spent on the
+    # 19,500 this pass never touched). False when one of the redrawn
+    # Powerline glyphs was holding an extreme up, and then there is
+    # nothing for it but to measure
+    if not update_bbox_after(font, written, dropped):
+        build.update_bbox(font)
+    if out_dir == LATIN_OUT:
+        # LATIN_WIN_METRICS already covers the icons (their extremes
+        # are -279..991), so pinning it here holds after the graft too.
+        # The JP faces keep Source Han Sans's own pinned pair (build.py,
+        # not this one) untouched
+        pin_win_metrics(font)
     out = Path(out_dir) / f"{ps}.otf"
     # the icons carry no hints (font-patcher's did not either); only the
     # Powerline glyphs redrawn over Source Code Pro's own had hints to
@@ -561,9 +604,9 @@ def _symbols(path):
 
 def sources_for(args):
     """[(face, output dir)] for the command line: explicit paths (a JP
-    face in dist/ goes to dist/nerd/, a Sumi Moji face in dist/latin/ to
+    face in dist/ goes to dist/nerd/, a Gengou Code face in dist/latin/ to
     dist/nerd/latin/), a name substring, or — with no argument — every
-    face in dist/ (non-recursive) plus the static Sumi Moji faces
+    face in dist/ (non-recursive) plus the static Gengou Code faces
     specifically: never the variable fonts (a VF is not patched).
 
     An argument that names a file (a path, or anything ending .otf) and
@@ -599,7 +642,7 @@ def main():
         out_dir.mkdir(parents=True, exist_ok=True)
     if not sys.argv[1:]:
         # like build.py's: patching everything must not leave a face from
-        # an older roster (a v4 SumiMojiNF-*.otf, say) for the release
+        # an older roster (a v4 GengouCodeNF-*.otf, say) for the release
         # zip to sweep up. A filtered run deletes nothing
         stale = sorted(OUT.glob("*.otf")) + sorted(LATIN_OUT.glob("*.otf"))
         for f in stale:
@@ -609,6 +652,168 @@ def main():
     jobs = [(src, out_dir, env["NF_SYMBOLS"]) for src, out_dir in sources]
     build.run_faces(jobs, _job, label=lambda job: Path(job[0]).name,
                     on_result=lambda job, out: None)
+
+# --- the bbox after a graft (moved from build.py: only this file appends
+# glyphs to a finished face) ---
+
+def extend_realign_bases(font, names):
+    """Add `names` to the backtrack of the Term mark correction, for
+    glyphs appended after widen_fullwidth ran. Returns the number of
+    subtables extended.
+
+    realign_halfwidth_marks freezes its backtrack at widening time — the
+    glyphs the widening did not move — and nerdpatch.py then appends
+    10,402 one-cell icons to the finished face. None of them were in it,
+    so in GengouCodeJPTermNF-* a full-width mark after an icon kept the
+    widening's -100: U+F120 + U+20DD drew the ring at -465..465 where
+    the same one-cell base two rows up puts it at -365..565."""
+    gpos = getattr(font.get("GPOS"), "table", None)
+    if gpos is None or not names:
+        return 0
+    gid = font.getGlyphID
+    ours = set()
+    for fr in gpos.FeatureList.FeatureRecord:
+        if fr.FeatureTag == "dist":
+            ours.update(fr.Feature.LookupListIndex)
+    done = 0
+    for index in sorted(ours):
+        kind, subtables = _unwrap_pos(gpos.LookupList.Lookup[index])
+        if kind != 8:
+            continue
+        for sub in subtables:
+            covs = getattr(sub, "BacktrackCoverage", None)
+            if not covs:
+                continue
+            cov = covs[-1]      # the base, behind the run of marks
+            cov.glyphs = sorted(set(cov.glyphs) | set(names), key=gid)
+            done += 1
+    return done
+
+
+def glyph_extent_state(font, names):
+    """What update_bbox_after needs to know about glyphs a pass is about
+    to rewrite: {name: (box, hmtx pair, vmtx pair or None)} as they are
+    now. Read before the outline is swapped, or the old state is gone."""
+    gs = font.getGlyphSet()
+    return {n: (_bounds(gs, n),
+                font["hmtx"].metrics[n],
+                font["vmtx"].metrics[n] if "vmtx" in font else None)
+            for n in names}
+
+
+def _extent_candidates(box, metrics, axis):
+    """What one glyph offers each of the four extents _update_extents
+    computes: (advance, side bearing, far-side bearing, extent), the
+    last three None for a glyph with no ink."""
+    adv, sb = metrics
+    if box is None:
+        return adv, None, None, None
+    size = int(math.ceil(box[2 + axis]) - math.floor(box[axis]))
+    return adv, sb, adv - sb - size, sb + size
+
+
+def _loses_extent(table, fields, old, new, axis):
+    """Whether rewriting one glyph can lower any of `table`'s extents.
+
+    Only where the old outline was holding an extreme up AND the new one
+    does not reach it: a rewrite that keeps the advance, or draws at
+    least as far, takes nothing away. Being strict about the advance
+    alone would refuse every face here, since the glyphs the graft
+    redraws keep the cell they had."""
+    was = _extent_candidates(*old, axis)
+    now = _extent_candidates(*new, axis)
+    for i, (field, better) in enumerate(zip(fields, (max, min, min, max))):
+        if was[i] is None or was[i] != getattr(table, field):
+            continue                      # it was not holding this one up
+        # safe only where the new outline reaches at least as far as the
+        # one it replaced, so the extreme survives in the same glyph
+        if now[i] is None or better(was[i], now[i]) != now[i]:
+            return True
+    return False
+
+
+def update_bbox_after(font, written, dropped):
+    """Set the extents after a pass that appended glyphs and rewrote a
+    named few, without measuring the ones it left alone. Returns True
+    when it could, False when the caller has to measure the font whole.
+
+    The face arrives carrying the extents of everything it had —
+    update_bbox set them when it was built — so the new values are those
+    combined with what this pass wrote. Combining only runs one way: a
+    maximum can take another candidate, but it cannot give one back. A
+    glyph the pass REWROTE is therefore a problem exactly when its old
+    outline was holding one of those extremes up, because the old
+    aggregate is then too generous and nothing short of measuring says
+    by how much. `dropped` is what those glyphs were
+    (glyph_extent_state), each is checked against every extreme, and a
+    hit returns False rather than a guess.
+
+    `written`: {name: box or None} for every glyph the pass wrote.
+    """
+    head = font["head"]
+    hbox = (head.xMin, head.yMin, head.xMax, head.yMax)
+    hh = ("advanceWidthMax", "minLeftSideBearing",
+          "minRightSideBearing", "xMaxExtent")
+    vv = ("advanceHeightMax", "minTopSideBearing",
+          "minBottomSideBearing", "yMaxExtent")
+    horizontal = "hmtx" in font and "hhea" in font
+    vertical = "vmtx" in font and "vhea" in font
+    for name, (box, hm, vm) in dropped.items():
+        now = written.get(name)
+        if box is not None:
+            edges = ((math.floor(box[0]), hbox[0], math.floor, min, 0),
+                     (math.floor(box[1]), hbox[1], math.floor, min, 1),
+                     (math.ceil(box[2]), hbox[2], math.ceil, max, 2),
+                     (math.ceil(box[3]), hbox[3], math.ceil, max, 3))
+            for was, edge, round_to, better, i in edges:
+                if was != edge:
+                    continue              # it was not holding this edge
+                if now is None or better(was, round_to(now[i])) != round_to(now[i]):
+                    return False
+        if horizontal and _loses_extent(font["hhea"], hh, (box, hm),
+                                        (now, font["hmtx"].metrics[name]), 0):
+            return False
+        if vertical and vm is not None and _loses_extent(
+                font["vhea"], vv, (box, vm),
+                (now, font["vmtx"].metrics[name]), 1):
+            return False
+
+    inked = {n: b for n, b in written.items() if b is not None}
+    box = [min([hbox[0]] + [math.floor(b[0]) for b in inked.values()]),
+           min([hbox[1]] + [math.floor(b[1]) for b in inked.values()]),
+           max([hbox[2]] + [math.ceil(b[2]) for b in inked.values()]),
+           max([hbox[3]] + [math.ceil(b[3]) for b in inked.values()])]
+    if "CFF2" not in font:
+        cff = font["CFF "].cff
+        cff[cff.fontNames[0]].FontBBox = box
+    head.xMin, head.yMin, head.xMax, head.yMax = box
+    if horizontal:
+        _extend_extents(font["hhea"], hh, font["hmtx"].metrics,
+                        written, inked, 0)
+    if vertical:
+        _extend_extents(font["vhea"], vv, font["vmtx"].metrics,
+                        written, inked, 1)
+    return True
+
+
+def _extend_extents(table, fields, metrics, written, inked, axis):
+    """_update_extents' four numbers, widened by the glyphs one pass
+    wrote instead of recomputed over every glyph in the font."""
+    adv_max, min_sb, min_far, max_extent = fields
+    advances = [metrics[n][0] for n in written if n in metrics]
+    if advances:
+        setattr(table, adv_max, max(getattr(table, adv_max), *advances))
+    sizes = {n: int(math.ceil(b[2 + axis]) - math.floor(b[axis]))
+             for n, b in inked.items() if n in metrics}
+    if not sizes:
+        return
+    sb = {n: metrics[n][1] for n in sizes}
+    setattr(table, min_sb, min(getattr(table, min_sb), *sb.values()))
+    setattr(table, min_far, min(getattr(table, min_far),
+                                *(metrics[n][0] - sb[n] - sizes[n]
+                                  for n in sizes)))
+    setattr(table, max_extent, max(getattr(table, max_extent),
+                                   *(sb[n] + sizes[n] for n in sizes)))
 
 
 if __name__ == "__main__":

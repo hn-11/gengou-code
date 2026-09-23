@@ -14,6 +14,7 @@ from fontTools.varLib.models import piecewiseLinearMap
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
+import anchors  # noqa: E402
 import build  # noqa: E402
 import build_latin_vf as vf  # noqa: E402
 from conftest import make_font  # noqa: E402
@@ -150,13 +151,13 @@ def test_masters_take_extra_positions_inside_the_range_only():
 def _vf_with_instances(default=400):
     font = _vf_meta(avar=None, default=default)
     name = font["name"]
-    name.setName("SumiMoji-Roman", 6, 3, 1, 0x409)
+    name.setName("GengouCode-Roman", 6, 3, 1, 0x409)
     name.setName("Regular", 2, 3, 1, 0x409)
     ids = {}
     for i, (style, wght) in enumerate((("Light", 300), ("Regular", 400), ("Bold", 700))):
         sid, pid = 256 + 2 * i, 257 + 2 * i
         name.setName(style, sid, 3, 1, 0x409)
-        name.setName(f"SumiMoji-{style}", pid, 3, 1, 0x409)
+        name.setName(f"GengouCode-{style}", pid, 3, 1, 0x409)
         ids[style] = (sid, pid, wght)
     from fontTools.ttLib.tables._f_v_a_r import NamedInstance
     for style, (sid, pid, wght) in ids.items():
@@ -175,7 +176,7 @@ def test_default_instance_takes_name_id_6_and_drops_its_private_record():
     assert font["name"].getDebugName(ids["Regular"][1]) is None
     # the others keep their own names
     assert insts[300].postscriptNameID == ids["Light"][1]
-    assert font["name"].getDebugName(ids["Bold"][1]) == "SumiMoji-Bold"
+    assert font["name"].getDebugName(ids["Bold"][1]) == "GengouCode-Bold"
 
 
 def test_default_instance_missing_raises():
@@ -214,7 +215,7 @@ def test_add_stat_family_form_italic_file_declares_ital_1():
     assert _stat_values(font)["ital"] == [("Italic", 1, 0, None)]
 
 
-# --- build.classify_unicode_marks -----------------------------------------
+# --- anchors.classify_unicode_marks -----------------------------------------
 
 def _font_with_gdef(cmap, classes):
     order = [".notdef", *sorted(set(cmap.values()))]
@@ -233,7 +234,7 @@ def test_classify_unicode_marks_marks_only_unclassified_mn():
     font = _font_with_gdef({0x41: "A", 0x300: "grave", 0x35F: "dblmacronbelow",
                             0x361: "dblinvbreve", 0x20DD: "enclcircle"},
                            {"A": 1, "grave": 3})
-    fixed = build.classify_unicode_marks(font)
+    fixed = anchors.classify_unicode_marks(font)
     assert sorted(fixed) == ["dblinvbreve", "dblmacronbelow"]
     defs = font["GDEF"].table.GlyphClassDef.classDefs
     assert defs["A"] == 1 and defs["grave"] == 3
@@ -244,7 +245,7 @@ def test_classify_unicode_marks_marks_only_unclassified_mn():
 def test_classify_unicode_marks_noop_without_gdef():
     font = _font_with_gdef({0x300: "grave"}, {})
     del font["GDEF"]
-    assert build.classify_unicode_marks(font) == []
+    assert anchors.classify_unicode_marks(font) == []
 
 
 # --- master_extents / master_scp_wghts seed guard ----------------------------

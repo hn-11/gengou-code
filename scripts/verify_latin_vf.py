@@ -1,47 +1,67 @@
 #!/usr/bin/env python3
-"""Regression test for the variable Sumi Moji (dist/latin/SumiMoji[wght].otf
-/ SumiMoji-Italic[wght].otf): fvar/STAT/name shape, and that every named
+"""Regression test for the variable Gengou Code (dist/latin/GengouCode[wght].otf
+/ GengouCode-Italic[wght].otf): fvar/STAT/name shape, and that every named
 instance shapes ligatures the same way the static faces do and lands on
 the same '=' bar / 'A' bounds as the matching static face (when that face
 is built), and — with SCP_VF_U / SCP_VF_I set — that the font reproduces
 Source Code Pro exactly at and between the named weights.
 
 Usage: python scripts/verify_latin_vf.py [FONT]
-  FONT defaults to dist/latin/SumiMoji[wght].otf.
+  FONT defaults to dist/latin/GengouCode[wght].otf.
 """
 
+import io
 import os
 import sys
 from pathlib import Path
 
 from fontTools.pens.boundsPen import BoundsPen
 from fontTools.ttLib import TTFont
-from fontTools.varLib.models import piecewiseLinearMap
+from fontTools.varLib.instancer import instantiateVariableFont
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 import build  # noqa: E402
 import build_latin_vf  # noqa: E402
 from verifylib import (  # noqa: E402
+    DONOR_LETTERS,
     Checker,
-    check_accents_clear,
+    check_blank_glyphs,
+    check_cells,
     check_coverage_order,
+    check_donor_repertoire,
+    check_family_cmap,
     check_features_work,
+    check_font_matrix,
+    check_gdef_classes,
     check_gdef_marks,
+    check_gdi_family_name,
+    check_grid,
     check_heights,
+    check_latin_repertoire,
+    check_ligature_cells,
+    check_line_metrics,
     check_mark_class_closure,
-    check_mark_features,
+    check_marks,
+    check_monospace_metadata,
+    check_name_composition,
+    check_name_ids,
+    check_pair_positioning,
     check_private,
-    check_stray_marks,
     check_style_bits,
+    check_substitution_identity,
     check_tables,
+    check_version_stamp,
     check_zones,
+    family_reference,
+    ink_spill,
     make_shaper,
     static_faces,
+    vf_region_peaks,
 )
 
 FONT = Path(sys.argv[1]) if len(sys.argv) > 1 else (
-    ROOT / "dist" / "latin" / "SumiMoji[wght].otf")
+    ROOT / "dist" / "latin" / "GengouCode[wght].otf")
 
 # (text, expected glyph count) shaped with calt+liga on: a plain ligature
 # ("a -> b"), a context guard holding ("->>" alone: no trailing/leading
@@ -78,38 +98,6 @@ def scp_reference(italic):
     _, _, _, _, to_scp = build_latin_vf.user_axis(weight_pos, design, breaks,
                                                    axis.minValue)
     return scp, to_scp
-
-
-def master_locations(tf, axis):
-    """The user wght of every master in the file, read back from the
-    CFF2 VarStore's region peaks through avar and fvar.
-
-    The file has FOUR masters, not three: 200, the Monaspace floor
-    (build_latin_vf.mona_floor_wght — 364.75 upright, 381.15 italic,
-    at no named instance), 400 and 700. A piecewise-linear blend can
-    only turn at a master, so a master is exactly where a corruption
-    hides: a build that moved the 61 Monaspace ligatures 600u right at
-    the floor master ONLY put '->' 535 units past its own advance
-    there, and 219 past it at the Light instance, while the three
-    locations this used to probe measured clean."""
-    tag = "CFF2" if "CFF2" in tf else "CFF "
-    store = getattr(tf[tag].cff[tf[tag].cff.fontNames[0]], "VarStore", None)
-    store = getattr(store, "otVarStore", None)
-    peaks = {0.0}
-    for region in (store.VarRegionList.Region if store else []):
-        for i, a in enumerate(region.VarRegionAxis):
-            if tf["fvar"].axes[i].axisTag == "wght":
-                peaks.add(a.PeakCoord)
-    # avar maps normalized -> normalized; invert it, then denormalize
-    segments = (tf["avar"].segments.get("wght") if "avar" in tf else None) or {}
-    back = {v: k for k, v in segments.items()}
-    out = set()
-    for peak in peaks:
-        n = piecewiseLinearMap(peak, back) if back else peak
-        out.add(axis.defaultValue + n * ((axis.defaultValue - axis.minValue)
-                                         if n < 0 else
-                                         (axis.maxValue - axis.defaultValue)))
-    return sorted(out)
 
 
 def main():
@@ -196,35 +184,23 @@ def main():
     fam, sub = name.getDebugName(1), name.getDebugName(2)
     ps6, ps25 = name.getDebugName(6), name.getDebugName(25)
     is_italic = sub == "Italic"
-    check(fam == "Sumi Moji", f"nameID1 family {fam!r}")
+    check(fam == "Gengou Code", f"nameID1 family {fam!r}")
     check(sub in ("Regular", "Italic"), f"nameID2 subfamily {sub!r}")
-    check(ps6 == f"SumiMoji-{'Italic' if is_italic else 'Roman'}",
+    check(ps6 == f"GengouCode-{'Italic' if is_italic else 'Roman'}",
           f"nameID6 PostScript name {ps6!r}")
-    check(ps25 == "SumiMoji", f"nameID25 variations PS prefix {ps25!r}")
+    check(ps25 == "GengouCode", f"nameID25 variations PS prefix {ps25!r}")
     check(name.getDebugName(16) is None and name.getDebugName(17) is None,
           "no nameID 16/17 (fvar+STAT already describe the family)")
     n0 = name.getDebugName(0) or ""
     check("Source Code Pro:" in n0 and "Monaspace:" in n0,
           "nameID 0 credits Source Code Pro and Monaspace")
 
-    os2 = tf["OS/2"]
-    check(tf["post"].isFixedPitch == 1 and os2.panose.bProportion == 9,
-          "declared monospaced")
-    want_pw = build.panose_weight(os2.usWeightClass)
-    check(os2.panose.bWeight == want_pw,
-          f"PANOSE weight {os2.panose.bWeight} matches usWeightClass "
-          f"{os2.usWeightClass} (want {want_pw})")
+    # (the win metrics: GDI clips to these. Deleting the pin
+    # (build_latin.pin_win_metrics) from the VF build left 984/273
+    # against a 1060/-454 box — 76u of ascender and 181u of descender
+    # cut off — and every check here still passed)
+    check_monospace_metadata(tf, check)
     hhea = tf["hhea"]
-    check((os2.sTypoAscender, os2.sTypoDescender, os2.sTypoLineGap)
-          == (hhea.ascent, hhea.descent, hhea.lineGap) and os2.fsSelection & 0x80,
-          "typo metrics == hhea metrics, USE_TYPO_METRICS set")
-    # GDI clips to these. Deleting build_latin.fit_win_metrics from the
-    # VF build left 984/273 against a 1060/-454 box — 76u of ascender
-    # and 181u of descender cut off — and every check here still passed
-    check(os2.usWinAscent >= tf["head"].yMax
-          and os2.usWinDescent >= -tf["head"].yMin,
-          f"win metrics cover the bbox ({os2.usWinAscent}/{os2.usWinDescent} "
-          f"vs {tf['head'].yMax}/{-tf['head'].yMin})")
     # head / hhea extents must hold every instance, not just the default
     # one a CFF2 glyph set draws (build_latin_vf.py unions the masters):
     # the union of the whole glyph set at both axis ends and the default.
@@ -238,30 +214,38 @@ def main():
 
     # the three things verify_latin.py checks on a static face and this
     # never did: the repertoire, the grid, and the feature surface. The
-    # two variable fonts are the whole of SumiMoji.zip, and this is their
+    # two variable fonts are the whole of GengouCode.zip, and this is their
     # only gate — a VF that lost every codepoint above U+024F, or every
     # stylistic set, passed here while the same loss on a static face
     # failed three checks
     vf_cmap = tf.getBestCmap()
-    check(len(vf_cmap) >= 800, f"{len(vf_cmap)} codepoints mapped")
-    check(not any(0x3000 <= cp <= 0x9FFF or 0xFF00 <= cp <= 0xFFEF
-                  for cp in vf_cmap),
-          "no CJK / full-width codepoints")
+    check_latin_repertoire(check, vf_cmap)
+    check_donor_repertoire(check, vf_cmap)
     # the tables verify_latin.py has gated since round 43 and this file
     # never read: a VF with embedding restricted, the vendor id blanked,
     # the range bits or the char-index range zeroed, or both format-4
     # cmap subtables deleted, passed here — and these two files ARE
-    # SumiMoji.zip. head's box is checked below instead, against every
+    # GengouCode.zip. head's box is checked below instead, against every
     # instance: a VF's box is the union over its masters, not one
     # location's ink
     check_tables(tf, check, None, None, vf_cmap, codepages=True)
-    for tbl in ("vhea", "vmtx", "VORG", "DSIG"):
+    # and no variable metrics: the advances are hmtx's at every
+    # location, which is what every grid check here relies on (an HVAR
+    # peaking between two instances widened 'e' at wght 450 and passed)
+    for tbl in ("vhea", "vmtx", "VORG", "DSIG", "HVAR", "VVAR", "MVAR"):
         check(tbl not in tf, f"no {tbl} table")
     vf_gpos = {fr.FeatureTag for fr in tf["GPOS"].table.FeatureList.FeatureRecord} \
         if "GPOS" in tf else set()
     check("mark" in vf_gpos and "kern" not in vf_gpos,
           f"GPOS keeps SCP's mark positioning, no kern ({sorted(vf_gpos)})")
     check_gdef_marks(tf, check, vf_cmap)
+    check_gdef_classes(tf, check)
+    check_line_metrics(tf, check)
+    check_font_matrix(tf, check)
+    check_pair_positioning(tf, check)
+    check_substitution_identity(tf, check)
+    check_name_composition(tf, check)
+    check_family_cmap(tf, check, family_reference(FONT, tf))
     check_coverage_order(tf, check)
     check_mark_class_closure(tf, check)
     check_private(tf, check)
@@ -281,43 +265,55 @@ def main():
     check(inked >= 700, f"{inked} mapped glyphs draw at the default weight")
     ligs = []
     shape_default = make_shaper(FONT, {"wght": axis.defaultValue})
-    check_accents_clear(shape_default, default_gs, tf.getGlyphOrder(),
-                        vf_cmap, check, " at the default weight")
     check_heights(tf, check, default_gs, vf_cmap)
     check_zones(tf, check, vf_cmap)
-    check_mark_features(tf, check, shape_default, default_gs,
-                        tf.getGlyphOrder(), vf_cmap)
-    check_stray_marks(shape_default, default_gs, tf.getGlyphOrder(), vf_cmap,
-                      check, is_italic)
+    # The mark gates run on an INSTANCE at every location: the default,
+    # both axis extremes and every named instance. A variable font's
+    # anchors are merged from the masters into variable anchors, so a
+    # value wrong only away from the default is exactly what this file
+    # is here to see, and reading the VF's own tables shows only the
+    # default value -- instantiating resolves every delta into a plain
+    # font the same four checks the statics get can read. The Light
+    # Italic instance is where the statics' own weight extreme first
+    # showed a leaning ascender; it is the one a default-only gate
+    # misses, and it is a named instance here.
+    # the default, the two ends, every named instance -- and every
+    # master, read off the variation stores: a delta scoped to the
+    # region that peaks at the wght-365 master is zero at all of the
+    # former (verifylib.vf_region_peaks)
+    locations = sorted({axis.defaultValue, axis.minValue, axis.maxValue}
+                       | {i.coordinates["wght"] for i in tf["fvar"].instances
+                          if "wght" in i.coordinates}
+                       | set(vf_region_peaks(tf)))
+    peaks = vf_region_peaks(tf)
+    check(any(axis.minValue < p < axis.maxValue for p in peaks),
+          f"an intermediate master is probed ({[round(p, 2) for p in peaks]})")
+    for loc in locations:
+        inst = instantiateVariableFont(TTFont(FONT), {"wght": loc}, inplace=False)
+        buf = io.BytesIO()
+        inst.save(buf)
+        inst = TTFont(io.BytesIO(buf.getvalue()))
+        shape_at, gs_at = make_shaper(buf.getvalue()), inst.getGlyphSet()
+        check_marks(inst, check, shape_at, gs_at, f" at wght {round(loc, 2):g}")
+        check_cells(inst, check, shape_at, gs_at, build.CELL, label=f" at wght {round(loc, 2):g}")
+        check_ligature_cells(inst, shape_at, check, gs_at, build.CELL, label=f" at wght {round(loc, 2):g}")
+        check_blank_glyphs(inst, check, gs_at)
     check_features_work(shape_default, check, vf_cmap)
     # the nameIDs verify_latin.py requires of the statics; 13 and 14 are
     # the licence and its URL, and dropping all seven passed this file
-    for nid in (3, 4, 8, 9, 11, 13, 14):
-        check(bool(name.getDebugName(nid)), f"nameID {nid} is set")
+    check_name_ids(tf, check, (3, 4, 8, 9, 11, 13, 14))
     for seq in build.LIGATURES:
         infos, _p = shape_default(f"a {seq} b", {"calt": True, "liga": True})
         ligs += [tf.getGlyphOrder()[i.codepoint] for i in infos[2:len(infos) - 2]
                  if tf.getGlyphOrder()[i.codepoint] not in drawn]
     check(not ligs, f"every ligature draws ({len(build.LIGATURES)} probes; "
                     f"blank: {ligs[:5]})")
-    want_version = os.environ.get("SUMI_VERSION")
-    if want_version:
-        major, minor = want_version.split(".")[:2]
-        check(abs(tf["head"].fontRevision - float(f"{major}.{minor}")) < 5e-4
-              and (tf["name"].getDebugName(5) or "").startswith(
-                  f"Version {want_version}"),
-              f"stamped {want_version} (fontRevision "
-              f"{tf['head'].fontRevision:.3f}, "
-              f"{tf['name'].getDebugName(5)!r})")
-    else:
-        print("skip  version stamp (SUMI_VERSION unset)")
+    check_version_stamp(tf, check)
     check_style_bits(tf, check, tf["name"].getDebugName(2) or "",
                      "Italic" in (tf["name"].getDebugName(17)
                                   or tf["name"].getDebugName(2) or ""))
-    off_grid = sorted({adv for adv, _ in metrics.values()}
-                      - {0} - {build.CELL * n for n in range(1, 5)})
-    check(not off_grid, f"every advance is 0 or a whole number of "
-                        f"{build.CELL} cells (offenders: {off_grid})")
+    check_gdi_family_name(tf, check)
+    check_grid(check, metrics, build.CELL)
     # on the grid is not the same as the RIGHT number of cells: only the
     # glyph count of three ligature cases was read here, so widening
     # '==' from two cells to three shaped 'a == b' at 4,200 units and
@@ -331,11 +327,6 @@ def main():
             wrong[seq] = adv
     check(not wrong, f"every ligature is the cells it declares "
                      f"({len(build.LIGATURES)} probes; off: {wrong})")
-    for ch in build.MONA_AMBIGUOUS:
-        if ord(ch) in vf_cmap:
-            check(metrics[vf_cmap[ord(ch)]][0] == build.CELL,
-                  f"{ch!r} is one cell")
-    check(metrics[tf.getGlyphOrder()[0]][0] == build.CELL, ".notdef is one cell")
     check(hhea.advanceWidthMax == max(adv for adv, _ in metrics.values()),
           f"hhea advanceWidthMax is the widest advance "
           f"({hhea.advanceWidthMax} vs {max(adv for adv, _ in metrics.values())})")
@@ -352,11 +343,20 @@ def main():
     # corrupted masters and hold it, and the SCP exactness check probes
     # SCP's own glyphs — a build that moved every Monaspace ligature
     # 600u right above Regular passed this file and the whole suite,
-    # rendering `!=` into the next column at Bold
-    lean = build.CELL // 2
+    # rendering `!=` into the next column at Bold. The bound is
+    # verifylib.ink_spill's, one location at a time
     spill, centres, default_boxes = {}, {}, {}
+    # the file has FOUR masters, not three: 200, the Monaspace floor
+    # (build_latin_vf.mona_floor_wght -- 364.75 upright, 381.16 italic,
+    # at no named instance), 400 and 700. A piecewise-linear blend can
+    # only turn at a master, so a master is exactly where a corruption
+    # hides: a build that moved the 61 Monaspace ligatures 600u right at
+    # the floor master ONLY put '->' 535 units past its own advance
+    # there, and 219 past it at Light, while the ends and the instances
+    # measured clean. verifylib.vf_region_peaks reads them, as the mark
+    # gates above already do -- this file used to carry a second copy
     probes = sorted({axis.minValue, axis.defaultValue, axis.maxValue}
-                    | set(master_locations(tf, axis))
+                    | set(vf_region_peaks(tf))
                     | {i.coordinates["wght"] for i in instances
                        if "wght" in i.coordinates})
     check(len(probes) >= len(WEIGHTS) + 2,
@@ -377,17 +377,13 @@ def main():
             right = metrics[g][0] - pen.bounds[2]
             rsb = right if rsb is None else min(rsb, right)
             adv = metrics[g][0]
-            # rounded, as the static faces store it: the blend here is
-            # unrounded, and U+035F's ink reaches exactly -CELL//2 —
-            # -300.135 at Bold, which is the same outline
-            left, right_ink = round(pen.bounds[0]), round(pen.bounds[2])
-            if adv > 0 and (left < -lean or right_ink > adv + lean):
-                spill.setdefault(round(w), []).append((g, adv, left, right_ink))
+            for hit in ink_spill({g: pen.bounds}, lambda _: adv, vf_cmap, build.CELL):
+                spill.setdefault(round(w), []).append(hit)
             if g in letters:
                 offs.append((pen.bounds[0] + pen.bounds[2]) / 2 - adv / 2)
         centres[round(w)] = sum(offs) / len(offs) if offs else None
     check(not spill, f"every glyph's ink is inside its advance at every "
-                     f"location, give or take {lean}u of lean "
+                     f"location, give or take the lean "
                      f"({ {k: (len(v), v[:2]) for k, v in spill.items()} })")
     off_centre = {w: round(m, 1) for w, m in centres.items()
                   if m is None or abs(m) > 25}
@@ -436,7 +432,7 @@ def main():
     # master can't erode, see build_latin_vf.py), so its bar is not
     # comparable; its SCP-side glyphs still are.
     floor_bar = build.bar_thickness(tf.getGlyphSet(location={"wght": axis.minValue}), equals)
-    any_static = bool(static_faces(ROOT / "dist" / "latin", "SumiMoji"))
+    any_static = bool(static_faces(ROOT / "dist" / "latin", "GengouCode"))
     for inst_desc in instances:
         style = name.getDebugName(inst_desc.subfamilyNameID) or "?"
         loc = dict(inst_desc.coordinates)
@@ -449,7 +445,7 @@ def main():
         # (an SCP-only glyph — no Monaspace/erosion involved); the
         # position check — the exact-outline check against SCP is below
         weight = style.replace(" Italic", "").replace("Italic", "Regular")
-        static_name = f"SumiMoji-{weight}{'Italic' if is_italic else ''}.otf"
+        static_name = f"GengouCode-{weight}{'Italic' if is_italic else ''}.otf"
         static_path = ROOT / "dist" / "latin" / static_name
         if static_path.exists():
             ref = TTFont(str(static_path))
@@ -491,10 +487,22 @@ def main():
             s = to_scp(u)
             gs = tf.getGlyphSet(location={"wght": u})
             ref = scp.getGlyphSet(location={"wght": s})
-            for ch in "AlHm¾":     # SCP-only glyphs ('=' is Monaspace's)
+            # every letter and digit, not five of them: scaling the
+            # default 'o' to 0.8 about its own centre kept its advance,
+            # its cell and its cmap entry, and five probe glyphs looked
+            # away (round 12, mutant V12). The operators are Monaspace's
+            # and are not SCP's to answer for
+            off = {}
+            for cp in DONOR_LETTERS:
+                ch = chr(cp)
+                if cp not in cmap or cp not in scp_cmap:
+                    continue
                 bi, br = bounds(gs, cmap, ch), bounds(ref, scp_cmap, ch)
-                check(close(bi, br, 1), f"[wght {u} = SCP {s:.1f}] {ch!r} bounds {bi} vs "
-                                        f"SCP {br} (want within 1u)")
+                if not close(bi, br, 1):
+                    off[ch] = (tuple(round(v, 1) for v in bi),
+                               tuple(round(v, 1) for v in br))
+            check(not off, f"[wght {u} = SCP {s:.1f}] every letter and digit is "
+                           f"SCP's own to 1u (off: {dict(list(off.items())[:3])})")
     else:
         print("  (skip SCP exactness check: set SCP_VF_U / SCP_VF_I)")
 

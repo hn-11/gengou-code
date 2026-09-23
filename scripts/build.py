@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
-"""Assemble Sumi Moji JP from live upstreams.
+"""Assemble Gengou Code JP from live upstreams.
 
-Sumi Moji JP is an English terminal font with Japanese: the Latin layer
-is Sumi Moji (dist/latin, scripts/build_latin.py — Source Code Pro's
+Gengou Code JP is an English terminal font with Japanese: the Latin layer
+is Gengou Code (dist/latin, scripts/build_latin.py — Source Code Pro's
 named instances with Monaspace's punctuation and ligatures), taken as
-it is, and Source Han Sans JP supplies everything Sumi Moji does not
+it is, and Source Han Sans JP supplies everything Gengou Code does not
 have. Source Code Pro sets the terms: the 600 cell, the stroke weight of
 each named weight (the Japanese face is the Source Han Sans weight whose
 strokes match), and the line metrics (984 / -273: the line pitch of an
 English terminal font, not a Japanese one).
 
-  - Half-width layer:  every codepoint Sumi Moji covers gets its one-cell
+  - Half-width layer:  every codepoint Gengou Code covers gets its one-cell
                        glyph — Latin, Greek, Cyrillic, box drawing, the
                        ligature-paired arrows and operators included. The
                        two-cell forms Source Han Sans had for some of
                        them (JIS-style → α ─) stay reachable under fwid.
   - Full-width layer:  Source Han Sans JP, untouched: kanji, kana, the
-                       full-width symbols Sumi Moji has no glyph for (① ※
+                       full-width symbols Gengou Code has no glyph for (① ※
                        ...). Its proportional leftovers (half-width kana
                        at 500, Hangul jamo at 920, ﬀ ...) are centred on
                        the grid (fit_to_grid).
@@ -26,10 +26,10 @@ English terminal font, not a Japanese one).
                        static whose '=' bar matches that instance's
                        (FACES).
 
-Italic faces take the Sumi Moji Italic + upright Japanese.
+Italic faces take the Gengou Code Italic + upright Japanese.
 
 Families (suffix -> full-width advance):
-  ""     1000  3:5 — Sumi Moji plus Japanese at Source Han Sans's own
+  ""     1000  3:5 — Gengou Code plus Japanese at Source Han Sans's own
                advance; the natural setting for editors
   "Term" 1200  1:2 — full-width widened to two cells (widen_fullwidth) so
                a non-grid application lays Japanese out on the terminal
@@ -45,27 +45,28 @@ Usage:
   family, "Light Italic" one face per family, "Light Upright Term" one
   face, "Light Regular base" four (the release builds a family's two
   weights per job). Whole words, never a substring match (face_matches).
-  With no FILTER, dist/SumiMojiJP*.otf is cleared before building, so a
+  With no FILTER, dist/GengouCodeJP*.otf is cleared before building, so a
   full build never leaves faces from an older roster behind. A filtered run
   never deletes anything.
 
 Env (SHS_DIR required, the rest default):
   SHS_DIR   = dir with SourceHanSansJP-<Weight>.otf
   LATIN_DIR = dist/latin (default) — scripts/build_latin.py's output; it
-              needs SCP_VF_U / SCP_VF_I / MONA_VF and must run first
+              needs SCP_VF_U / SCP_VF_I / SS_VF_I / MONA_VF and must run
+              first
 
 Env (optional):
-  SUMI_VERSION = our own release version, e.g. "3.1.0" — stamps
+  GENGOU_VERSION = our own release version, e.g. "6.0.0" — stamps
                   head.fontRevision (MAJOR.MINOR), nameID 5 and the CFF
                   version. Unset keeps today's behaviour: the revision
                   stays whatever Source Han Sans shipped.
-  SUMI_SKIP_AUTOHINT = 1 skips otfautohint (quick local iterations)
+  GENGOU_SKIP_AUTOHINT = 1 skips otfautohint (quick local iterations)
 """
 
 import concurrent.futures
 import contextlib
 import copy
-import functools
+import dataclasses
 import json
 import logging
 import math
@@ -79,7 +80,7 @@ import unicodedata
 from pathlib import Path
 
 import pathops
-from fontTools.misc.roundTools import noRound, otRound
+from fontTools.misc.roundTools import otRound
 from fontTools.otlLib import builder as otl
 from fontTools.pens.boundsPen import BoundsPen
 from fontTools.pens.recordingPen import RecordingPen
@@ -87,12 +88,10 @@ from fontTools.pens.t2CharStringPen import T2CharStringPen
 from fontTools.pens.transformPen import TransformPen
 from fontTools.ttLib import TTFont
 from fontTools.ttLib.tables import otTables
-from fontTools.varLib import instancer
-from fontTools.varLib.instancer import instantiateVariableFont
 
 ROOT = Path(__file__).resolve().parent.parent
 # the half-width cell: Source Code Pro's own advance (upm 1000), which
-# Sumi Moji keeps as it is — one number, since v5 rescales nothing
+# Gengou Code keeps as it is — one number, since v5 rescales nothing
 CELL = 600
 FULLWIDTH = 1000    # full-width advance of the CJK layer (upm 1000)
 MONA_CELL = 1240    # Monaspace advance (upm 2000)
@@ -115,7 +114,7 @@ COMBINING_MARKS = range(0x0300, 0x0370)
 # and this one is not registered; it just has to stop being Adobe's 'ADBO'.
 PROJECT_URL = "https://github.com/hn-11/shoyu-code-pro-jp"
 PROJECT_COPYRIGHT = f"Copyright 2026 hn-11 ({PROJECT_URL})"
-VENDOR_ID = "SUMI"
+VENDOR_ID = "GNGO"
 
 # OS/2 usWeightClass per output weight, the STAT table's wght axis values
 # and the Source Code Pro VF wght the Latin is instanced at (Source Code
@@ -125,8 +124,8 @@ WEIGHT_CLASS = {"Light": 300, "Regular": 400, "Medium": 500,
 
 
 # The Latin donor faces scripts/build_latin.py writes under LATIN_DIR:
-# (family name, PostScript family). The released Sumi Moji, exactly.
-LATIN_FAMILY = ("Sumi Moji", "SumiMoji")
+# (family name, PostScript family). The released Gengou Code, exactly.
+LATIN_FAMILY = ("Gengou Code", "GengouCode")
 
 
 def latin_face_path(latin_dir, weight, italic):
@@ -136,7 +135,7 @@ def latin_face_path(latin_dir, weight, italic):
 
 # {family suffix: widen the full-width advances to two cells}
 VARIANTS = {
-    "": False,      # 3:5 — Sumi Moji plus Japanese at 1000
+    "": False,      # 3:5 — Gengou Code plus Japanese at 1000
     "Term": True,   # 1:2 terminal grid (600:1200), widen_fullwidth
 }
 
@@ -153,7 +152,7 @@ VARIANTS = {
 # (Source Han Sans's own Light 49u, Heavy 120u and Source Code Pro's
 # ExtraLight 28u / Black 120u have no partner in the other family and are
 # not built.) Monaspace bottoms out at wght 200 (bar ~53u at our scale);
-# Light's surplus is eroded away in the static faces (VFSource.matched).
+# Light's surplus is eroded away in the static faces (vfsource.VFSource.matched).
 
 # the weights every face takes its width decisions from
 # (reference_steps): our Regular's donor for the advance, the heaviest
@@ -195,116 +194,46 @@ GROUP_NAMES = {
 }
 
 
-def _contour_bounds(contours):
-    """Per-contour (xMin, yMin, xMax, yMax) from recorded segments.
-
-    Curve control points are NOT treated as extremes — a cubic's real
-    bounds come from the segment solve, otherwise a '=' bar with rounded
-    ends measures thicker than it is.
-    """
-    out = []
-    for segs in contours:
-        xs, ys = [], []
-        for kind, raw_pts, start in segs:
-            pts = [p for p in raw_pts if p is not None]  # all-offcurve TT contour
-            if not pts or start is None:
-                continue
-            for axis, acc in ((0, xs), (1, ys)):
-                coords = [start[axis]] + [p[axis] for p in pts]
-                if kind == "lineTo":
-                    acc.extend((coords[0], coords[-1]))
-                elif kind == "curveTo":
-                    acc.extend(_cubic_extremes(coords))
-                else:               # qCurveTo
-                    acc.extend(_quad_extremes(coords))
-        if xs:
-            out.append((min(xs), min(ys), max(xs), max(ys)))
-    return out
-
-
-def _cubic_extremes(c):
-    """Extreme values of a cubic bezier on one axis (start + 2 controls +
-    end). CFF charstrings never emit longer chains."""
-    if len(c) != 4:
-        return list(c)
-    p0, p1, p2, p3 = c
-    vals = [p0, p3]
-    # derivative roots: 3(-p0+3p1-3p2+p3)t^2 + 6(p0-2p1+p2)t + 3(p1-p0) = 0
-    for t in _quad_roots(3 * (-p0 + 3 * p1 - 3 * p2 + p3),
-                         6 * (p0 - 2 * p1 + p2), 3 * (p1 - p0)):
-        if 0 < t < 1:
-            mt = 1 - t
-            vals.append(mt ** 3 * p0 + 3 * mt * mt * t * p1
-                        + 3 * mt * t * t * p2 + t ** 3 * p3)
-    return vals
-
-
-def _quad_extremes(c):
-    """Extremes of a TrueType quadratic run on one axis: start, then N
-    off-curve points and the final on-curve point. Consecutive off-curve
-    pairs imply an on-curve point at their midpoint — split there."""
-    if len(c) < 3:
-        return list(c)
-    start, offs, end = c[0], c[1:-1], c[-1]
-    vals = [start, end]
-    cur = start
-    for i, ctrl in enumerate(offs):
-        last = i == len(offs) - 1
-        seg_end = end if last else (ctrl + offs[i + 1]) / 2
-        den = cur - 2 * ctrl + seg_end
-        if den:
-            t = (cur - ctrl) / den
-            if 0 < t < 1:
-                mt = 1 - t
-                vals.append(mt * mt * cur + 2 * mt * t * ctrl
-                            + t * t * seg_end)
-        vals.append(seg_end)
-        cur = seg_end
-    return vals
-
-
-def _quad_roots(a, b, c):
-    if abs(a) < 1e-12:
-        return [] if abs(b) < 1e-12 else [-c / b]
-    d = b * b - 4 * a * c
-    if d < 0:
-        return []
-    r = math.sqrt(d)
-    return [(-b + r) / (2 * a), (-b - r) / (2 * a)]
-
-
 def _glyphset(source):
     """`source` as a glyph set: a TTFont's, or a glyph set handed over as
     is (TTFont.getGlyphSet(location=...) for a VF probed at a location
-    without instancing it — see VFSource._probe_bar)."""
+    without instancing it — see vfsource.VFSource._probe_bar)."""
     return source.getGlyphSet() if hasattr(source, "getGlyphSet") else source
 
 
-def _record_contours(font, glyph_name):
-    """[(kind, points, start_point), ...] per closed OR open contour.
-    `font` is a TTFont or a glyph set (_glyphset)."""
+def contour_boxes(font, glyph_name):
+    """(xMin, yMin, xMax, yMax) of each contour of `glyph_name`, open
+    or closed, from the curves themselves and not their control points
+    -- a '=' bar with rounded ends measures thicker than it is
+    otherwise. `font` is a TTFont or a glyph set (_glyphset). One
+    BoundsPen per contour, split at each moveTo; this replaced a
+    105-line extremum solver that agreed with it on every glyph of
+    every donor (round 10)."""
     pen = RecordingPen()
     _glyphset(font)[glyph_name].draw(pen)
-    contours, cur, cursor, start = [], [], None, None
+    contours, cur = [], []
     for op, args in pen.value:
-        if op == "moveTo":
-            if cur:
-                contours.append(cur)
+        if op == "moveTo" and cur:
+            contours.append(cur)
             cur = []
-            cursor = start = args[0]
-        elif op in ("lineTo", "curveTo", "qCurveTo"):
-            cur.append((op, list(args), cursor))
-            if args[-1] is not None:   # None = all-offcurve TrueType contour
-                cursor = args[-1]
-        elif op in ("closePath", "endPath"):
-            if cursor is not None and start is not None and cursor != start:
-                cur.append(("lineTo", [start], cursor))  # implied closing line
-            if cur:
-                contours.append(cur)
-            cur, cursor, start = [], None, None
-    if cur:  # unterminated (open) contour: keep it, don't drop it
+        cur.append((op, args))
+        # a TrueType contour with no on-curve point at all is drawn as
+        # a bare qCurveTo ending in None, with no moveTo to split on
+        # (611 of the Nerd Fonts symbols); closing on the end of the
+        # path is what separates those
+        if op in ("closePath", "endPath"):
+            contours.append(cur)
+            cur = []
+    if cur:
         contours.append(cur)
-    return contours
+    out = []
+    for ops in contours:
+        box = BoundsPen(None)
+        for op, args in ops:
+            getattr(box, op)(*args)
+        if box.bounds is not None:
+            out.append(box.bounds)
+    return out
 
 
 def bar_thickness(font, glyph_name):
@@ -314,182 +243,8 @@ def bar_thickness(font, glyph_name):
     same thickness, so min-height is robust against contour order (and
     against a font whose '=' carries extra bits). `font` is a TTFont or a
     glyph set."""
-    heights = [b[3] - b[1] for b in _contour_bounds(
-        _record_contours(font, glyph_name))]
+    heights = [b[3] - b[1] for b in contour_boxes(font, glyph_name)]
     return min(heights) if heights else 0
-
-
-@contextlib.contextmanager
-def unrounded_cff2_instancing():
-    """fontTools' instancer rounds every instanced CFF2 charstring operand
-    to an integer. Charstring operands are RELATIVE (rmoveto/rlineto/
-    rrcurveto deltas), so those roundings accumulate along a path: an
-    instance of 'A' at a fractional wght lands 3u left of where HarfBuzz
-    renders the VF there, 'm' up to 10u off, and two instances drift
-    differently. With rounding off the outlines keep the VF's exact blend
-    (fixed 16.16 operands, a CFF2 charstring's native precision): the
-    variable Sumi Moji's masters are built that way and interpolate SCP
-    exactly (build_latin_vf.py), and the static faces round the blend
-    afterwards, point by point (build_latin.round_outlines)."""
-    orig = instancer.instantiateCFF2
-    instancer.instantiateCFF2 = functools.partial(orig, round=noRound)
-    try:
-        yield
-    finally:
-        instancer.instantiateCFF2 = orig
-
-
-class VFSource:
-    """Variable-font instances matched to a target '=' bar thickness.
-
-    Used for both Monaspace (wght/wdth/slnt) and Source Code Pro (wght only)
-    — the axes dict template decides which. Matching is a binary search on
-    wght so the operator/Latin stroke weight equals the reference face's.
-    """
-
-    def __init__(self, vf_path, scale, axes):
-        self.vf_path = vf_path
-        self.scale = scale        # em scale applied when the glyphs are used
-        self.axes = axes          # template; wght filled by the search
-        self._cache = {}
-        self._vf = None
-        self._ranges = None
-
-    def _source(self):
-        """The VF, loaded once: the search probes it (getGlyphSet at a
-        location) and reads its axis ranges; it is never instanced in
-        place."""
-        if self._vf is None:
-            vf = TTFont(self.vf_path)
-            self._vf = vf
-            self._ranges = {a.axisTag: (a.minValue, a.maxValue)
-                            for a in vf["fvar"].axes}
-            self._equals = vf.getBestCmap()[ord("=")]
-        return self._vf
-
-    def axis_range(self, tag, default):
-        self._source()
-        return self._ranges.get(tag, default)
-
-    def _instance(self, axes):
-        """A static instance at `axes`: a fresh load of the file (faster
-        than deep-copying a decompiled VF) instanced in place."""
-        inst = TTFont(self.vf_path)
-        instantiateVariableFont(inst, axes, inplace=True)
-        return inst
-
-    def _probe_bar(self, axes):
-        """The '=' bar at `axes`, in the donor's units, read off the VF's
-        own glyph set at that location (fontTools blends the outline on
-        the fly): no instancing, so the nine-step search costs
-        milliseconds instead of nine instancings. Unrounded — the
-        instancer rounds its outlines, so the instance built at the
-        converged wght can measure up to ~1u off this probe."""
-        return bar_thickness(self._source().getGlyphSet(location=axes), self._equals)
-
-    def _axes_for(self, slant):
-        """The axis template with `slant` on the slnt axis, clamped to
-        what the font offers (Monaspace's floor is -11; SCP Italic is
-        -12 — mona_transform() shears the remainder in)."""
-        axes = dict(self.axes)
-        if slant is not None and "slnt" in axes:
-            smin, smax = self.axis_range("slnt", (-11.0, 0.0))
-            clamped = max(smin, min(smax, slant))
-            if abs(clamped - slant) > 1e-6:
-                print(f"  slnt {slant:.2f} clamped to {clamped:.2f} "
-                      f"(axis {smin}..{smax})")
-            axes["slnt"] = clamped
-        return axes
-
-    def matched_wght(self, target_units, slant=None):
-        """The wght matched() converges on for `target_units`, as a plain
-        number (build_latin_vf.py places fvar instances and masters by it,
-        so they sit exactly where the static faces are) — the search
-        alone, no instance built. Nine halvings of the axis: ~1.4 wght on
-        SCP's 700-wide axis, well under 1u of bar."""
-        return self._converge(target_units / self.scale, self._axes_for(slant))
-
-    def _converge(self, pre_scale_target, axes):
-        """Nine halvings of the wght axis on the '=' bar (in the donor's
-        units), probing the VF's glyph set at each step."""
-        lo, hi = self.axis_range("wght", (200.0, 800.0))
-        lo, hi = float(lo), float(hi)
-        for _ in range(9):
-            mid = (lo + hi) / 2
-            if self._probe_bar(dict(axes, wght=mid)) < pre_scale_target:
-                lo = mid
-            else:
-                hi = mid
-        return (lo + hi) / 2
-
-    def floor_bar(self, slant=None):
-        """The '=' bar, in the consumer's units, at the wght axis floor:
-        the thinnest this donor can go without erosion."""
-        lo, _ = self.axis_range("wght", (200.0, 800.0))
-        return self._probe_bar(dict(self._axes_for(slant), wght=float(lo))) * self.scale
-
-    def at(self, wght, slant=None):
-        """The instance at an exact `wght` (no bar search): what the Latin
-        faces are — Source Code Pro's own named instances. Cached like
-        matched()'s; `residual_slant` as there."""
-        axes = self._axes_for(slant)
-        key = ("at", float(wght), axes.get("slnt"))
-        if key not in self._cache:
-            inst = self._instance(dict(axes, wght=float(wght)))
-            inst.wght = float(wght)
-            inst.residual_slant = (slant - axes["slnt"]
-                                   if slant is not None and "slnt" in axes else 0.0)
-            self._cache[key] = inst
-        return self._cache[key]
-
-    def matched(self, target_units, slant=None, erode=True):
-        key = (round(target_units), slant if slant is None else round(slant), erode)
-        if key in self._cache:
-            return self._cache[key]
-        pre_scale_target = target_units / self.scale
-        axes = self._axes_for(slant)
-        wght = self._converge(pre_scale_target, axes)
-        inst = self._instance(dict(axes, wght=wght))
-        inst.wght = wght
-        # slant the axis could not deliver (SCP Italic is -12, Monaspace's
-        # slnt floor is -11); mona_transform() shears the remainder in
-        inst.residual_slant = (slant - axes["slnt"]
-                               if slant is not None and "slnt" in axes else 0.0)
-        t = bar_thickness(inst, inst.getBestCmap()[ord("=")])
-        # the axis floor may stop short of a thin target (Monaspace's
-        # wght 200 is 53u at our scale; SCP Light measures 37u). Record
-        # the surplus per side, in this font's units, and mona_glyphset()
-        # erodes the outlines by it — see erode_path(). A VF master can't
-        # take that path (erosion is a pathops boolean op on a fixed
-        # outline, not an interpolatable deformation — see docs/
-        # sumi-moji-plan.md 段階2): erode=False clamps at the floor
-        # (the binary search already can't go past the axis bounds) and
-        # only reports the shortfall, leaving `erode` unset so
-        # mona_glyphset() hands back the outline as instanced.
-        shortfall = t - pre_scale_target
-        if erode:
-            inst.erode = max(0.0, shortfall / 2)
-            if abs(shortfall) > 1.0 and not inst.erode:
-                print(f"  WARNING: wght search off by {shortfall:+.1f}u "
-                      f"(target {pre_scale_target:.1f}, wght={wght:.1f}) in "
-                      f"{Path(self.vf_path).name}")
-            elif inst.erode > 0.5:
-                print(f"  wght floor {wght:.0f} leaves {2 * inst.erode:.1f}u surplus "
-                      f"(donor units) in {Path(self.vf_path).name}; eroding "
-                      f"{inst.erode:.1f}u/side")
-        elif shortfall > 1.0:
-            print(f"  wght floor {wght:.0f} leaves {shortfall:.1f}u short of "
-                  f"target {pre_scale_target:.1f} (donor units) in "
-                  f"{Path(self.vf_path).name}; no erosion (VF master), "
-                  f"clamped at the floor")
-        self._cache[key] = inst   # only the converged instance is kept
-        return inst
-
-
-def glyph_vcenter(font, gname, scale=1.0):
-    pen = BoundsPen(font.getGlyphSet())
-    font.getGlyphSet()[gname].draw(pen)
-    return (pen.bounds[1] + pen.bounds[3]) / 2 * scale
 
 
 def draw_clean(draws, pen, simplify=True):
@@ -518,47 +273,6 @@ def draw_clean(draws, pen, simplify=True):
     path.draw(pen)
 
 
-def erode_path(path, d):
-    """Shrink a filled outline by `d` on every side: subtract a stroke of
-    width 2d run along the outline itself. Straight bars, arrowheads and
-    slashes keep their shape; only dots lose proportionally more."""
-    inner = pathops.Path(path)
-    inner.simplify()
-    band = pathops.Path(inner)
-    band.stroke(2 * d, pathops.LineCap.BUTT_CAP, pathops.LineJoin.MITER_JOIN, 4)
-    return pathops.op(inner, band, pathops.PathOp.DIFFERENCE)
-
-
-class _ErodedGlyph:
-    def __init__(self, gs, gname, d):
-        self._gs, self._gname, self._d = gs, gname, d
-
-    def draw(self, pen):
-        path = pathops.Path()
-        self._gs[self._gname].draw(path.getPen())
-        erode_path(path, self._d).draw(pen)
-
-
-class _ErodedGlyphSet:
-    """Glyph set view that hands out eroded outlines (see erode_path)."""
-    def __init__(self, gs, d):
-        self._gs, self._d = gs, d
-
-    def __getitem__(self, gname):
-        return _ErodedGlyph(self._gs, gname, self._d)
-
-    def __contains__(self, gname):
-        return gname in self._gs
-
-
-def mona_glyphset(mona):
-    """The glyph set every Monaspace import draws from: eroded when the
-    weight search hit the axis floor (matched() sets `erode`)."""
-    gs = mona.getGlyphSet()
-    d = getattr(mona, "erode", 0.0)
-    return _ErodedGlyphSet(gs, d) if d > 0.5 else gs
-
-
 def pen_width(private, advance):
     """CFF charstring width operand: omitted when equal to defaultWidthX,
     otherwise encoded relative to nominalWidthX."""
@@ -567,24 +281,59 @@ def pen_width(private, advance):
     return None if advance == default else advance - nominal
 
 
+@dataclasses.dataclass
+class BuildState:
+    """What the passes of one build tell each other about the glyphs it
+    made, kept on the font as `font.state` (state_of).
+
+    `built` is every glyph this build made, and nothing ever leaves it:
+    their names come from Source Han Sans's own CID space, so a pass
+    that looks a glyph up by name in a reference font (fit_to_grid)
+    must know not to. `appended` is the subset add_latin_fd re-homes
+    into the Latin FontDict, which an appender can opt out of
+    (narrow_halfwidth does); once add_latin_fd has run, `latin_fd` is
+    that FontDict's index and nothing may be appended after it.
+    `redrawn` is every glyph whose charstring WE generated -- a
+    T2CharStringPen's output carries no hints, so autohint_face
+    re-hints these after the face is saved and Source Han Sans's own
+    untouched glyphs keep theirs. `pinned_cell` is what
+    narrow_halfwidth and the Latin graft put on one cell for
+    fit_to_grid to leave alone. `vorigin` caches vmtx_origin; the CID
+    allocator keeps its cursor in `used_cids` / `next_cid`."""
+    built: set = dataclasses.field(default_factory=set)
+    appended: set = dataclasses.field(default_factory=set)
+    redrawn: set = dataclasses.field(default_factory=set)
+    pinned_cell: set = dataclasses.field(default_factory=set)
+    vorigin: dict = dataclasses.field(default_factory=dict)
+    used_cids: set | None = None
+    next_cid: int = CID_ALLOC_START
+    latin_fd: int | None = None
+
+
+def state_of(font):
+    """The BuildState of `font`, made on first use."""
+    state = getattr(font, "state", None)
+    if state is None:
+        state = font.state = BuildState()
+    return state
+
+
 def alloc_glyph_name(font):
     """Allocate an unused CID. Subset OTFs have sparse CIDs (SHS JP tops
     out at 65497 with only ~18k glyphs), so len(order) collides with real
     names and max+1 overflows 65534 — walk the gaps instead, starting
     above the Adobe-Japan1-7 defined range (see CID_ALLOC_START)."""
-    used = getattr(font, "_used_cids", None)
-    if used is None:
-        used = {int(g[3:]) for g in font.getGlyphOrder()
-                if g.startswith("cid") and g[3:].isdigit()}
-        font._used_cids = used
-        font._next_cid = CID_ALLOC_START
-    n = font._next_cid
-    while n in used:
+    state = state_of(font)
+    if state.used_cids is None:
+        state.used_cids = {int(g[3:]) for g in font.getGlyphOrder()
+                           if g.startswith("cid") and g[3:].isdigit()}
+    n = state.next_cid
+    while n in state.used_cids:
         n += 1
     if n > CID_MAX:
         raise RuntimeError("CID space exhausted")
-    used.add(n)
-    font._next_cid = n + 1
+    state.used_cids.add(n)
+    state.next_cid = n + 1
     return f"cid{n:05d}"
 
 
@@ -609,23 +358,22 @@ def vmtx_origin(font, glyph):
     """The vertical origin of a glyph already in `font` — its own yMax
     plus its top side bearing, which is what CFF's VORG states directly.
     Cached, because it needs the glyph set."""
-    cache = getattr(font, "_vorigin", None)
-    if cache is None:
-        cache = font._vorigin = {}
+    cache = state_of(font).vorigin
     if glyph not in cache:
         box = _bounds(font.getGlyphSet(), glyph)
         cache[glyph] = font["vmtx"].metrics[glyph][1] + (box[3] if box else 0)
     return cache[glyph]
 
 
-def vmtx_donor(font, fullwidth=True):
-    """Glyph whose vertical metrics the appended glyphs inherit. Resolve
-    once per call site — getBestCmap() per glyph was the hot spot."""
+def vmtx_donor(font):
+    """Glyph whose vertical metrics the appended glyphs inherit: 日, or
+    the first of a few others a face is sure to have (they all carry
+    Source Han Sans's one em and 880 origin). Resolve once per call
+    site — getBestCmap() per glyph was the hot spot."""
     if "vmtx" not in font:
         return None
     cmap = font.getBestCmap()
-    order = (0x65E5,) if fullwidth else (0xFF61, 0xFF9F, 0x0041, 0x65E5)
-    for cp in order:
+    for cp in (0x65E5, 0xFF61, 0xFF9F, 0x0041):
         g = cmap.get(cp)
         if g is not None and g in font["vmtx"].metrics:
             return g
@@ -637,13 +385,19 @@ def note_redrawn(font, names):
     carries no hints, so every glyph that passes through it — grafted,
     fitted, shifted, widened — is re-hinted by autohint_face() after the
     face is saved. Source Han Sans's own untouched glyphs keep theirs."""
-    redrawn = getattr(font, "_redrawn", None)
-    if redrawn is None:
-        redrawn = font._redrawn = set()
-    redrawn.update(names)
+    state_of(font).redrawn.update(names)
 
 
 def append_glyph(font, td, name, cs, fd_index, width, lsb=None, vdonor=None):
+    """Append one built glyph. Returns its outline box (None if blank),
+    which it measures anyway for the side bearing — update_bbox_after's
+    caller wants it and should not pay for it twice.
+
+    A glyph appended at width 0 is a combining mark, and takes 0 for its
+    vertical advance as well as its horizontal one. Copying the donor's
+    1000 gave every grafted accent a full cell of vertical advance it
+    must not have; Source Han Sans's own thirteen marks keep the 1000 it
+    ships them with, which is its vertical design, not ours to rewrite."""
     order = font.getGlyphOrder()
     order.append(name)
     if td.charset is not order:  # same list object for CFF fonts
@@ -669,28 +423,23 @@ def append_glyph(font, td, name, cs, fd_index, width, lsb=None, vdonor=None):
         # layout does, and reads no VORG at all. The CFF VORG in the same
         # file said 880 for all of them, so the two tables disagreed
         font["vmtx"].metrics[name] = (
-            font["vmtx"].metrics[vdonor][0],
+            0 if width == 0 else font["vmtx"].metrics[vdonor][0],
             otRound(vmtx_origin(font, vdonor) - (box[3] if box else 0)))
     note_redrawn(font, [name])
-    # two sets, because they answer two questions. _built is every glyph
-    # this build made, and nothing ever leaves it: their names come from
-    # Source Han Sans's own CID space, so a pass that looks a glyph up by
-    # name in a reference font (fit_to_grid) must know not to. _appended
-    # is the subset add_latin_fd re-homes into the Latin FontDict, which
-    # an appender can opt out of (narrow_halfwidth does).
-    for attr in ("_built", "_appended"):
-        have = getattr(font, attr, None)
-        if have is None:
-            have = set()
-            setattr(font, attr, have)
-        have.add(name)
+    state = state_of(font)
+    if state.latin_fd is not None:
+        raise RuntimeError(f"{name} appended after add_latin_fd: it would keep "
+                           "the FontDict of whatever it was drawn against")
+    # two sets, because they answer two questions (BuildState says which)
+    state.built.add(name)
+    state.appended.add(name)
     font.setGlyphOrder(order)
     if hasattr(font, "_reverseGlyphOrderDict"):
         del font._reverseGlyphOrderDict
     font["maxp"].numGlyphs = len(order)
+    return box
 
-
-def append_context(font, fullwidth=False):
+def append_context(font):
     """What appending a glyph next to 'A' needs: (top dict, cmap, FD
     index, that FD's Private dict, vmtx donor). The FD (and its
     nominalWidthX, which pen_width() offsets against) is the one 'A'
@@ -701,7 +450,7 @@ def append_context(font, fullwidth=False):
 
     A plain CFF has no FDSelect at all: the index is None and the Private
     dict the top dict's own. Every face this repo builds is CID-keyed,
-    Sumi Moji included; the branch is for a caller handed something else
+    Gengou Code included; the branch is for a caller handed something else
     (the unit tests' fixtures). A face with no vmtx has no donor
     either."""
     cff = font["CFF "].cff
@@ -709,7 +458,22 @@ def append_context(font, fullwidth=False):
     cmap = font.getBestCmap()
     a = cmap[ord("A")]
     return (td, cmap, glyph_fd(font, td, a), glyph_private(font, td, a),
-            vmtx_donor(font, fullwidth))
+            vmtx_donor(font))
+
+
+def graft_outline(font, ctx, draws, width, simplify=True):
+    """Draw `draws` (see draw_clean) into a new glyph of `width` next to
+    'A' and return its name: the one way every import puts a donor's
+    outline into this font, so the FontDict, its nominalWidthX and the
+    vertical origin come from one place (append_context) rather than
+    from each site's own copy of the sequence."""
+    td, _cmap, fd_index, private, vdon = ctx
+    pen = T2CharStringPen(pen_width(private, width), None)
+    draw_clean(draws, pen, simplify=simplify)
+    name = alloc_glyph_name(font)
+    append_glyph(font, td, name, pen.getCharString(private=private),
+                 fd_index, width, None, vdon)
+    return name
 
 
 def glyph_fd(font, td, name):
@@ -733,7 +497,9 @@ def set_cmap(font, mapping, add_new=False):
     BMP-only format 0/4/6 subtable cannot take a supplementary plane
     codepoint)."""
     for table in font["cmap"].tables:
-        if not table.isUnicode():
+        # a format 14 subtable is Unicode too, but its map is the
+        # variation-sequence dict; the `.cmap` it carries is a dummy
+        if not table.isUnicode() or table.format == 14:
             continue
         bmp_only = table.format in (0, 4, 6)
         for cp, name in mapping.items():
@@ -743,7 +509,7 @@ def set_cmap(font, mapping, add_new=False):
 
 def graft_halfwidth(base, latin):
     """Give `base` (Source Han Sans JP) its half-width layer: every
-    codepoint the Latin donor (Sumi Moji, dist/latin) has gets the
+    codepoint the Latin donor (Gengou Code, dist/latin) has gets the
     donor's one-cell glyph, at the donor's own size — Latin, Greek,
     Cyrillic, box drawing, the ligature-paired arrows and operators,
     everything an English terminal font sets in one cell. The glyph
@@ -763,7 +529,8 @@ def graft_halfwidth(base, latin):
     replaced}, {donor glyph: our glyph} for the variant wiring, the set
     of grafted 0-advance mark glyphs)."""
     scp_cm, scp_gs = latin.getBestCmap(), latin.getGlyphSet()
-    td, bcm, fd_index, private, vdon = append_context(base)
+    ctx = append_context(base)
+    td, bcm, fd_index, private, vdon = ctx
     new_map = {}
     default_map = {}  # donor glyph name -> our glyph name (variant wiring)
     made = {}         # (donor glyph, is_mark) -> our glyph (dedup aliases)
@@ -779,14 +546,11 @@ def graft_halfwidth(base, latin):
         key = (src, is_mark)
         if key not in made:
             # the donor's own advance, not an assumed cell: every glyph
-            # Sumi Moji cmaps is one cell today, and a two-cell one it
+            # Gengou Code cmaps is one cell today, and a two-cell one it
             # ever adds must be grafted two cells wide, not overprinted
             width = 0 if is_mark else latin["hmtx"][src][0]
-            pen = T2CharStringPen(pen_width(private, width), scp_gs)
-            draw_clean([(scp_gs, src, (1, 0, 0, 1, -CELL if is_mark else 0, 0))], pen)
-            name = alloc_glyph_name(base)
-            append_glyph(base, td, name, pen.getCharString(private=private),
-                         fd_index, width, None, vdon)
+            name = graft_outline(base, ctx, [(scp_gs, src, (1, 0, 0, 1, -CELL if is_mark else 0, 0))],
+                                 width)
             made[key] = name
             if is_mark:
                 marks.add(name)
@@ -811,7 +575,7 @@ def graft_halfwidth(base, latin):
 def _remap_scp_tag(tag):
     """SCP feature tags, shifted around our own: ss01-ss10 -> ss11-ss20
     because ss01-ss08 are the ligature groups; ss11 and up are already
-    shifted (Sumi Moji carries them that way); cv/zero/salt keep their
+    shifted (Gengou Code carries them that way); cv/zero/salt keep their
     names. Everything else (case, frac, sups...) is not a glyph variant
     we mount."""
     if tag in ("zero", "salt") or tag.startswith("cv"):
@@ -950,14 +714,15 @@ def import_scp_variants(base, scp, default_map, marks):
     UI names are only meaningful (and only defined by OpenType) for ssNN /
     cvNN — 'zero' and 'salt' come back with no entry in the names dict."""
     gsub = scp["GSUB"].table
-    td, _, fd_index, private, vdon = append_context(base)
+    ctx = append_context(base)
+    td, _, fd_index, private, vdon = ctx
     scp_gs = scp.getGlyphSet()
 
     imported = {}   # (scp variant glyph, is_mark) -> our glyph name
     tag_maps = {}
     tag_names = {}
     for fr in gsub.FeatureList.FeatureRecord:
-        if fr.FeatureTag in GROUP_NAMES:   # Sumi Moji's own ss01-ss08 / cv99
+        if fr.FeatureTag in GROUP_NAMES:   # Gengou Code's own ss01-ss08 / cv99
             continue
         tag = _remap_scp_tag(fr.FeatureTag)
         if tag is None:
@@ -987,14 +752,7 @@ def import_scp_variants(base, scp, default_map, marks):
                     # glyph it replaces mid-run
                     width, dx = ((0, -CELL) if is_mark
                                  else (scp["hmtx"][src][0], 0))
-                    pen = T2CharStringPen(pen_width(private, width), scp_gs)
-                    draw_clean(
-                        [(scp_gs, dst, (1, 0, 0, 1, dx, 0))], pen)
-                    name = alloc_glyph_name(base)
-                    append_glyph(
-                        base, td, name,
-                        pen.getCharString(private=private),
-                        fd_index, width, None, vdon)
+                    name = graft_outline(base, ctx, [(scp_gs, dst, (1, 0, 0, 1, dx, 0))], width)
                     imported[dst, is_mark] = name
                     if is_mark:
                         marks.add(name)
@@ -1085,6 +843,12 @@ def _ccmp_remap(lookup, gmap, shift, gid):
             st.ligatures = ligs
             alive = bool(ligs)
         elif kind == 6:
+            # coverage-based contexts only: a class- or glyph-based one
+            # (Format 1, 2) has no coverage lists to remap and would
+            # fall out below as dead, silently
+            if getattr(st, "Format", 3) != 3:
+                raise ValueError(f"ccmp: chain context Format {st.Format}; "
+                                 f"only Format 3 is carried")
             # the glyph counts are the coverage lists' own lengths, so
             # only a coverage that empties changes the subtable's shape
             # — and an empty one would match everywhere
@@ -1121,7 +885,8 @@ def graft_scp_outputs(base, scp, default_map, marks, order):
     pass can run again once another import has unlocked more sources.
     Returns the number grafted."""
     gsub = scp["GSUB"].table
-    td, _, fd_index, private, vdon = append_context(base)
+    ctx = append_context(base)
+    td, _, fd_index, private, vdon = ctx
     scp_gs = scp.getGlyphSet()
     grafted = 0
 
@@ -1130,11 +895,7 @@ def graft_scp_outputs(base, scp, default_map, marks, order):
         if src in default_map:
             return
         width, dx = (0, -CELL) if is_mark else (scp["hmtx"][src][0], 0)
-        pen = T2CharStringPen(pen_width(private, width), scp_gs)
-        draw_clean([(scp_gs, src, (1, 0, 0, 1, dx, 0))], pen)
-        name = alloc_glyph_name(base)
-        append_glyph(base, td, name, pen.getCharString(private=private),
-                     fd_index, width, None, vdon)
+        name = graft_outline(base, ctx, [(scp_gs, src, (1, 0, 0, 1, dx, 0))], width)
         default_map[src] = name
         grafted += 1
         if is_mark:
@@ -1223,26 +984,13 @@ def import_scp_locl(base, scp, default_map, where_ours):
     if not order:
         return 0
     gmap = dict(default_map)
-    live = list(order)
-    while True:
-        seen = {old: k for k, old in enumerate(live)}
-        kept = [old for old in live
-                if _ccmp_remap(copy.deepcopy(gsub.LookupList.Lookup[old]),
-                               gmap, seen, base.getGlyphID)]
-        if kept == live:
-            break
-        live = kept
-    if not live:
-        return 0
     # in front, like ccmp: a locl form is what the rest of the features
     # then work on, and SCP's own ccmp composes from these outputs
-    shift = {old: k for k, old in enumerate(live)}
-    copied = []
-    for old in live:
-        lookup = copy.deepcopy(gsub.LookupList.Lookup[old])
-        _ccmp_remap(lookup, gmap, shift, base.getGlyphID)
-        copied.append(lookup)
-    _insert_lookups_first(ours, copied)
+    shift = copy_lookups(gsub, ours, order,
+                         lambda lookup, sh: _ccmp_remap(lookup, gmap, sh, base.getGlyphID),
+                         front=True)
+    if not shift:
+        return 0
     # every pair the donor names, not only those the base already has
     # a LangSys for: _add_feature_where makes the missing ones
     _add_feature_where(ours, "locl",
@@ -1251,7 +999,7 @@ def import_scp_locl(base, scp, default_map, where_ours):
                         for pair, theirs in where.items()
                         if pair[0] in {s for s, _ in where_ours}})
     sort_feature_list(ours)
-    return len(live)
+    return len(shift)
 
 
 def _new_langsys(record, lang):
@@ -1289,7 +1037,15 @@ def _add_feature_where(table, tag, where):
     distinct lookup list is added and swapped into the LangSys that
     wants it. Source Han Sans shares one 'locl' record between a
     script's default and its languages, so merging into it put the
-    Serbian б in every Cyrillic run."""
+    Serbian б in every Cyrillic run.
+
+    A language the base has a LangSys for and `where` does not name
+    gets the script's default list, as a shaper would give a language
+    the donor has no record of: a LangSys is complete, nothing
+    cascades to it, and Source Han Sans keeps a Japanese LangSys under
+    every script it has -- so a shaper told the text is Japanese, as an
+    editor in a ja locale does, read grek/JAN and set the Latin acute
+    on β where every other language got the tonos."""
     records = table.FeatureList.FeatureRecord
     existing = {i for i, fr in enumerate(records) if fr.FeatureTag == tag}
     made = {}
@@ -1301,7 +1057,8 @@ def _add_feature_where(table, tag, where):
         for lang, langsys in ([(None, record.Script.DefaultLangSys)]
                               + [(r.LangSysTag, r.LangSys)
                                  for r in record.Script.LangSysRecord]):
-            wanted = where.get((record.ScriptTag, lang))
+            wanted = where.get((record.ScriptTag, lang),
+                               where.get((record.ScriptTag, None)))
             if langsys is None or not wanted:
                 continue
             mine = sorted(existing.intersection(langsys.FeatureIndex))
@@ -1324,6 +1081,36 @@ def _add_feature_where(table, tag, where):
                 + [made[key]])
             langsys.FeatureCount = len(langsys.FeatureIndex)
     table.FeatureList.FeatureCount = len(records)
+    # the base's own records the swap left no LangSys pointing at
+    prune_orphan_features(table)
+
+
+def prune_orphan_features(table):
+    """Drop every FeatureRecord no LangSys names (by index or as its
+    required feature) and remap the rest. Returns the count dropped.
+
+    _add_feature_where swaps a new record into a LangSys without
+    editing the old one, which is then unreachable; and
+    prune_orphan_lookups roots reachability at the LangSys, so a lookup
+    only an orphan record names goes with it."""
+    records = table.FeatureList.FeatureRecord
+    used = set()
+    for ls in _langsys_list(table):
+        used.update(ls.FeatureIndex)
+        req = getattr(ls, "ReqFeatureIndex", NO_REQUIRED_FEATURE)
+        if req != NO_REQUIRED_FEATURE:
+            used.add(req)
+    keep = [i for i in range(len(records)) if i in used]
+    if len(keep) == len(records):
+        return 0
+    remap = {old: new for new, old in enumerate(keep)}
+    table.FeatureList.FeatureRecord = [records[i] for i in keep]
+    table.FeatureList.FeatureCount = len(keep)
+    for ls in _langsys_list(table):
+        ls.FeatureIndex = sorted(remap[i] for i in ls.FeatureIndex if i in remap)
+        ls.FeatureCount = len(ls.FeatureIndex)
+        remap_required(ls, remap)
+    return len(records) - len(keep)
 
 
 def scripts_with_langsys(table):
@@ -1354,26 +1141,49 @@ def graft_scp_ccmp(base, scp, default_map, marks):
     return graft_scp_outputs(base, scp, default_map, marks, order)
 
 
-def _renumber_lookups(obj, by, seen=None):
-    """Add `by` to every nested lookup index under `obj`: a contextual
-    lookup names the lookup it calls by its index in the LookupList, in
-    a SubstLookupRecord that can sit under a rule set, a class set or
-    the subtable itself."""
-    if seen is None:
-        seen = set()
-    if id(obj) in seen:
-        return
-    seen.add(id(obj))
-    if isinstance(obj, (list, tuple)):
-        for item in obj:
-            _renumber_lookups(item, by, seen)
-        return
-    for attr, value in vars(obj).items() if hasattr(obj, "__dict__") else ():
-        if attr in ("SubstLookupRecord", "PosLookupRecord"):
-            for rec in value or ():
-                rec.LookupListIndex += by
-        elif isinstance(value, (list, tuple)) or hasattr(value, "__dict__"):
-            _renumber_lookups(value, by, seen)
+def copy_lookups(donor, ours, indices, remap, front, warn=None):
+    """Copy the donor table's lookups `indices` into `ours`, at the front
+    of its LookupList (`front`) or the end. Returns {donor index: ours}.
+
+    `remap(lookup, shift)` rewrites one deep-copied lookup in place --
+    its glyph names to ours, its nested lookup indices through `shift`
+    -- and says whether anything of it is left. Which lookups survive
+    is settled first: a rule can name a glyph this face does not have
+    (the italic donor has no Greek), and a chain context whose only
+    callee went with it is dead too, so the live set has to settle
+    before the indices are handed out. `warn` names the feature in a
+    line per lookup dropped, for an import that expects none.
+
+    The one shape the three importers (locl, ccmp, the marks) had each
+    spelled out for themselves."""
+    live = list(indices)
+    while True:
+        seen = {old: k for k, old in enumerate(live)}
+        kept = [old for old in live
+                if remap(copy.deepcopy(donor.LookupList.Lookup[old]), seen)]
+        if kept == live:
+            break
+        if warn:
+            for old in live:
+                if old not in kept:
+                    print(f"  warning: {warn} lookup {old} has no rule this "
+                          f"face can use, dropped")
+        live = kept
+    if not live:
+        return {}
+    first = 0 if front else len(ours.LookupList.Lookup)
+    shift = {old: first + k for k, old in enumerate(live)}
+    copied = []
+    for old in live:
+        lookup = copy.deepcopy(donor.LookupList.Lookup[old])
+        remap(lookup, shift)
+        copied.append(lookup)
+    if front:
+        _insert_lookups_first(ours, copied)
+    else:
+        ours.LookupList.Lookup.extend(copied)
+        ours.LookupList.LookupCount = len(ours.LookupList.Lookup)
+    return shift
 
 
 def _insert_lookups_first(table, lookups):
@@ -1386,8 +1196,11 @@ def _insert_lookups_first(table, lookups):
     by = len(lookups)
     if not by:
         return
+    if getattr(table, "FeatureVariations", None) is not None:
+        raise ValueError("FeatureVariations name lookups this does not renumber")
     for lookup in table.LookupList.Lookup:
-        _renumber_lookups(lookup, by)
+        for rec in _lookup_records(lookup):
+            rec.LookupListIndex += by
     for fr in table.FeatureList.FeatureRecord:
         fr.Feature.LookupListIndex = [i + by for i in fr.Feature.LookupListIndex]
     table.LookupList.Lookup[:0] = list(lookups)
@@ -1431,39 +1244,17 @@ def import_scp_ccmp(base, scp, default_map, marks):
     # import_scp_variants made that glyph
     grafted = graft_scp_ccmp(base, scp, default_map, marks)
     gmap = dict(default_map)
-
-    # which lookups survive the copy, before they are numbered: a rule
-    # can name a glyph this donor does not have (the italic donor has no
-    # Greek), and a chain context whose only callee went with it is
-    # dead too, so the set has to settle before the indices are handed
-    # out. Nothing is expected to drop today, and a drop says so
-    live = list(order)
-    while True:
-        seen = {old: k for k, old in enumerate(live)}
-        kept = [old for old in live
-                if _ccmp_remap(copy.deepcopy(gsub.LookupList.Lookup[old]),
-                               gmap, seen, base.getGlyphID)]
-        if kept == live:
-            break
-        for old in live:
-            if old not in kept:
-                print(f"  warning: ccmp lookup {old} has no rule this face "
-                      f"can use, dropped")
-        live = kept
     # at the FRONT of the list, where ccmp belongs: a shaper runs a
     # stage's lookups in LookupList order, so appended ones ran after
     # the variant features and the ligatures, and cv04's serifed i met
     # a combining mark with its dot still on — the very defect the
-    # import exists to fix, on the variant path
-    shift = {old: k for k, old in enumerate(live)}
-    copied = []
-    for old in live:
-        lookup = copy.deepcopy(gsub.LookupList.Lookup[old])
-        _ccmp_remap(lookup, gmap, shift, base.getGlyphID)
-        copied.append(lookup)
-    _insert_lookups_first(ours, copied)
+    # import exists to fix, on the variant path. Nothing is expected to
+    # drop today, and a drop says so
+    shift = copy_lookups(gsub, ours, order,
+                         lambda lookup, sh: _ccmp_remap(lookup, gmap, sh, base.getGlyphID),
+                         front=True, warn="ccmp")
     # the feature names what the donor's feature named, not the closure
-    listed = sorted(shift[old] for old in live if old in own)
+    listed = sorted(shift[old] for old in shift if old in own)
     for fr in records:
         fr.Feature.LookupListIndex.extend(listed)
         fr.Feature.LookupCount = len(fr.Feature.LookupListIndex)
@@ -1534,7 +1325,11 @@ def _remap_single_pos(sub, gmap, gid, marks):
         for attr in ("XAdvance", "YAdvance"):
             if hasattr(value, attr):
                 delattr(value, attr)
-        value.XPlacement = getattr(value, "XPlacement", 0) + CELL
+        # only a record whose format carries an x placement: one that
+        # sets y alone leaves the mark where the graft drew it, a cell
+        # left with no advance, which is where it belongs
+        if sub.ValueFormat & 0x1:
+            value.XPlacement = getattr(value, "XPlacement", 0) + CELL
 
     if sub.Format == 2:
         pairs = sorted(((gmap[g], v) for g, v in zip(cov.glyphs, sub.Value)
@@ -1549,20 +1344,6 @@ def _remap_single_pos(sub, gmap, gid, marks):
         carry(sub.Value)
         cov.glyphs = sorted((gmap[g] for g in keep), key=gid)
     return True
-
-
-def _pos_records(sub):
-    """Every PosLookupRecord a contextual positioning subtable holds,
-    whichever format it is in: format 3 keeps them on the subtable,
-    formats 1 and 2 under a rule set indexed by glyph or by class."""
-    yield from getattr(sub, "PosLookupRecord", None) or ()
-    for holder in ("ChainPosClassSet", "ChainPosRuleSet",
-                   "PosClassSet", "PosRuleSet"):
-        for rules in getattr(sub, holder, None) or ():
-            for attr in ("ChainPosClassRule", "ChainPosRule",
-                         "PosClassRule", "PosRule"):
-                for rule in getattr(rules, attr, None) or ():
-                    yield from getattr(rule, "PosLookupRecord", None) or ()
 
 
 def _remap_chain_pos(sub, gmap, gid, shift):
@@ -1656,10 +1437,16 @@ def import_scp_marks(base, scp, default_map, marks):
         if kind != 8:
             continue
         for sub in subtables:
-            for rec in _pos_records(sub):
+            for rec in _lookup_records(sub):
                 wanted.setdefault(rec.LookupListIndex, set())
 
     def remap(lookup, shift):
+        # a mark filtering set indexes the donor's MarkGlyphSetsDef,
+        # which does not travel: copied, the flag would index a table
+        # the base has none of (_ccmp_remap refuses it the same way)
+        if lookup.LookupFlag & 0x0010:
+            raise ValueError("mark: a donor lookup uses a mark filtering "
+                             "set, which is not carried")
         kind, subtables = _unwrap_pos(lookup)
         keep = []
         for entry, sub in zip(lookup.SubTable, subtables):
@@ -1681,69 +1468,83 @@ def import_scp_marks(base, scp, default_map, marks):
                 _shift_subtable_anchors(kind, sub, {n: -CELL for n in marks})
         return bool(keep)
 
-    # which lookups survive, before they are numbered
-    live = sorted(wanted)
-    while True:
-        seen = {old: k for k, old in enumerate(live)}
-        kept = [old for old in live
-                if remap(copy.deepcopy(donor.LookupList.Lookup[old]), seen)]
-        if kept == live:
-            break
-        live = kept
-    if not live:
+    shift = copy_lookups(donor, ours, sorted(wanted), remap, front=False)
+    if not shift:
         return 0
-    first = len(ours.LookupList.Lookup)
-    shift = {old: first + k for k, old in enumerate(live)}
-    for old in live:
-        lookup = copy.deepcopy(donor.LookupList.Lookup[old])
-        remap(lookup, shift)
-        ours.LookupList.Lookup.append(lookup)
-    ours.LookupList.LookupCount = len(ours.LookupList.Lookup)
     for tag in ("ccmp", "mark", "mkmk"):
-        idx = sorted(shift[old] for old in live if tag in wanted[old])
+        idx = sorted(shift[old] for old in shift if tag in wanted[old])
         if idx:
             _add_feature(ours, tag, idx)
     sort_feature_list(ours)
     # 'mkmk' asks GDEF which marks it may stack on (LookupFlag's mark
     # attachment type); Source Han Sans JP declares no such classes, so
-    # the donor's travel with the lookups that read them
+    # the donor's travel with the lookups that read them -- and only
+    # because it declares none: a class number the base already used
+    # would make its marks stackable by the donor's lookups
     donor_classes = getattr(scp.get("GDEF"), "table", None)
     donor_classes = getattr(donor_classes, "MarkAttachClassDef", None)
     if donor_classes is not None and "GDEF" in base:
         gdef = base["GDEF"].table
         classes = dict(getattr(getattr(gdef, "MarkAttachClassDef", None),
                                "classDefs", None) or {})
+        if classes:
+            raise ValueError("mark: the base already declares mark "
+                             "attachment classes; the donor's would "
+                             "share their numbers")
         for name, cls in donor_classes.classDefs.items():
             if name in gmap:
                 classes[gmap[name]] = cls
         if gdef.MarkAttachClassDef is None:
             gdef.MarkAttachClassDef = otTables.MarkAttachClassDef()
         gdef.MarkAttachClassDef.classDefs = classes
-    return len(live)
+    return len(shift)
+
+
+# (usWinAscent, usWinDescent) for every JP face — a clipping bound in
+# the GDI paths and their line height. Pinned rather than measured: this
+# family's ink reaches 1808 / -1048 and covering it would give a 2856u
+# line, more than twice the 1257u every renderer honouring
+# USE_TYPO_METRICS uses. See copy_line_metrics for where each number
+# comes from, and verify.WIN_METRICS, which holds the built faces to it.
+WIN_METRICS = (1160, 454)
 
 
 def copy_line_metrics(base, latin):
     """The line pitch of an English terminal font: hhea and typo ascender
     / descender / line gap from the Latin donor (Source Code Pro's 984 /
     -273 / 0, hhea and typo alike, USE_TYPO_METRICS set), so a line of
-    Sumi Moji JP is as tall as a line of Source Code Pro, not of Source
+    Gengou Code JP is as tall as a line of Source Code Pro, not of Source
     Han Sans (1160 / -288, 15% more). Source Han Sans's own kanji body
     (880 / -120) sits inside.
 
-    usWinAscent / Descent stay Source Han Sans's (1160 / 288). They are
-    a clipping bound as much as a line height, and Source Han Sans's own
-    ink goes well past 984 — so bringing them down to the typo metrics
-    would clip glyphs in the GDI paths that read them. The cost is that
-    those same paths (legacy conhost, Notepad, Office's GDI text) still
-    lay out a 1448u line where DirectWrite, CoreText and HarfBuzz lay
-    out 1257u; USE_TYPO_METRICS tells everything that reads it which to
-    prefer."""
+    usWinAscent / Descent are pinned to WIN_METRICS. They are a clipping
+    bound as much as a line height, and Source Han Sans's own ink goes
+    well past 984 — so bringing them down to the typo metrics would clip
+    glyphs in the GDI paths that read them. The cost is that those same
+    paths (legacy conhost, Notepad, Office's GDI text) lay out a 1614u
+    line where DirectWrite, CoreText and HarfBuzz lay out 1257u;
+    USE_TYPO_METRICS tells everything that reads it which to prefer.
+
+    The ascent is Source Han Sans's own 1160. The descent is 454 rather
+    than Source Han Sans's 288, because the Latin layer grafted over it
+    draws deeper than Source Han Sans does: the box-drawing elements
+    reach -400 and the shade blocks -454, and at 288 the GDI paths
+    sliced the bottom off 111 codepoints, 101 of them box drawing — a
+    terminal font's frames and rules breaking in exactly the renderers
+    that read this field. 454 is what the Latin family already declares
+    for the same ink (build_latin.LATIN_WIN_METRICS pins 1060 / 454), so
+    this is the JP faces catching up to their own Latin layer rather
+    than a new policy. Two codepoints stay outside it, the vertical kana
+    repeat marks U+3031 and U+3032 at -549; covering them would cost
+    another 6% of GDI line height for two characters no terminal sets.
+    """
     for tbl, attrs in (
         ("hhea", ("ascent", "descent", "lineGap")),
         ("OS/2", ("sTypoAscender", "sTypoDescender", "sTypoLineGap")),
     ):
         for a in attrs:
             setattr(base[tbl], a, getattr(latin[tbl], a))
+    base["OS/2"].usWinAscent, base["OS/2"].usWinDescent = WIN_METRICS
     base["OS/2"].fsSelection |= 1 << 7   # USE_TYPO_METRICS
 
 
@@ -1778,7 +1579,7 @@ def recalc_codepage_range(font):
 
 
 # The symbols that pair with a ligature take Monaspace's one-cell glyph
-# rather than SCP's (in Sumi Moji, build_latin.py), so '←' beside '<-'
+# rather than SCP's (in Gengou Code, build_latin.py), so '←' beside '<-'
 # (and ≠ / !=, ≤ / <=, … / ...) shares its stroke weight and arrowhead.
 # Their two-cell forms live under fwid (stretch_arrows for the arrows).
 MONA_AMBIGUOUS = "←→↑↓⇐⇒⇔≠≤≥…"
@@ -1798,7 +1599,8 @@ def latin_ligatures(font, latin, latin_path, alts, ligatures):
     # encoded relative to its FD's nominalWidthX — encoding it against
     # another FD (the symbol one, as before) left every ligature's CFF
     # width 510u off its hmtx advance
-    td, cmap, fd_index, private, vdon = append_context(font)
+    ctx = append_context(font)
+    td, cmap, fd_index, private, vdon = ctx
     lgs = latin.getGlyphSet()
     order = latin.getGlyphOrder()
     hbfont = hb.Font(hb.Face(hb.Blob.from_file_path(str(latin_path))))
@@ -1821,19 +1623,11 @@ def latin_ligatures(font, latin, latin_path, alts, ligatures):
             print(f"  skip {seq!r}: component not in target cmap")
             continue
         width = CELL * spec["cells"]
-        pen = T2CharStringPen(pen_width(private, width), lgs)
-        draw_clean([(lgs, glyphs[0], (1, 0, 0, 1, 0, 0))], pen)
-        name = alloc_glyph_name(font)
-        append_glyph(font, td, name, pen.getCharString(private=private),
-                     fd_index, width, None, vdon)
+        name = graft_outline(font, ctx, [(lgs, glyphs[0], (1, 0, 0, 1, 0, 0))], width)
         added[seq] = name
         alt = shaped(seq, {"calt": True, "liga": True, "cv99": True})
         if len(alt) == 1 and alt[0] != glyphs[0]:
-            pen = T2CharStringPen(pen_width(private, width), lgs)
-            draw_clean([(lgs, alt[0], (1, 0, 0, 1, 0, 0))], pen)
-            alt_name = alloc_glyph_name(font)
-            append_glyph(font, td, alt_name, pen.getCharString(private=private),
-                         fd_index, width, None, vdon)
+            alt_name = graft_outline(font, ctx, [(lgs, alt[0], (1, 0, 0, 1, 0, 0))], width)
             alts[name] = alt_name
             n_alt += 1
     print(f"  ligatures from the Latin donor: {len(added)}, cv99 alternates: {n_alt}")
@@ -1927,7 +1721,7 @@ ARROW_SOURCE = {
 }
 
 
-def stretch_arrows(font, added, fullwidth, slant=0.0, chars=ARROWS_H + ARROWS_V):
+def stretch_arrows(font, added, fullwidth, slant=0.0):
     """The fwid forms of the arrows: full-width arrows built from the
     ligature glyphs (ARROW_SOURCE) so they share head and stroke with
     '->' '=>' '<=>', but keep Source Han Sans's full-width advance and
@@ -1938,11 +1732,11 @@ def stretch_arrows(font, added, fullwidth, slant=0.0, chars=ARROWS_H + ARROWS_V)
     straight. `fullwidth` is {codepoint: the two-cell glyph}
     (fullwidth_forms()'s); the cmap is not touched. Returns
     {codepoint: new glyph name}."""
-    td, _cmap, fd_index, private, vdon = append_context(font, fullwidth=True)
+    td, _cmap, fd_index, private, vdon = append_context(font)
     gs = font.getGlyphSet()
     t = math.tan(math.radians(-slant))
     swapped = {}
-    for ch in chars:
+    for ch in ARROWS_H + ARROWS_V:
         cp = ord(ch)
         seq, op = ARROW_SOURCE[ch]
         if cp not in fullwidth or seq not in added:
@@ -2004,8 +1798,9 @@ def grid_step(adv, ink, cell):
     of them sit a little over the cell, so rounding up would cost every
     one a whole terminal column, and would make the same letter one
     cell in one weight and two in the next (its advance grows with the
-    weight). The widest still land on a full width here, which is why
-    narrow_letters runs first and puts the lot on the cell.
+    weight). The widest would land on a full width here, which is why
+    both Latin donors draw the whole block and no letter of it is
+    Source Han Sans's.
 
     The ink may overhang the step by up to a third of a cell — an italic
     always overhangs — but no further: a three-em dash (⸻, 2452 wide)
@@ -2117,20 +1912,20 @@ def fit_to_grid(font, cell, steps=None):
     moved = 0
     # a glyph this build made carries a name alloc_glyph_name took from
     # Source Han Sans's own CID space, so it can collide with a reference
-    # name that means something else entirely — and _built, not
-    # _appended, is the whole of them: narrow_halfwidth's condensed
+    # name that means something else entirely — and `built`, not
+    # `appended`, is the whole of them: narrow_halfwidth's condensed
     # copies opt out of the Latin FontDict but are just as much ours.
     # Ours are on the grid by construction and take the fallback path
-    built = getattr(font, "_built", frozenset())
-    pinned = getattr(font, "_pinned_cell", frozenset())
+    built = state_of(font).built
+    pinned = state_of(font).pinned_cell
     for name in font.getGlyphOrder():
         adv, lsb = hmtx.metrics[name]
         if adv <= 0:
             continue
         # the family's answer first: a glyph can land on a step in one
         # weight and off it in the next, and both must end up the same
-        # ... and not one narrow_letters already put on the cell: the
-        # reference map still has the donor's own full width for it
+        # ... and not one pinned to the cell: the reference map still
+        # has the donor's own full width for it
         new = (None if name in built or name in pinned
                else (steps or {}).get(name))
         if new is None:
@@ -2575,40 +2370,6 @@ def rehome_replaced_marks(base, replaced):
     return added
 
 
-def extend_realign_bases(font, names):
-    """Add `names` to the backtrack of the Term mark correction, for
-    glyphs appended after widen_fullwidth ran. Returns the number of
-    subtables extended.
-
-    realign_halfwidth_marks freezes its backtrack at widening time — the
-    glyphs the widening did not move — and nerdpatch.py then appends
-    10,402 one-cell icons to the finished face. None of them were in it,
-    so in SumiMojiJPTermNFM-* a full-width mark after an icon kept the
-    widening's -100: U+F120 + U+20DD drew the ring at -465..465 where
-    the same one-cell base two rows up puts it at -365..565."""
-    gpos = getattr(font.get("GPOS"), "table", None)
-    if gpos is None or not names:
-        return 0
-    gid = font.getGlyphID
-    ours = set()
-    for fr in gpos.FeatureList.FeatureRecord:
-        if fr.FeatureTag == "dist":
-            ours.update(fr.Feature.LookupListIndex)
-    done = 0
-    for index in sorted(ours):
-        kind, subtables = _unwrap_pos(gpos.LookupList.Lookup[index])
-        if kind != 8:
-            continue
-        for sub in subtables:
-            covs = getattr(sub, "BacktrackCoverage", None)
-            if not covs:
-                continue
-            cov = covs[-1]      # the base, behind the run of marks
-            cov.glyphs = sorted(set(cov.glyphs) | set(names), key=gid)
-            done += 1
-    return done
-
-
 def base_gdef(font):
     """The font's GDEF table, or None."""
     return getattr(font.get("GDEF"), "table", None)
@@ -2633,7 +2394,7 @@ def fullwidth_marks(font):
     Source Han Sans draws them one FULL WIDTH left of the origin, the
     way graft_halfwidth draws ours one CELL left, so widening the cell
     to 1200 has to take them 100 units further left — not right. Told
-    from the grafted Latin marks by `_built`: those are ours, the Latin
+    from the grafted Latin marks by `built`: those are ours, the Latin
     cell is 600 in both families, and they stay put.
 
     What says "drawn in the full-width cell" is where the ink's CENTRE
@@ -2651,7 +2412,7 @@ def fullwidth_marks(font):
     apart at any weight."""
     hmtx = font["hmtx"]
     gs = font.getGlyphSet()
-    built = getattr(font, "_built", frozenset())
+    built = state_of(font).built
     slack = FULLWIDTH // 20
     out = set()
     for cp, name in font.getBestCmap().items():
@@ -2932,11 +2693,11 @@ OWNED_NAME_IDS = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 16, 17, 25)
 
 
 def set_names(font, suffix, weight, italic, italic_angle=-12.0, version=None,
-              credits=(), family_base="Sumi Moji JP", ps_base="SumiMojiJP",
+              credits=(), family_base="Gengou Code JP", ps_base="GengouCodeJP",
               base_credit="Source Han Sans"):
     """Rewrite the family-identifying names, preserve the legal ones.
 
-    `version` (SUMI_VERSION, e.g. "3.1.0") stamps our own release version
+    `version` (GENGOU_VERSION, e.g. "3.1.0") stamps our own release version
     when set: head.fontRevision becomes MAJOR.MINOR, nameID 5 notes both
     our version and the inherited Source Han Sans revision, and the CFF
     version matches head. Left None (the default), the inherited SHS
@@ -2965,7 +2726,7 @@ def set_names(font, suffix, weight, italic, italic_angle=-12.0, version=None,
     # drop stale records for the IDs we own (every platform/encoding), so
     # the base font's Source Han Sans strings can't survive alongside ours
     name.names = [n for n in name.names if n.nameID not in OWNED_NAME_IDS]
-    # version: SUMI_VERSION (set) stamps our own release version and notes
+    # version: GENGOU_VERSION (set) stamps our own release version and notes
     # the inherited SHS revision alongside it; unset (CI builds) keeps that
     # inherited revision as-is, as before.
     shs_rev = font["head"].fontRevision
@@ -2973,15 +2734,20 @@ def set_names(font, suffix, weight, italic, italic_angle=-12.0, version=None,
         major, minor = version.split(".")[:2]
         cff_version = f"{major}.{minor}"
         font["head"].fontRevision = float(cff_version)
-        version_str = f"Version {version};{family_base}"
+        version_str = f"Version {version};{base_family}"
         if base_credit:
             version_str += f";SHS {shs_rev:.3f}"
         unique_version = version
     else:
         cff_version = f"{shs_rev:.3f}"
-        version_str = f"Version {shs_rev:.3f};{family_base}"
+        version_str = f"Version {shs_rev:.3f};{base_family}"
         unique_version = cff_version
-    copyright_parts = [f"{family_base}: {PROJECT_COPYRIGHT}."]
+    # base_family, not family_base: a Term face's own family carries the
+    # suffix, and naming it "Gengou Code JP" here left nameID 0 and 5 pointing
+    # at a family the face is not in -- which nerdpatch.rename then
+    # marked, giving a Gengou Code JP Term NF face a version
+    # string reading "Gengou Code JP NF"
+    copyright_parts = [f"{base_family}: {PROJECT_COPYRIGHT}."]
     designer_parts = []
     if base_credit:
         copyright_parts.append(f"{base_credit}: {shs_copyright}")
@@ -3068,20 +2834,6 @@ def set_names(font, suffix, weight, italic, italic_angle=-12.0, version=None,
     return ps
 
 
-def mona_transform(mona, dx, dy, k):
-    """Affine for a Monaspace outline landing in our em: scale to the cell,
-    shear in whatever slant the slnt axis clamped away, then offset."""
-    shear = math.tan(math.radians(-getattr(mona, "residual_slant", 0.0)))
-    return (k, 0, k * shear, k, dx, dy)
-
-
-def mona_baseline_shift(font, mona, k):
-    """Baseline correction: align the two fonts' '=' vertical centers."""
-    cmap = font.getBestCmap()
-    return round(glyph_vcenter(font, cmap[ord("=")])
-                 - glyph_vcenter(mona, mona.getBestCmap()[ord("=")], k))
-
-
 # Standalone ASCII punctuation redrawn from Monaspace so it matches the
 # ligatures cut from the same instance — every one of the 32 symbols;
 # letters and digits stay Source Code Pro. The first five ('=' '<' '>'
@@ -3098,97 +2850,6 @@ def mona_baseline_shift(font, mona, k):
 MONA_STANDALONE = string.punctuation   # !"#$%&'()*+,-./:;<=>?@[\]^_`{|}~
 
 
-def replace_from_mona(font, mona, chars, dy, k):
-    """Swap the outlines of `chars` for Monaspace's, keeping name, advance
-    and cmap. Same instance, scale (`k`), shear and baseline as the
-    ligatures. Characters missing on either side are skipped."""
-    cff = font["CFF "].cff
-    td = cff[cff.fontNames[0]]
-    cmap = font.getBestCmap()
-    mona_cmap = mona.getBestCmap()
-    mona_gs = mona_glyphset(mona)
-    replaced = []
-    for ch in chars:
-        name = cmap.get(ord(ch))
-        src = mona_cmap.get(ord(ch))
-        if name is None or src is None:
-            print(f"  skip standalone {ch!r}: missing in target or donor")
-            continue
-        gid = font.getGlyphID(name)
-        private = td.FDArray[td.FDSelect[gid]].Private
-        adv = font["hmtx"].metrics[name][0]
-        pen = T2CharStringPen(pen_width(private, adv), font.getGlyphSet())
-        draw_clean([(mona_gs, src, mona_transform(mona, 0, dy, k))], pen)
-        cs = pen.getCharString(private=private)
-        td.CharStrings.charStringsIndex[td.CharStrings.charStrings[name]] = cs
-        font["hmtx"].metrics[name] = (adv, charstring_lsb(cs))
-        note_redrawn(font, [name])
-        replaced.append(ch)
-    return replaced
-
-
-def add_glyphs(font, mona, alts, ligatures, dy=None, cell=CELL):
-    """Append the imported ligature glyphs at `cell` per input character;
-    return {seq: glyph name}. Alternate (.alt) designs are appended too
-    and recorded in `alts`."""
-    k = cell / MONA_CELL
-    td, cmap, fd_index, private, vdon = append_context(font)
-    mona_gs = mona_glyphset(mona)
-    mona_names = set(mona.getGlyphOrder())
-
-    if dy is None:
-        dy = mona_baseline_shift(font, mona, k)
-
-    added = {}
-    n_alt = 0
-    for seq, spec in ligatures.items():
-        if any(g not in mona_names for g in spec["glyphs"]):
-            print(f"  skip {seq!r}: donor glyph missing")
-            continue
-        if any(ord(c) not in cmap for c in seq):
-            print(f"  skip {seq!r}: component not in target cmap")
-            continue
-        cells = spec["cells"]
-        width = cell * cells
-        if len(spec["glyphs"]) == 1:
-            # a single spanning glyph is drawn in its final cell; shift right
-            offsets = [(cells - 1) * cell]
-        else:
-            # composed sequences: one part per cell, unless "at" says which
-            # cell each part sits in ('&&=' is ampersand.init in cell 0 and
-            # the 2-cell ampersand_equal, drawn in its final cell, at 2)
-            offsets = [c * cell for c in spec.get("at", range(len(spec["glyphs"])))]
-        pen = T2CharStringPen(pen_width(private, width), font.getGlyphSet())
-        # composed sequences (':=' etc.) overlap by construction — the same
-        # pathops pass the .alt path uses removes the seams
-        draw_clean([(mona_gs, gname, mona_transform(mona, dx, dy, k))
-                    for gname, dx in zip(spec["glyphs"], offsets)], pen)
-        name = alloc_glyph_name(font)
-        append_glyph(font, td, name, pen.getCharString(private=private),
-                     fd_index, width, None, vdon)
-        added[seq] = name
-
-        # alternate design, if Monaspace ships one (cv99 toggles to it);
-        # composed sequences take each component's .alt where it exists
-        alt_glyphs = [g + ".alt" if g + ".alt" in mona_names else g
-                      for g in spec["glyphs"]]
-        if any(g.endswith(".alt") for g in alt_glyphs):
-            pen = T2CharStringPen(pen_width(private, width), font.getGlyphSet())
-            draw_clean([(mona_gs, gname, mona_transform(mona, dx, dy, k))
-                        for gname, dx in zip(alt_glyphs, offsets)], pen)
-            alt_name = alloc_glyph_name(font)
-            append_glyph(font, td, alt_name, pen.getCharString(private=private),
-                         fd_index, width, None, vdon)
-            alts[name] = alt_name
-            n_alt += 1
-
-    print(f"  cv99 alternates: {n_alt}")
-    if n_alt == 0:
-        print("  WARNING: no .alt designs found — Monaspace may have renamed "
-              "its alternate glyphs; cv99 will be empty")
-    return added
-
-
 def _new_lookup(gsub, *subtables):
     lookup = otl.buildLookup(list(subtables))
     gsub.LookupList.Lookup.append(lookup)
@@ -3203,7 +2864,7 @@ class _LookupRef:
         self.lookup_index = index
 
 
-def _guard_subtables(font, gsub, seq_map, lig_lookup):
+def _guard_subtables(font, seq_map, lig_lookup):
     """Context guards around the combined ligature lookup, the part of
     Monaspace's calt that a plain LigatureSubst cannot express.
 
@@ -3442,6 +3103,96 @@ def drop_features(font, tags):
             remap_required(ls, remap)
 
 
+def _lookup_records(root):
+    """Every Subst/PosLookupRecord anywhere inside a subtable.
+
+    The contextual formats nest them at different depths (format 3 holds
+    them on the subtable, formats 1 and 2 one or two rule objects down),
+    but fontTools gives them the same shape wherever they sit — a
+    SequenceIndex and a LookupListIndex — so the walk finds them without
+    a catalogue of formats to fall out of date."""
+    out, stack, seen = [], [root], set()
+    while stack:
+        obj = stack.pop()
+        if id(obj) in seen:
+            continue
+        seen.add(id(obj))
+        if isinstance(obj, (list, tuple)):
+            stack.extend(obj)
+            continue
+        fields = getattr(obj, "__dict__", None)
+        if not fields:
+            continue
+        if "LookupListIndex" in fields and "SequenceIndex" in fields:
+            out.append(obj)
+            continue
+        stack.extend(fields.values())
+    return out
+
+
+def prune_orphan_lookups(font):
+    """Drop the lookups nothing reaches any more. Returns {table: count}.
+
+    drop_features removes a FeatureRecord but not the lookups it was the
+    only route to, and Source Han Sans's kern / halt / palt left 36 KB of
+    unreachable GPOS in every JP face that way. Reachability starts at
+    the FeatureList — every LangSys's features and its required one are
+    indices into it, and drop_features has already pruned those — and
+    follows the contextual lookups' own references, which is why one pass
+    over the features is not enough.
+
+    A font with a JSTF is left alone: JSTF indexes this same LookupList
+    and nothing here would renumber it."""
+    if "JSTF" in font:
+        return {}
+    freed = {}
+    for tag, unwrap in (("GSUB", _unwrap), ("GPOS", _unwrap_pos)):
+        if tag not in font:
+            continue
+        table = font[tag].table
+        ll = getattr(table, "LookupList", None)
+        if ll is None or not ll.Lookup:
+            continue
+        lookups = ll.Lookup
+        # from the LangSys, not the FeatureList: a FeatureRecord nothing
+        # names is no route either (prune_orphan_features drops those)
+        records = table.FeatureList.FeatureRecord
+        named = set()
+        for ls in _langsys_list(table):
+            named.update(ls.FeatureIndex)
+            req = getattr(ls, "ReqFeatureIndex", NO_REQUIRED_FEATURE)
+            if req != NO_REQUIRED_FEATURE:
+                named.add(req)
+        reach, stack = set(), [i for k in sorted(named) if k < len(records)
+                               for i in records[k].Feature.LookupListIndex]
+        while stack:
+            i = stack.pop()
+            if i in reach or not 0 <= i < len(lookups):
+                continue
+            reach.add(i)
+            for sub in unwrap(lookups[i])[1]:
+                stack.extend(r.LookupListIndex for r in _lookup_records(sub))
+        if len(reach) == len(lookups):
+            continue
+        keep = sorted(reach)
+        remap = {old: new for new, old in enumerate(keep)}
+        for fr in table.FeatureList.FeatureRecord:
+            # a record no LangSys names may point at what was just
+            # dropped; it is itself dead (prune_orphan_features)
+            fr.Feature.LookupListIndex = [remap[i]
+                                          for i in fr.Feature.LookupListIndex
+                                          if i in remap]
+            fr.Feature.LookupCount = len(fr.Feature.LookupListIndex)
+        for i in keep:
+            for sub in unwrap(lookups[i])[1]:
+                for rec in _lookup_records(sub):
+                    rec.LookupListIndex = remap[rec.LookupListIndex]
+        ll.Lookup = [lookups[i] for i in keep]
+        ll.LookupCount = len(keep)
+        freed[tag] = len(lookups) - len(keep)
+    return freed
+
+
 def feature_map(font, tag):
     """{glyph: substitute} over every Single / Alternate subst reachable
     under `tag` — Source Han Sans's own hwid / fwid forms. The first
@@ -3500,7 +3251,7 @@ def add_gsub(font, added, alts, ligatures, variant_maps=None,
             gsub, otl.buildLigatureSubstSubtable(groups[grp]))
 
     guarded_lookup = _new_lookup(
-        gsub, *_guard_subtables(font, gsub, combined, combined_lookup))
+        gsub, *_guard_subtables(font, combined, combined_lookup))
     for tag in ("calt", "liga"):
         _add_feature(gsub, tag, [guarded_lookup])
     for grp in sorted(group_lookups):
@@ -3519,11 +3270,6 @@ def add_gsub(font, added, alts, ligatures, variant_maps=None,
     sort_feature_list(gsub)
 
 
-# Greek and Coptic, and Cyrillic: the width policy says every character
-# Sumi Moji covers is one cell (README, 幅の方針), and these two scripts
-# are in it. Source Code Pro Italic draws neither, so the italic faces
-# fall through to Source Han Sans's own proportional letters.
-LETTER_BLOCKS = ((0x0370, 0x04FF),)
 # the tightest side bearing the Latin donor gives a letter: Source Code
 # Pro's 'w' and 'W' carry 8 units either side of the 600 cell. A letter
 # condensed to fit the cell gets the same, rather than an ink-exact fit
@@ -3531,76 +3277,77 @@ LETTER_BLOCKS = ((0x0370, 0x04FF),)
 LETTER_BEARING = 8
 
 
-def narrow_letters(font, cell, blocks=LETTER_BLOCKS):
-    """Condense an alphabetic glyph Source Han Sans draws wider than the
-    cell into it, in place.
+def cell_fit(box, cell=CELL, bearing=LETTER_BEARING):
+    """(x scale, x offset) that seats `box`'s ink in one cell: centred,
+    and condensed only where the ink will not fit the cell less a
+    bearing at each side — and then only as far as that.
 
-    grid_step rounds to the NEAREST step, so the fourteen widest of these
-    (Ж М Ф Ш Щ Ъ Ы Ю ж ф ш щ ю Μ, drawn 755-1005) landed on a full
-    width: two terminal columns for scripts every terminal allots one
-    (Cyrillic and Greek are East_Asian_Width A), so an italic МОСКВА
-    painted its М over its О while the upright face of the same family
-    was right. The advance goes to the cell for all of them; the outline
-    is scaled only where its ink does not fit the cell less a bearing at
-    each side, and then only as far as that — condensing costs stroke
-    weight, and a letter squeezed beside letters that were not reads as
-    thin and small inside its own alphabet. It is what a monospace face
-    does with a wide letter, Source Code Pro's own M included, but only
-    the letters that need it. A glyph the Latin donor supplied is left
-    alone: it is already a cell wide by construction.
+    Condensing costs stroke weight, and a letter squeezed beside letters
+    that were not reads as thin and small inside its own alphabet, so
+    the letters that need it are the only ones that get it. A glyph with
+    no ink is centred trivially.
 
-    Runs before fit_to_grid, on Source Han Sans's own advance, and the
-    names it touches are recorded so that pass leaves them alone.
-    Modifies the glyph rather than copying it: each is reached from one
-    codepoint. One that is not is left alone and said so, since
-    condensing it would narrow whatever else shares it. Returns the
-    number condensed."""
-    cmap = font.getBestCmap()
-    hmtx = font["hmtx"]
-    gs = font.getGlyphSet()
-    cff = font["CFF "].cff
+    build_latin.add_missing_from_sans applies it, seating Source Sans's
+    proportional Greek and Cyrillic in the italic Latin faces. (A
+    narrow_letters pass once stood by to condense Source Han Sans's own
+    on the JP side; both Latin donors cover the whole block, it found
+    nothing to do on any face, and verify_jp.py holds every Greek and
+    Cyrillic letter to one cell, so it went in round 10.)"""
+    if not box:
+        return 1.0, 0
+    ink = box[2] - box[0]
+    room = cell - 2 * bearing
+    sx = 1.0 if ink <= room else room / ink
+    return sx, (cell - ink * sx) / 2 - box[0] * sx
+
+
+def notdef_to_cell(base, latin, cell):
+    """Redraw .notdef from the Latin donor, one cell wide. Returns
+    whether it was replaced.
+
+    A terminal allots a column by East Asian Width, not by what the
+    font draws, and a codepoint no font in the fallback chain covers is
+    almost always Neutral -- one column. Source Han Sans's .notdef is
+    full width, so a single uncovered codepoint drew a two-column box
+    in a one-column slot and pushed the rest of the line along: in the
+    Term faces, 1200 units into a 600-unit cell. That is the one thing
+    a terminal font must not do, and it did not take an exotic
+    character -- until this build the italic faces reached .notdef for
+    ten Greek Extended codepoints their own upright drew.
+
+    The other way round costs nothing: a box narrower than its column
+    leaves white, and nothing moves. So the donor's own .notdef, which
+    is drawn for this cell, is the one to use.
+
+    Runs before the grid passes and pins the glyph, so neither the
+    family's step map nor the Term widening puts it back.
+    """
+    name = ".notdef"
+    cff = base["CFF "].cff
     td = cff[cff.fontNames[0]]
-    wanted = {cp for lo, hi in blocks for cp in range(lo, hi + 1)}
-    built = getattr(font, "_built", frozenset())
-    room = cell - 2 * LETTER_BEARING
-    reached = {}
-    for cp, name in cmap.items():
-        reached.setdefault(name, set()).add(cp)
-    drawn = {}
-    for cp in sorted(wanted & set(cmap)):
-        name = cmap[cp]
-        adv = hmtx[name][0]
-        if adv <= 0 or name in drawn or name in built:
-            continue                      # the Latin donor's, already a cell
-        box = _bounds(gs, name)
-        ink = (box[2] - box[0]) if box else 0
-        if adv == cell and ink <= room:
-            continue
-        if not reached[name] <= wanted:
-            print(f"  skip U+{cp:04X}: its glyph also draws "
-                  f"{sorted(hex(c) for c in reached[name] - wanted)}")
-            continue
-        private = glyph_private(font, td, name)
-        # scaled ONLY where the ink does not fit, and then just enough:
-        # condensing costs stroke weight, and a letter squeezed beside
-        # letters that were not stands out as thin and small in its own
-        # alphabet. Scaling everything by cell/advance did that to 61 of
-        # these 115, taking Ж's stem from 83 units to 54 while Г kept
-        # 83. Twenty-eight of them are genuinely wider than the cell
-        sx = 1.0 if ink <= room else room / ink
-        dx = (cell - (box[2] - box[0]) * sx) / 2 - box[0] * sx if box else 0
-        pen = T2CharStringPen(pen_width(private, cell), gs)
-        gs[name].draw(TransformPen(pen, (sx, 0, 0, 1, dx, 0)))
-        drawn[name] = pen.getCharString(private=private)
-    for name, cs in drawn.items():
-        td.CharStrings[name] = cs
-        hmtx.metrics[name] = (cell, charstring_lsb(cs))
-    note_redrawn(font, drawn)
-    pinned = getattr(font, "_pinned_cell", None)
-    if pinned is None:
-        pinned = font._pinned_cell = set()
-    pinned.update(drawn)
-    return len(drawn)
+    if name not in td.CharStrings or name not in latin.getGlyphOrder():
+        return False
+    # the vertical origin before the box changes: VORG states it
+    # outright, and vmtx says it as a top side bearing off the glyph's
+    # own yMax, so a new box has to be paid for on the vmtx side or the
+    # two stop agreeing (verify.py checks that they do)
+    origin = vmtx_origin(base, name) if "vmtx" in base else None
+    private = glyph_private(base, td, name)
+    donor = latin.getGlyphSet()
+    pen = T2CharStringPen(pen_width(private, cell), donor)
+    donor[name].draw(pen)
+    cs = pen.getCharString(private=private)
+    td.CharStrings[name] = cs
+    base["hmtx"].metrics[name] = (cell, charstring_lsb(cs))
+    if origin is not None:
+        box = charstring_box(cs)
+        base["vmtx"].metrics[name] = (base["vmtx"].metrics[name][0],
+                                      otRound(origin - (box[3] if box else 0)))
+        state_of(base).vorigin.pop(name, None)
+    note_redrawn(base, {name: cs})
+    pinned = state_of(base).pinned_cell
+    pinned.add(name)
+    return True
 
 
 def narrow_halfwidth(font, cell):
@@ -3618,19 +3365,29 @@ def narrow_halfwidth(font, cell):
     Runs before fit_to_grid, so the scale is Source Han Sans's own
     advance and not the grid step that pass would give it, and before
     widen_fullwidth, which must not widen the copies. A glyph that
-    already fits the cell is left for fit_to_grid to centre. Returns the
-    number made."""
+    already fits the cell is left for fit_to_grid to centre. A glyph
+    the Latin donor supplied is left alone altogether: it is a cell
+    wide by construction, and this pass's
+    ink-width test is the wrong question for it -- the won sign
+    (U+20A9, Halfwidth) came from Source Code Pro Italic with 605 units
+    of ink at Bold and 527-581 at the other weights, so Bold Italic
+    alone got a condensed copy with zero side bearings, 33 units left of
+    where SemiBold Italic draws it, while the Latin face at the same
+    weight keeps the donor's glyph as drawn. Returns the number made."""
     cmap = font.getBestCmap()
     hmtx = font["hmtx"]
     gs = font.getGlyphSet()
     cff = font["CFF "].cff
     td = cff[cff.fontNames[0]]
-    vdon = vmtx_donor(font, fullwidth=False)
+    vdon = vmtx_donor(font)
+    built = state_of(font).built
     made, new = {}, {}
     for cp, name in sorted(cmap.items()):
         adv = hmtx[name][0]
         if adv <= 0 or unicodedata.east_asian_width(chr(cp)) != "H":
             continue
+        if name in built:
+            continue                      # the Latin donor's, already a cell
         box = _bounds(gs, name)
         ink = (box[2] - box[0]) if box else 0
         if adv <= cell and ink <= cell:
@@ -3663,9 +3420,9 @@ def narrow_halfwidth(font, cell):
                          fd, cell, None, vdon)
             # append_glyph records it in both sets; take it out of the
             # Latin-FontDict one only, so add_latin_fd leaves this copy
-            # in the FontDict it came from. It stays in _built, which is
+            # in the FontDict it came from. It stays in `built`, which is
             # what fit_to_grid reads to know a name is ours
-            font._appended.discard(made[name])
+            state_of(font).appended.discard(made[name])
         new[cp] = made[name]
     set_cmap(font, new)
     return len(new)
@@ -3697,13 +3454,13 @@ def fullwidth_forms(font, replaced):
 
 def repoint_features(font, replaced, tags=("vert", "vrt2")):
     """Source Han Sans's own features substitute FROM the glyphs the
-    graft replaced, so once the cmap points at Sumi Moji's they never
+    graft replaced, so once the cmap points at Gengou Code's they never
     fire. Re-point each of `tags` at the grafted glyph, the way
     add_width_alternates does for fwid, so a vertical run still gets the
-    rotated forms of what Sumi Moji took over.
+    rotated forms of what Gengou Code took over.
 
     Only the vertical features: 'locl' is on by default, and re-pointing
-    it would swap Sumi Moji's own design for Source Han Sans's in
+    it would swap Gengou Code's own design for Source Han Sans's in
     ordinary horizontal text (its JP locale form of '…' is full width).
     Returns the number re-pointed."""
     if "GSUB" not in font:
@@ -3734,7 +3491,7 @@ def repoint_features(font, replaced, tags=("vert", "vrt2")):
 def add_width_alternates(font, fwid):
     """Wire the full-width forms into GSUB's fwid: {default one-cell
     glyph: full-width glyph} — Source Han Sans's own two-cell form of a
-    character Sumi Moji sets in one cell (Greek, box drawing, ≠ ≤ ≥ …),
+    character Gengou Code sets in one cell (Greek, box drawing, ≠ ≤ ≥ …),
     or the arrow redrawn from the ligatures (stretch_arrows). fwid
     already exists in the Source Han Sans base; the new lookup is merged
     into that record. Runs after add_gsub, so it re-sorts."""
@@ -3767,26 +3524,6 @@ def glyph_bounds(font):
         if pen.bounds is not None:
             bounds[name] = pen.bounds
     return bounds
-
-
-def sync_lsb(font):
-    """hmtx left side bearings from the outlines (otRound(xMin), like
-    charstring_lsb; a blank glyph keeps its own). A CFF font's lsb is nothing
-    fontTools maintains: an instanced VF keeps the default master's
-    hmtx while its outlines move, so build_latin.static_base's faces
-    carried SCP's wght-200 bearings at every weight. Returns the number
-    of glyphs whose lsb changed."""
-    bounds = glyph_bounds(font)
-    metrics = font["hmtx"].metrics
-    changed = 0
-    for name, (adv, lsb) in list(metrics.items()):
-        if name not in bounds:
-            continue
-        want = otRound(bounds[name][0])
-        if want != lsb:
-            metrics[name] = (adv, want)
-            changed += 1
-    return changed
 
 
 def update_bbox(font, bounds=None):
@@ -3859,69 +3596,6 @@ def classify_marks(font, marks):
         gdef.GlyphClassDef.classDefs = {}
     for g in marks:
         gdef.GlyphClassDef.classDefs[g] = 3
-
-
-def classify_unicode_marks(font):
-    """GDEF class 3 (Mark) for every cmap'd glyph whose Unicode category
-    is Mn, and for everything a feature substitutes for one of those.
-    Existing classes are kept.
-
-    Source Code Pro leaves two of its own combining marks (U+035F,
-    U+0361, the double-width ones) unclassified — and, in the ITALIC
-    donor only, the `.cap` design its ccmp swaps U+0310 for after a
-    capital. A substituted glyph takes its class from GDEF alone once a
-    font has a GlyphClassDef (HarfBuzz has no Unicode-category
-    fallback), so that one became a BASE: the mark-to-base search for
-    the next mark stopped on it and gave up, and 23 of the 53 combining
-    marks lost their attachment after U+0310 in all five italic Latin
-    faces and the italic variable font — `E` + U+0310 + U+0301 put both
-    accents on the character after them. Reachable only through a
-    feature, so the cmap sweep above could not see it."""
-    if "GDEF" not in font or font["GDEF"].table.GlyphClassDef is None:
-        return []
-    defs = font["GDEF"].table.GlyphClassDef.classDefs
-    fixed = []
-    for cp, g in font.getBestCmap().items():
-        if unicodedata.category(chr(cp)) == "Mn" and defs.get(g) != 3:
-            defs[g] = 3
-            fixed.append(g)
-    # the closure: a variant of a variant of a mark is a mark too, and
-    # so is a ligature of marks — Source Code Pro's ccmp stacks
-    # U+0308+U+0301 and 29 other pairs into one glyph, 21 of which no
-    # codepoint reaches, so neither the cmap sweep above nor the edges
-    # below could see them. A ligature is read only when EVERY component
-    # is a mark: Ą is A plus an ogonek, and calling that a mark zeroes
-    # its advance
-    edges = []
-    for lookup in (font["GSUB"].table.LookupList.Lookup
-                   if "GSUB" in font else []):
-        kind, subtables = _unwrap(lookup)
-        for sub in subtables:
-            if kind == 1:
-                edges += [([src], [dst])
-                          for src, dst in (getattr(sub, "mapping", None) or {}).items()]
-            elif kind == 2:
-                edges += [([src], list(dsts))
-                          for src, dsts in (getattr(sub, "mapping", None) or {}).items()]
-            elif kind == 3:
-                edges += [([src], list(dsts)) for src, dsts in
-                          (getattr(sub, "alternates", None) or {}).items()]
-            elif kind == 4:
-                for first, ligs in (getattr(sub, "ligatures", None) or {}).items():
-                    edges += [([first, *lig.Component], [lig.LigGlyph])
-                              for lig in ligs]
-    changed = True
-    while changed:
-        changed = False
-        for srcs, dsts in edges:
-            if any(defs.get(src) != 3 for src in srcs):
-                continue
-            for dst in dsts:
-                if defs.get(dst) != 3:
-                    defs[dst] = 3
-                    fixed.append(dst)
-                    changed = True
-    return fixed
 
 
 def panose_weight(us_weight_class):
@@ -4024,10 +3698,11 @@ def add_latin_fd(font):
     private.StemSnapV = [std_vw]
     td.FDArray.append(fd)
     index = len(td.FDArray) - 1
+    state_of(font).latin_fd = index
     # only glyphs append_glyph() created: Source Han Sans's own glyphs also
     # live above CID_ALLOC_START (its CID space is sparse) and call THEIR
     # FD's subroutines, so a CID-range test would corrupt them
-    for name in getattr(font, "_appended", ()):
+    for name in state_of(font).appended:
         td.FDSelect.gidArray[font.getGlyphID(name)] = index
     print(f"  Latin FD {index}: blues {blues} other {other} "
           f"StdHW {std_hw} StdVW {std_vw}")
@@ -4147,12 +3822,11 @@ def autohint_face(path, glyph_names):
     own hints on untouched glyphs are kept as shipped, so the run is
     seconds rather than the minutes hinting 19,000 glyphs takes. That is
     the grafted Latin, the ligatures, and whatever fit_to_grid and
-    widen_fullwidth moved — a few hundred more in the italic faces,
-    where Source Han Sans's Greek and Cyrillic survive.
+    widen_fullwidth moved.
     The Latin faces pass every glyph — the instancer drops SCP's hints.
-    SUMI_SKIP_AUTOHINT=1 skips it for quick local iterations."""
-    if os.environ.get("SUMI_SKIP_AUTOHINT"):
-        print("  autohint skipped (SUMI_SKIP_AUTOHINT)")
+    GENGOU_SKIP_AUTOHINT=1 skips it for quick local iterations."""
+    if os.environ.get("GENGOU_SKIP_AUTOHINT"):
+        print("  autohint skipped (GENGOU_SKIP_AUTOHINT)")
         return
     if not glyph_names:
         return
@@ -4257,13 +3931,13 @@ def face_matches(only, weight, face_label, suffix):
 def env_paths(spec):
     """{name: value} for the path environment variables in `spec`
     ({name: default or None when required}); exits naming every variable
-    that is unset or points nowhere. SUMI_VERSION (not a path) rides
+    that is unset or points nowhere. GENGOU_VERSION (not a path) rides
     along as-is."""
     env = {k: os.environ.get(k, d) for k, d in spec.items()}
     missing = [k for k, v in env.items() if not v or not Path(v).exists()]
     if missing:
         sys.exit(f"missing env: {missing}")
-    env["SUMI_VERSION"] = os.environ.get("SUMI_VERSION")
+    env["GENGOU_VERSION"] = os.environ.get("GENGOU_VERSION")
     return env
 
 
@@ -4319,6 +3993,9 @@ def build_face(job):
     latin = TTFont(latin_path)
     base = TTFont(Path(env["SHS_DIR"]) / shs_file)
     n_scp, replaced, default_map, marks = graft_halfwidth(base, latin)
+    # before any grid pass, so the Term widening never sees a full-width
+    # advance here (see notdef_to_cell)
+    notdef_to_cell(base, latin, CELL)
     # the locl forms first: SCP's ccmp composes the Greek breathing
     # marks from them, so they have to exist before that graft runs
     locl_order, locl_where = _locl_lookups(latin["GSUB"].table)
@@ -4334,9 +4011,10 @@ def build_face(job):
     added = latin_ligatures(base, latin, latin_path, alts, LIGATURES)
     add_gsub(base, added, alts, LIGATURES, variant_maps, variant_names)
     # after add_gsub, which appends to the same LookupList: the copied
-    # ccmp lookups' nested lookup indices are absolute, so nothing may
-    # renumber the list once they are in (drop_features below touches
-    # the FeatureList only)
+    # ccmp lookups' nested lookup indices are absolute, so whatever
+    # renumbers the list after this must renumber those too --
+    # import_scp_locl (_insert_lookups_first) and prune_orphan_lookups
+    # do, drop_features touches the FeatureList only
     n_ccmp += import_scp_ccmp(base, latin, default_map, marks)
     n_locl += import_scp_locl(base, latin, default_map,
                               scripts_with_langsys(base["GSUB"].table))
@@ -4352,10 +4030,6 @@ def build_face(job):
     # condensed from Source Han Sans's own advance and not from the one
     # the grid pass would give it
     n_half = narrow_halfwidth(base, CELL)
-    # and the Greek and Cyrillic the italic faces keep from Source Han
-    # Sans, for the same reason: on the donor's own advance, before the
-    # grid pass rounds the widest of them up to two columns
-    n_letters = narrow_letters(base, CELL)
     # then Source Han Sans's proportional leftovers onto the grid — every
     # glyph, so hwid's own 500-advance alternates and the locl forms no
     # codepoint reaches come along. It reads no features, so nothing
@@ -4366,6 +4040,10 @@ def build_face(job):
     # horizontal metrics, which a fixed cell has no use for. The
     # vertical features are left alone (the faces keep vmtx/vhea)
     drop_features(base, {"pwid", "palt", "kern", "halt"})
+    freed = prune_orphan_lookups(base)
+    if freed:
+        print("  lookups no feature reaches any more: "
+              + ", ".join(f"{t} {n}" for t, n in sorted(freed.items())))
     # the two-cell forms under fwid: the arrows redrawn from the
     # ligatures so they share their head, everything else Source Han
     # Sans's own — the full-width glyph the one-cell default replaced
@@ -4397,6 +4075,14 @@ def build_face(job):
         # the ligatures are the Latin layer's only multi-cell glyphs, so
         # the only ones an advance test cannot tell from a full width
         widen_fullwidth(base, CELL, skip=set(added.values()) | set(alts.values()))
+    # the letters this face has that the Latin face did not: Source Han
+    # Sans's full-width Latin (the fwid forms add_width_alternates maps
+    # the letters to, on which an accent landed at the cell's right
+    # edge) and any letter of the Latin scripts the donor lacks. Fitted
+    # from the lookups imported above, as on the Latin face, and last,
+    # on the ink every pass before has finished with
+    import anchors
+    n_loose = anchors.anchor_loose_letters(base)
     # OS/2 Unicode / code-page range bits, from the now-final cmap
     base["OS/2"].recalcUnicodeRanges(base)
     recalc_codepage_range(base)
@@ -4406,30 +4092,17 @@ def build_face(job):
     credits = donor_credits(latin)
     ps = set_names(base, suffix, weight, italic,
                    ref_angle if ref_angle is not None else -12.0,
-                   version=env.get("SUMI_VERSION"), credits=credits)
+                   version=env.get("GENGOU_VERSION"), credits=credits)
     add_stat(base, weight, italic)
     prune_orphan_names(base)
     update_bbox(base)
     out = Path(out_dir) / f"{ps}.otf"
-    write_face(base, out, getattr(base, "_redrawn", set()))
+    write_face(base, out, state_of(base).redrawn)
     return (f"{face_label}{f' [{suffix}]' if suffix else ''}: "
             f"latin={n_scp} fwid={len(fullwidth)} vert={n_vert} "
-            f"fitted={n_fit} half={n_half} letters={n_letters} "
-            f"ligs={len(added)} ccmp={n_ccmp} locl={n_locl} mark={n_mark} "
+            f"fitted={n_fit} half={n_half} "
+            f"ligs={len(added)} ccmp={n_ccmp} locl={n_locl} mark={n_mark} loose={n_loose} "
             f"tall={n_tall} -> {out.name}")
-
-
-# VFSource / _vf_source are build_latin.py's and build_latin_vf.py's
-# (build.py's own JP faces never instance a VF): one loaded VF and its
-# instances per process, keyed by path and axes
-_VF_CACHE = {}
-
-
-def _vf_source(path, scale, axes):
-    key = (str(path), scale, tuple(sorted(axes.items())))
-    if key not in _VF_CACHE:
-        _VF_CACHE[key] = VFSource(path, scale, axes)
-    return _VF_CACHE[key]
 
 
 def main():
@@ -4441,8 +4114,8 @@ def main():
 
     if only is None:
         # a full build must not leave faces from an older roster (e.g. the
-        # dropped ExtraLight/Light) for the release zip to pick up
-        stale = sorted(out_dir.glob("SumiMojiJP*.otf"))
+        # a weight dropped from FACES) for the release zip to pick up
+        stale = sorted(out_dir.glob("GengouCodeJP*.otf"))
         for f in stale:
             f.unlink()
         if stale:

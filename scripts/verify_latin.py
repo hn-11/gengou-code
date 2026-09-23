@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Regression test for the Latin-only faces (dist/latin/SumiMoji-*.otf):
+"""Regression test for the Latin-only faces (dist/latin/GengouCode-*.otf):
 every ligature fires, the guards hold, everything sits on the 600 grid,
 nothing CJK or full-width is left, and the metadata is the Latin font's
-own. Usage: python scripts/verify_latin.py dist/latin/SumiMoji-Regular.otf"""
+own. Usage: python scripts/verify_latin.py dist/latin/GengouCode-Regular.otf"""
 
-import os
 import sys
 from pathlib import Path
 
@@ -14,30 +13,51 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 import build  # noqa: E402
 import build_latin  # noqa: E402
-from verify import CASES  # noqa: E402
 from verifylib import (  # noqa: E402
     Checker,
-    check_accents_clear,
+    check_blank_glyphs,
+    check_cases,
+    check_cells,
+    check_charstring_metrics,
     check_coverage_order,
+    check_donor_letters,
+    check_donor_repertoire,
+    check_family_cmap,
+    check_family_names,
     check_features_work,
+    check_font_matrix,
+    check_gdef_classes,
     check_gdef_marks,
+    check_gdi_family_name,
+    check_grid,
     check_heights,
+    check_ink_inside,
+    check_latin_repertoire,
+    check_ligature_cells,
+    check_line_metrics,
     check_mark_class_closure,
-    check_mark_features,
+    check_marks,
+    check_monospace_metadata,
+    check_name_composition,
+    check_name_ids,
+    check_nerd_font_icons,
+    check_pair_positioning,
     check_private,
     check_stat,
-    check_stray_marks,
     check_style_bits,
+    check_substitution_identity,
     check_tables,
+    check_version_stamp,
+    check_weight_class,
     check_zones,
+    family_reference,
     glyph_has_hint,
     hmtx_mismatches,
     make_shaper,
-    weight_name,
 )
 
 FONT = Path(sys.argv[1]) if len(sys.argv) > 1 else (
-    ROOT / "dist" / "latin" / "SumiMoji-Regular.otf")
+    ROOT / "dist" / "latin" / "GengouCode-Regular.otf")
 CELL = build.CELL
 
 def main():
@@ -45,42 +65,18 @@ def main():
     check = Checker()
 
     name = tf["name"]
-    fam = name.getDebugName(16) or name.getDebugName(1)
-    # a Nerd Fonts variant ("Sumi Moji Nerd Font Mono", nerdpatch.nf_name)
-    # appends Nerd Fonts' own marker after the family — strip it before
-    # matching against the family name.
-    is_nf = bool(fam) and fam.endswith(" Nerd Font Mono")
-    base_fam = fam[:-len(" Nerd Font Mono")] if is_nf else (fam or "")
-    check(base_fam == build_latin.FAMILY, f"family name {fam!r}")
-    ps_family = build_latin.PS_FAMILY + ("NFM" if is_nf else "")
-    check((name.getDebugName(6) or "").startswith(ps_family + "-"),
-          f"PostScript name {name.getDebugName(6)!r}")
+    # a Nerd Fonts variant ("Gengou Code NF", nerdpatch.nf_name)
+    # appends Nerd Fonts' own marker after the family
+    is_nf = check_family_names(tf, check, build_latin.FAMILY, build_latin.PS_FAMILY)
     subfamily = name.getDebugName(17) or name.getDebugName(2) or ""
     italic = "Italic" in subfamily
     check_style_bits(tf, check, name.getDebugName(2) or "", italic)
-    # every nameID a font manager, a PDF and the Windows family model
-    # read. verify.py has required these on the JP faces since v3;
-    # stripping all seven from a Latin face passed every check here
-    for nid in (1, 2, 3, 4, 5, 6, 8, 9, 11, 13, 14):
-        check(bool(name.getDebugName(nid)), f"nameID {nid} is set")
-    # the weight the face calls ITSELF, in the number Windows sorts by:
-    # the PANOSE check below derives what it wants FROM usWeightClass,
-    # so the pair stayed self-consistent at any value — a Regular
-    # stamped 700 passed, and it is build.set_names' single line
-    weight = weight_name(subfamily)
-    if check(weight in build.WEIGHT_CLASS, f"subfamily names a weight ({weight!r})"):
-        check(tf["OS/2"].usWeightClass == build.WEIGHT_CLASS[weight],
-              f"OS/2 usWeightClass {tf['OS/2'].usWeightClass} "
-              f"(want {build.WEIGHT_CLASS[weight]} for {weight})")
+    check_gdi_family_name(tf, check)
+    check_name_ids(tf, check, (1, 2, 3, 4, 5, 6, 8, 9, 11, 13, 14))
+    weight = check_weight_class(tf, check, subfamily)
+    if weight:
         check_stat(tf, check, weight, italic)
-    want_version = os.environ.get("SUMI_VERSION")
-    if want_version:
-        major, minor = want_version.split(".")[:2]
-        check(abs(tf["head"].fontRevision - float(f"{major}.{minor}")) < 5e-4
-              and (name.getDebugName(5) or "").startswith(
-                  f"Version {want_version}"),
-              f"stamped {want_version} (fontRevision "
-              f"{tf['head'].fontRevision:.3f}, {name.getDebugName(5)!r})")
+    check_version_stamp(tf, check)
     n0 = name.getDebugName(0) or ""
     check("Source Code Pro:" in n0 and "Monaspace:" in n0
           and "Source Han Sans" not in n0,
@@ -88,35 +84,18 @@ def main():
 
     cmap = tf.getBestCmap()
     hmtx = tf["hmtx"]
-    check(len(cmap) >= 800, f"{len(cmap)} codepoints mapped")
-    check(not any(0x3000 <= cp <= 0x9FFF or 0xFF00 <= cp <= 0xFFEF for cp in cmap),
-          "no CJK / full-width codepoints")
-    bad = sorted({hmtx[g][0] for g in tf.getGlyphOrder()}
-                 - {0} - {CELL * n for n in range(1, 5)})
-    check(not bad, f"every advance is 0 or a whole number of {CELL} cells "
-                   f"(offenders: {bad})")
-    for ch in build.MONA_AMBIGUOUS:
-        if ord(ch) in cmap:
-            check(hmtx[cmap[ord(ch)]][0] == CELL, f"{ch!r} is one cell")
-    check(hmtx[tf.getGlyphOrder()[0]][0] == CELL, ".notdef is one cell")
+    check_latin_repertoire(check, cmap)
+    check_donor_repertoire(check, cmap)
+    check_grid(check, hmtx.metrics, CELL)
     widths, bearings, bounds = hmtx_mismatches(tf)
-    check(not widths, f"CFF charstring widths agree with hmtx ({widths[:3]})")
+    check_charstring_metrics(tf, check, widths, bearings)
     check_tables(tf, check, bounds, tf["hmtx"].metrics, cmap, codepages=True)
-    check(not bearings, f"hmtx bearings are the outlines' xMin ({len(bearings)} off, "
-                        f"e.g. {bearings[:3]})")
 
-    # WHERE the ink lands, not just how wide it is (verify.py has the same
-    # two): every check above holds on a face whose glyphs are all blank,
-    # or all drawn one cell to the right, so 'e' would sit wholly in its
-    # neighbour's column and the release would ship it. `bounds` holds
-    # only the glyphs that draw — hmtx_mismatches skips a blank one — so
-    # the count below is ink, not cmap entries
-    lean = CELL // 2
-    spill = [(g, hmtx[g][0], round(box[0]), round(box[2]))
-             for g, box in bounds.items()
-             if hmtx[g][0] > 0 and (box[0] < -lean or box[2] > hmtx[g][0] + lean)]
-    check(not spill, f"every glyph's ink is inside its advance, give or take "
-                     f"{lean}u of lean ({len(spill)} are not, e.g. {spill[:3]})")
+    # every check above holds on a face whose glyphs are all blank, or
+    # all drawn one cell to the right. `bounds` holds only the glyphs
+    # that draw -- hmtx_mismatches skips a blank one -- so the count
+    # below is ink, not cmap entries
+    check_ink_inside(check, bounds, hmtx, cmap, CELL)
     inked = sum(1 for g in cmap.values() if g in bounds)
     check(inked >= 700, f"{inked} of {len(cmap)} mapped codepoints draw ink")
     # and where inside the advance: half a cell of lean lets a quarter-
@@ -151,6 +130,18 @@ def main():
     for tbl in ("vhea", "vmtx", "VORG", "DSIG"):
         check(tbl not in tf, f"no {tbl} table")
     check_gdef_marks(tf, check, cmap)
+    check_gdef_classes(tf, check)
+    check_line_metrics(tf, check)
+    check_font_matrix(tf, check)
+    check_pair_positioning(tf, check)
+    check_substitution_identity(tf, check)
+    check_blank_glyphs(tf, check, tf.getGlyphSet())
+    check_name_composition(tf, check)
+    # the Regular of THIS face's own family (GengouCodeNF-Regular.otf
+    # beside a Nerd Font face): a hard-coded GengouCode-Regular.otf never
+    # sits beside dist/nerd/latin, so the gate was a no-op on all ten
+    # of those faces and 37 IPA letters could go (round 11, mutant B2)
+    check_family_cmap(tf, check, family_reference(FONT, tf))
     check_coverage_order(tf, check)
     check_mark_class_closure(tf, check)
     check_private(tf, check)
@@ -160,56 +151,26 @@ def main():
           f"GPOS keeps SCP's mark positioning, no kern ({sorted(gpos)})")
     check("STAT" in tf, "STAT present")
 
-    os2 = tf["OS/2"]
-    check(tf["post"].isFixedPitch == 1 and os2.panose.bProportion == 9,
-          "declared monospaced")
-    want_pw = build.panose_weight(os2.usWeightClass)
-    check(os2.panose.bWeight == want_pw,
-          f"PANOSE weight {os2.panose.bWeight} matches usWeightClass "
-          f"{os2.usWeightClass} (want {want_pw})")
-    hhea = tf["hhea"]
-    check((os2.sTypoAscender, os2.sTypoDescender, os2.sTypoLineGap)
-          == (hhea.ascent, hhea.descent, hhea.lineGap) and os2.fsSelection & 0x80,
-          "typo metrics == hhea metrics, USE_TYPO_METRICS set")
-    head = tf["head"]
-    check(os2.usWinAscent >= head.yMax and os2.usWinDescent >= -head.yMin,
-          f"win metrics cover the bbox ({os2.usWinAscent}/{os2.usWinDescent} "
-          f"vs {head.yMax}/{-head.yMin})")
+    check_monospace_metadata(tf, check)
 
     shape = make_shaper(FONT)
-    gs, order = tf.getGlyphSet(), tf.getGlyphOrder()
-    check_accents_clear(shape, gs, order, cmap, check)
+    gs = tf.getGlyphSet()
+    # the mark gates: the anchors themselves, their coverage, and what
+    # the shaper makes of them (verifylib says why there are seven)
+    check_marks(tf, check, shape, gs)
+    check_cells(tf, check, shape, gs, CELL)
+    check_ligature_cells(tf, shape, check, gs, CELL)
     check_heights(tf, check, gs, cmap)
     check_zones(tf, check, cmap)
-    check_mark_features(tf, check, shape, gs, order, cmap)
-    check_stray_marks(shape, gs, order, cmap, check, italic)
     check_features_work(shape, check, cmap)
-    on = {"calt": True, "liga": True}
-    for text, want in CASES:
-        if any(ord(c) > 0x2FFF for c in text):
-            continue   # the CJK case belongs to the JP families
-        got = len(shape(text, on)[0])
-        check(got == want, f"{text!r}: {got} glyphs (want {want})")
-    order = tf.getGlyphOrder()
-    for seq, spec in build.LIGATURES.items():
-        infos, positions = shape(f"a {seq} b", on)
-        mid = positions[2:len(infos) - 2]
-        adv = sum(p.x_advance for p in mid)
-        # and it draws: only the count and the advance were read, so a
-        # build that emptied all 61 set them as whitespace and passed
-        blank = [order[i.codepoint] for i in infos[2:len(infos) - 2]
-                 if order[i.codepoint] not in bounds]
-        check(adv == spec["cells"] * CELL and len(infos) <= 5 and not blank,
-              f"ligature {seq!r}: {len(infos)} glyphs, {adv}u"
-              + (f", blank: {blank}" if blank else ""))
+    check_cases(tf, shape, check)
+    check_donor_letters(tf, check, gs)
     off = {"calt": False, "liga": False}
     check(len(shape("a -> b", off)[0]) == 6, "calt/liga off leaves '->' plain")
     check(len(shape("a -> b", dict(off, ss02=True))[0]) == 5, "ss02 alone ligates '->'")
 
     if is_nf:
-        import nerdpatch
-        for ok, msg in nerdpatch.icon_checks(tf, nerdpatch.symbols_for_checks()):
-            check(ok, msg)
+        check_nerd_font_icons(tf, check)
 
     print("FAILED" if check.failed else "all checks passed")
     sys.exit(check.exit_code())

@@ -3,6 +3,7 @@
 import io
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pathops
 import pytest
@@ -17,8 +18,11 @@ from fontTools.ttLib.tables import otTables
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import anchors  # noqa: E402
 import build  # noqa: E402
-from conftest import make_font  # noqa: E402
+import nerdpatch  # noqa: E402
+import vfsource  # noqa: E402
+from conftest import make_cff_font, make_font  # noqa: E402
 
 # --- SCP feature tag remapping -------------------------------------------
 
@@ -52,7 +56,7 @@ def test_group_names_all_remap_nontrivially():
     an SCP font happened to carry a feature under one of our own tags
     (ss01-ss08, cv99), _remap_scp_tag alone would NOT filter it out: it
     would be remapped/kept just like any other SCP feature and collide
-    with the glyph variants Sumi Moji itself authors under that tag. That
+    with the glyph variants Gengou Code itself authors under that tag. That
     is exactly why import_scp_variants must skip fr.FeatureTag in
     GROUP_NAMES explicitly, before ever calling _remap_scp_tag."""
     for tag in build.GROUP_NAMES:
@@ -63,12 +67,12 @@ def test_group_names_all_remap_nontrivially():
 
 def test_latin_face_path_regular_upright():
     got = build.latin_face_path("dist/latin", "Regular", False)
-    assert got == Path("dist/latin") / "SumiMoji-Regular.otf"
+    assert got == Path("dist/latin") / "GengouCode-Regular.otf"
 
 
 def test_latin_face_path_bold_italic():
     got = build.latin_face_path("dist/latin", "Bold", True)
-    assert got == Path("dist/latin") / "SumiMoji-BoldItalic.otf"
+    assert got == Path("dist/latin") / "GengouCode-BoldItalic.otf"
 
 
 # --- the weight roster ----------------------------------------------------
@@ -407,18 +411,42 @@ def test_recalc_codepage_range_sets_and_clears_sampled_bits():
 
 # --- per-contour bounds (the '=' bar probe) ------------------------------
 
-def test_contour_bounds_ignores_curve_control_points():
-    # a cubic that bulges only slightly: control points sit at y=100 but the
-    # curve itself never reaches beyond y=75
-    segs = [("curveTo", [(0, 100), (100, 100), (100, 0)], (0, 0))]
-    (x0, y0, x1, y1), = build._contour_bounds([segs])
-    assert (x0, y0, x1) == (0, 0, 100)
-    assert y1 == pytest.approx(75.0)
+def test_contour_boxes_reads_the_curve_not_its_control_points():
+    """A cubic that bulges only slightly: the control points sit at
+    y=100 but the curve itself never reaches beyond y=75; an open
+    contour is a box too."""
+    class Glyph:
+        def draw(self, pen):
+            pen.moveTo((0, 0))
+            pen.curveTo((0, 100), (100, 100), (100, 0))
+            pen.closePath()
+            pen.moveTo((200, 0))
+            pen.lineTo((210, 20))
+            pen.endPath()
+    boxes = build.contour_boxes({"g": Glyph()}, "g")
+    assert len(boxes) == 2
+    assert boxes[0][:3] == (0, 0, 100) and boxes[0][3] == pytest.approx(75.0)
+    assert boxes[1] == (200, 0, 210, 20)
 
 
-def test_contour_bounds_open_contour_kept():
-    segs = [("lineTo", [(10, 20)], (0, 0))]
-    assert build._contour_bounds([segs]) == [(0, 0, 10, 20)]
+def test_contour_boxes_splits_all_off_curve_contours_with_no_movetos():
+    """A TrueType contour with no on-curve point at all draws as a bare
+    qCurveTo ending in None, with nothing recorded before it -- no
+    moveTo to split on (611 of the Nerd Fonts symbols draw this way).
+    Two such contours back to back, with no moveTo between them either,
+    must still come out as two boxes: closePath/endPath is what has to
+    do the splitting here, and without it these merge into one box
+    covering both."""
+    class Glyph:
+        def draw(self, pen):
+            pen.qCurveTo((0, 0), (100, 100), None)
+            pen.closePath()
+            pen.qCurveTo((300, 0), (400, 100), None)
+            pen.closePath()
+    boxes = build.contour_boxes({"g": Glyph()}, "g")
+    assert len(boxes) == 2
+    assert boxes[0] == (25.0, 25.0, 75.0, 75.0)
+    assert boxes[1] == (325.0, 25.0, 375.0, 75.0)
 
 
 # --- erosion for the Monaspace wght floor ---------------------------------
@@ -432,22 +460,23 @@ def test_erode_path_shrinks_every_side():
     pen.lineTo((100, 30))
     pen.lineTo((0, 30))
     pen.closePath()
-    out = build.erode_path(bar, 5)
+    out = vfsource.erode_path(bar, 5)
     assert tuple(round(v) for v in out.bounds) == (5, 5, 95, 25)
 
 
 def test_mona_glyphset_only_erodes_when_floor_was_hit():
     class Mona:
         gs = {"equal": object()}
+        erode = 0.0
 
         def getGlyphSet(self):
             return self.gs
     m = Mona()
-    assert build.mona_glyphset(m) is m.gs   # no erode attr
+    assert vfsource.mona_glyphset(m) is m.gs   # nothing to erode
     m.erode = 0.2
-    assert build.mona_glyphset(m) is m.gs   # below threshold
+    assert vfsource.mona_glyphset(m) is m.gs   # below threshold
     m.erode = 6.0
-    assert isinstance(build.mona_glyphset(m), build._ErodedGlyphSet)
+    assert isinstance(vfsource.mona_glyphset(m), vfsource._ErodedGlyphSet)
 
 
 # --- tiny TTF fixtures for the tests below --------------------------------
@@ -486,7 +515,7 @@ def test_guard_subtables_structure():
         ("less", "hyphen"): "lig_lh",
     }
 
-    subtables = build._guard_subtables(font, None, ligatures, 0)
+    subtables = build._guard_subtables(font, ligatures, 0)
     assert len(subtables) == 1
     st = subtables[0]
     assert st.Format == 1
@@ -669,7 +698,7 @@ def test_guard_subtables_keep_the_skip_only_for_lookahead_guards():
                    "lig_gge", "lig_ee", "lig_eee"]
     font = _tt_font(glyph_order, {ord(">"): "greater", ord("="): "equal"},
                     {g: 600 for g in glyph_order})
-    subtables = build._guard_subtables(font, None, {
+    subtables = build._guard_subtables(font, {
         ("greater", "equal"): "lig_ge", ("greater", "greater"): "lig_gg",
         ("greater", "greater", "equal"): "lig_gge",
         ("equal", "equal"): "lig_ee",
@@ -804,17 +833,10 @@ def _cff_font():
         pen.closePath()
         charstrings[g] = pen.getCharString()
 
-    fb = FontBuilder(1000, isTTF=False)
-    fb.setupGlyphOrder(glyph_order)
-    fb.setupCharacterMap({ord("A"): "A"})
-    fb.setupCFF("TestPS", {"FullName": "Test Full", "FamilyName": "Test Family"},
-               charstrings, {})
-    fb.setupHorizontalMetrics({".notdef": (0, 0), "A": (600, 0)})
-    fb.setupHorizontalHeader(ascent=800, descent=-200)
-    fb.setupNameTable({"familyName": "Test", "styleName": "Regular"})
-    fb.setupOS2()
-    fb.setupPost()
-    return fb.font
+    return make_cff_font(glyph_order, charstrings, {ord("A"): "A"},
+                         {".notdef": (0, 0), "A": (600, 0)}, ps="TestPS",
+                         font_info={"FullName": "Test Full", "FamilyName": "Test Family"},
+                         family="Test", style="Regular")
 
 
 def _cff_font_with_widths(widths, x0=0):
@@ -831,16 +853,9 @@ def _cff_font_with_widths(widths, x0=0):
         pen.lineTo((x0 + 100, 100))
         pen.closePath()
         charstrings[g] = pen.getCharString()
-    fb = FontBuilder(1000, isTTF=False)
-    fb.setupGlyphOrder(glyph_order)
-    fb.setupCharacterMap({0xE000 + i: g for i, g in enumerate(widths)})
-    fb.setupCFF("T", {}, charstrings, {})
-    fb.setupHorizontalMetrics({".notdef": (0, 0), **{g: (w, x0) for g, w in widths.items()}})
-    fb.setupHorizontalHeader(ascent=800, descent=-200)
-    fb.setupNameTable({"familyName": "T", "styleName": "R"})
-    fb.setupOS2()
-    fb.setupPost()
-    return fb.font
+    return make_cff_font(glyph_order, charstrings,
+                         {0xE000 + i: g for i, g in enumerate(widths)},
+                         {".notdef": (0, 0), **{g: (w, x0) for g, w in widths.items()}})
 
 
 def test_append_glyph_takes_the_donor_s_vertical_origin_not_its_bearing():
@@ -909,7 +924,7 @@ def test_fit_to_grid_centres_proportional_advances_on_the_grid():
         pen = BoundsPen(gs)
         gs[g].draw(pen)
         assert pen.bounds[0] == want_lsb == hmtx[g][1]     # centred, lsb kept in step
-    assert font._redrawn == {"kana", "jamo", "dash"}
+    assert build.state_of(font).redrawn == {"kana", "jamo", "dash"}
 
 
 def _path(points):
@@ -1084,76 +1099,59 @@ def test_widen_fullwidth_spares_the_ligatures_it_is_given():
         assert pen.bounds[0] == want_lsb == hmtx[g][1]
 
 
-def test_narrow_letters_puts_a_wide_cyrillic_on_the_cell():
-    """Source Code Pro Italic has no Cyrillic, so the italic faces keep
-    Source Han Sans's own, and grid_step rounded the widest of them up to
-    a full width — two terminal columns for a script every terminal
-    allots one. The advance goes to the cell for all of them; only the
-    outline whose ink does not fit is scaled."""
-    font = _cff_font_with_widths({"zhe": 918, "a": 602, "kanji": 1000})
-    font["cmap"].tables[0].cmap = {0x416: "zhe", 0x430: "a", 0x4E00: "kanji"}
-    gs = font.getGlyphSet()
+def test_notdef_to_cell_takes_the_donors_box_and_keeps_it():
+    """Source Han Sans's .notdef is full width, and a terminal gives an
+    uncovered codepoint one column, so the box pushed the rest of the
+    line along -- 1200 units into a 600-unit cell in the Term faces.
+    The donor's .notdef is drawn for the cell. It has to survive both
+    grid passes afterwards, including a family step map that still
+    carries the donor's full width for the name."""
+    font = _cff_font_with_widths({"a": 602, "kanji": 1000})
+    font["hmtx"].metrics[".notdef"] = (1000, 107)
+    latin = _cff_font_with_widths({"x": 600})
+    latin["hmtx"].metrics[".notdef"] = (600, 62)
 
-    def width(g):
-        pen = BoundsPen(gs)
-        gs[g].draw(pen)
-        return pen.bounds[2] - pen.bounds[0]
-
-    assert build.narrow_letters(font, 600) == 2
-    hmtx = font["hmtx"].metrics
-    assert hmtx["zhe"][0] == hmtx["a"][0] == 600
-    assert hmtx["kanji"][0] == 1000                  # not a letter
-    gs = font.getGlyphSet()
-    # 100 units of ink fit the cell, so neither is scaled: condensing
-    # costs stroke weight, and only a letter that overflows should pay it
-    assert width("zhe") == pytest.approx(100, abs=1)
-    assert width("a") == pytest.approx(100, abs=1)
-    # and fit_to_grid leaves them there, though the reference says 1000
-    assert build.fit_to_grid(font, 600, steps={"zhe": 1000, "a": 1000}) == 0
-    assert font["hmtx"].metrics["zhe"][0] == 600
+    assert build.notdef_to_cell(font, latin, 600) is True
+    assert font["hmtx"].metrics[".notdef"][0] == 600
+    # the family's reference still says full width; the pin wins
+    build.fit_to_grid(font, 600, steps={".notdef": 1000})
+    assert font["hmtx"].metrics[".notdef"][0] == 600
+    # and the Term pass only widens a full-width advance
+    build.widen_fullwidth(font, 600)
+    assert font["hmtx"].metrics[".notdef"][0] == 600
+    assert font["hmtx"].metrics["kanji"][0] == 1200      # this one does
 
 
-def test_narrow_letters_condenses_a_letter_to_the_cell_less_a_bearing():
-    """Only as far as it must: to the cell less the bearing the Latin
-    donor gives its own widest letters, so a condensed letter neither
-    abuts its neighbours nor loses more stroke weight than it has to."""
-    font = _cff_font_with_widths({"wide": 918})
-    cff = font["CFF "].cff
-    td = cff[cff.fontNames[0]]
-    pen = T2CharStringPen(918, None)
-    pen.moveTo((9, 0))            # 900 of ink in a 918 advance
-    pen.lineTo((909, 0))
-    pen.lineTo((909, 100))
-    pen.closePath()
-    td.CharStrings["wide"] = pen.getCharString(private=td.Private)
-    font["cmap"].tables[0].cmap = {0x416: "wide"}
-    assert build.narrow_letters(font, 600) == 1
-    assert font["hmtx"].metrics["wide"][0] == 600
-    pen = BoundsPen(font.getGlyphSet())
-    font.getGlyphSet()["wide"].draw(pen)
-    x0, x1 = pen.bounds[0], pen.bounds[2]
-    assert x1 - x0 == pytest.approx(600 - 2 * build.LETTER_BEARING, abs=1)
-    assert x0 + x1 == pytest.approx(600, abs=1)        # centred in the cell
-    assert x0 == pytest.approx(build.LETTER_BEARING, abs=1)
+def test_notdef_to_cell_leaves_a_donor_without_one_alone():
+    font = _cff_font_with_widths({"a": 602})
+    font["hmtx"].metrics[".notdef"] = (1000, 107)
+    latin = _cff_font_with_widths({"x": 600})
+    latin.setGlyphOrder([g for g in latin.getGlyphOrder() if g != ".notdef"])
+    assert build.notdef_to_cell(font, latin, 600) is False
+    assert font["hmtx"].metrics[".notdef"][0] == 1000
 
 
-def test_narrow_letters_leaves_the_latin_donor_s_own_glyphs_alone():
-    """In the upright faces Greek and Cyrillic come from Source Code Pro
-    and are a cell wide already; two of them (Җ җ) overhang the advance
-    by design, and squeezing those would make the JP face disagree with
-    its own Latin sibling."""
-    font = _cff_font_with_widths({"grafted": 600})
-    font["cmap"].tables[0].cmap = {0x496: "grafted"}
-    font._built = {"grafted"}
-    assert build.narrow_letters(font, 600) == 0
-
-
-def test_narrow_letters_leaves_a_shared_glyph_alone():
-    """In place, so condensing would narrow whatever else reaches it."""
-    font = _cff_font_with_widths({"shared": 918})
-    font["cmap"].tables[0].cmap = {0x416: "shared", 0x4E00: "shared"}
-    assert build.narrow_letters(font, 600) == 0
-    assert font["hmtx"].metrics["shared"][0] == 918
+def test_narrow_halfwidth_leaves_the_latin_donors_glyph_alone():
+    """The won sign is Halfwidth and came from the Latin donor a cell
+    wide; at Bold Italic its ink is 605 wide, and judged on ink width
+    alone this pass condensed it to zero side bearings at that one
+    weight while every other weight and the Latin face kept the glyph
+    as drawn. A glyph the donor supplied is its own."""
+    font = _cff_font_with_widths({"won": 600, "jamo": 920}, x0=0)
+    # ink wider than the cell on both: 'won' is the donor's, 'jamo' is not
+    for g in ("won", "jamo"):
+        pen = T2CharStringPen(0, None)
+        pen.moveTo((-3, 0))
+        pen.lineTo((605, 0))
+        pen.lineTo((605, 500))
+        pen.closePath()
+        td = font["CFF "].cff.topDictIndex[0]
+        td.CharStrings[g] = pen.getCharString(private=td.Private)
+    font["cmap"].tables[0].cmap = {0x20A9: "won", 0xFFA1: "jamo"}
+    build.state_of(font).built = {"won"}
+    assert build.narrow_halfwidth(font, 600) == 1
+    assert font.getBestCmap()[0x20A9] == "won"        # untouched
+    assert font.getBestCmap()[0xFFA1] != "jamo"       # the jamo got its copy
 
 
 def test_narrow_halfwidth_condenses_a_shared_glyph_into_the_cell():
@@ -1170,7 +1168,7 @@ def test_narrow_halfwidth_condenses_a_shared_glyph_into_the_cell():
     assert cmap[0x3131] == "jamo" and hmtx["jamo"][0] == 920      # untouched
     copy = cmap[0xFFA1]
     assert copy != "jamo" and hmtx[copy][0] == 600
-    assert copy not in font._appended            # keeps its own FontDict
+    assert copy not in build.state_of(font).appended            # keeps its own FontDict
     pen = BoundsPen(font.getGlyphSet())
     font.getGlyphSet()[copy].draw(pen)
     assert pen.bounds[2] - pen.bounds[0] == pytest.approx(100 * 600 / 920, abs=1)
@@ -1186,7 +1184,7 @@ def test_narrow_halfwidth_copies_are_out_of_reach_of_the_reference_steps():
     font["cmap"].tables[0].cmap = {0x3131: "jamo", 0xFFA1: "jamo"}
     assert build.narrow_halfwidth(font, 600) == 1
     copy = font.getBestCmap()[0xFFA1]
-    assert copy in font._built and copy not in font._appended
+    assert copy in build.state_of(font).built and copy not in build.state_of(font).appended
     # a reference that claims this very name is a full width
     assert build.fit_to_grid(font, 600, steps={copy: 1000, "jamo": 1000}) == 1
     assert font["hmtx"].metrics[copy][0] == 600        # still one cell
@@ -1315,7 +1313,7 @@ def test_widen_fullwidth_redraws_a_charstring_shift_declines(monkeypatch):
     monkeypatch.setattr(build, "shift_charstring", lambda *a, **k: False)
     build.widen_fullwidth(font, 600)
     assert font["hmtx"].metrics["full"][0] == 1200
-    assert font._redrawn == {"full"}
+    assert build.state_of(font).redrawn == {"full"}
     pen = BoundsPen(font.getGlyphSet())
     font.getGlyphSet()["full"].draw(pen)
     assert pen.bounds[0] == 120                      # centred in the new advance
@@ -1358,7 +1356,7 @@ def test_set_names():
                          credits=[("Monaspace", "Copyright GitHub",
                                   "Lettermatic")])
 
-    assert ps == "SumiMojiJPTerm-Bold"
+    assert ps == "GengouCodeJPTerm-Bold"
     copyright_ = name.getDebugName(0)
     assert build.PROJECT_COPYRIGHT in copyright_
     assert "© Adobe" in copyright_
@@ -1368,11 +1366,11 @@ def test_set_names():
     assert "Lettermatic" in designer
     assert name.getDebugName(8) == "hn-11"
     assert name.getDebugName(11) == build.PROJECT_URL
-    assert name.getDebugName(3).endswith(";SUMI;SumiMojiJPTerm-Bold")
-    assert name.getDebugName(6) == "SumiMojiJPTerm-Bold"
+    assert name.getDebugName(3).endswith(";GNGO;GengouCodeJPTerm-Bold")
+    assert name.getDebugName(6) == "GengouCodeJPTerm-Bold"
 
     os2 = font["OS/2"]
-    assert os2.achVendID == "SUMI"
+    assert os2.achVendID == "GNGO"
     assert os2.usWeightClass == 700
     assert os2.fsSelection & 0x20    # bold
     assert os2.fsSelection & 0x100   # WWS
@@ -1380,12 +1378,30 @@ def test_set_names():
     assert os2.version >= 4
 
 
+def test_set_names_credits_the_face_own_family_not_the_base():
+    """nameID 0 and 5 name the family the face is actually in. A Term
+    face saying "Gengou Code JP" filed it under a family it is not in, and
+    nerdpatch.rename marks whatever it finds -- so the Nerd Fonts Term
+    face's version string named the non-Term Nerd Fonts family."""
+    font = _cff_font()
+    build.set_names(font, "Term", "SemiBold", False, version="6.0.0")
+    name = font["name"]
+    assert name.getDebugName(1) == "Gengou Code JP Term SemiBold"
+    assert name.getDebugName(0).startswith("Gengou Code JP Term:")
+    assert name.getDebugName(5).startswith("Version 6.0.0;Gengou Code JP Term")
+    # and the base family keeps naming itself
+    plain = _cff_font()
+    build.set_names(plain, "", "SemiBold", False, version="6.0.0")
+    assert plain["name"].getDebugName(0).startswith("Gengou Code JP:")
+    assert plain["name"].getDebugName(5).startswith("Version 6.0.0;Gengou Code JP;")
+
+
 # --- donor_credits (Latin donor's own composed name IDs 0 / 9) -----------
 
 def test_donor_credits_parses_scp_and_monaspace_in_order():
     font = _tt_font([".notdef", "A"], {ord("A"): "A"}, {"A": 600})
     font["name"].setName(
-        "Sumi Moji: Copyright 2026 hn-11 (https://x). "
+        "Gengou Code: Copyright 2026 hn-11 (https://x). "
         "Source Code Pro: © 2023 Adobe (http://www.adobe.com/), with "
         "Reserved Font Name ‘Source’. "
         "Monaspace: Copyright 2023 GitHub, Inc. "
@@ -1413,7 +1429,7 @@ def test_donor_credits_parses_scp_and_monaspace_in_order():
 def test_donor_credits_designers_none_when_name_id_9_absent():
     font = _tt_font([".notdef", "A"], {ord("A"): "A"}, {"A": 600})
     font["name"].setName(
-        "Sumi Moji: Copyright 2026 hn-11 (https://x). "
+        "Gengou Code: Copyright 2026 hn-11 (https://x). "
         "Source Code Pro: © 2023 Adobe (http://www.adobe.com/), with "
         "Reserved Font Name ‘Source’. "
         "Monaspace: Copyright 2023 GitHub, Inc. "
@@ -1498,9 +1514,9 @@ def test_env_paths_reads_defaults_and_exits_on_missing(tmp_path, monkeypatch, ca
     b.mkdir()
     monkeypatch.setenv("SHS_DIR", str(a))
     monkeypatch.delenv("NF_SYMBOLS", raising=False)
-    monkeypatch.setenv("SUMI_VERSION", "9.9.9")
+    monkeypatch.setenv("GENGOU_VERSION", "9.9.9")
     env = build.env_paths({"SHS_DIR": None, "NF_SYMBOLS": str(b)})
-    assert env == {"SHS_DIR": str(a), "NF_SYMBOLS": str(b), "SUMI_VERSION": "9.9.9"}
+    assert env == {"SHS_DIR": str(a), "NF_SYMBOLS": str(b), "GENGOU_VERSION": "9.9.9"}
     monkeypatch.setenv("NF_SYMBOLS", str(tmp_path / "nowhere"))
     monkeypatch.delenv("SHS_DIR")
     with pytest.raises(SystemExit, match=r"missing env: \['SHS_DIR', 'NF_SYMBOLS'\]"):
@@ -1677,20 +1693,15 @@ def _extents_font():
             pen.lineTo((x0, y1))
             pen.closePath()
         charstrings[g] = pen.getCharString()
-    fb = FontBuilder(1000, isTTF=False)
-    fb.setupGlyphOrder(glyph_order)
-    fb.setupCharacterMap({ord("A"): "A", ord("B"): "B", ord(" "): "space"})
-    fb.setupCFF("Test", {"FullName": "Test"}, charstrings, {})
-    fb.setupHorizontalMetrics({".notdef": (600, 0), "A": (600, 20),
-                               "B": (700, -40), "space": (600, 0)})
-    fb.setupHorizontalHeader(ascent=800, descent=-200)
-    fb.setupVerticalMetrics({g: (1000, 100) for g in glyph_order})
-    fb.setupVerticalHeader(ascent=880, descent=-120)
-    fb.setupNameTable({"familyName": "Test", "styleName": "Regular"})
-    fb.setupOS2()
-    fb.setupPost()
+    font = make_cff_font(glyph_order, charstrings,
+                         {ord("A"): "A", ord("B"): "B", ord(" "): "space"},
+                         {".notdef": (600, 0), "A": (600, 20), "B": (700, -40),
+                          "space": (600, 0)},
+                         ps="Test", font_info={"FullName": "Test"},
+                         family="Test", style="Regular",
+                         vmetrics={g: (1000, 100) for g in glyph_order}, vhea=(880, -120))
     buf = io.BytesIO()
-    fb.font.save(buf)
+    font.save(buf)
     buf.seek(0)
     return TTFont(buf), boxes
 
@@ -1746,11 +1757,11 @@ def test_sync_lsb_sets_bearings_from_the_outlines():
     metrics["A"] = (600, 0)          # stale: the outline starts at 20
     metrics["space"] = (600, 7)      # blank glyph: left alone
 
-    assert build.sync_lsb(font) == 1
+    assert vfsource.sync_lsb(font) == 1
 
     assert metrics["A"] == (600, 20) and metrics["B"] == (700, -40)
     assert metrics["space"] == (600, 7)
-    assert build.sync_lsb(font) == 0
+    assert vfsource.sync_lsb(font) == 0
 
 
 def test_fit_to_grid_stretches_a_tiling_glyph_into_its_step():
@@ -1819,29 +1830,20 @@ def _vtiling_font():
                 pen.lineTo(pt)
             pen.closePath()
         charstrings[g] = pen.getCharString()
-    fb = FontBuilder(1000, isTTF=False)
-    fb.setupGlyphOrder(order)
-    fb.setupCharacterMap({0x2502: "vrule1", 0x2588: "block1",
-                          0x2581: "eighth1", 0x2580: "upper1",
-                          0x2506: "dash1", 0x2541: "diag1",
-                          0x2592: "shade1", 0x2500: "hrule1",
-                          0x2503: "heavy1"})
-    fb.setupCFF("T", {}, charstrings, {})
     metrics = {".notdef": (0, 0)}
     for g in order[1:]:
         wide = g.endswith("F") or g == "heavy1"
         box = min(pt[0] for c in shapes[g] for pt in c)
         metrics[g] = (1000 if wide else 600, box)
-    fb.setupHorizontalMetrics(metrics)
-    fb.setupHorizontalHeader(ascent=984, descent=-273)
-    fb.setupNameTable({"familyName": "T", "styleName": "R"})
-    fb.setupOS2()
-    fb.setupPost()
-    fb.addOpenTypeFeatures("feature fwid {\n" + "".join(
+    font = make_cff_font(order, charstrings,
+                         {0x2502: "vrule1", 0x2588: "block1", 0x2581: "eighth1",
+                          0x2580: "upper1", 0x2506: "dash1", 0x2541: "diag1",
+                          0x2592: "shade1", 0x2500: "hrule1", 0x2503: "heavy1"},
+                         metrics, ascent=984, descent=-273)
+    _with_gsub(font, "feature fwid {\n" + "".join(
         f"  sub {one} by {one[:-1]}F;\n"
         for one in ("vrule1", "block1", "eighth1", "upper1", "dash1",
                     "diag1", "shade1", "hrule1")) + "} fwid;\n")
-    font = fb.font
     # a character whose full-width form is the glyph itself: feaLib will
     # not write `sub X by X`, so it goes straight into the table
     gsub = font["GSUB"].table
@@ -2221,7 +2223,7 @@ def test_fullwidth_marks_reads_where_the_ink_is_centred_not_the_cell_edges():
     got = build.fullwidth_marks(font)
     assert got == {names[0x302A], names[0x3099], names[0x20DD]}
     # ... and ours, drawn one CELL left, are told apart by _built alone
-    font._built = frozenset({names[0x20DD]})
+    build.state_of(font).built = {names[0x20DD]}
     assert build.fullwidth_marks(font) == {names[0x302A], names[0x3099]}
 
 
@@ -2321,12 +2323,12 @@ def test_extend_realign_bases_adds_glyphs_appended_after_the_widening():
     assert build.realign_halfwidth_marks(font, {"mark": -100}, {"cjk": 100}) == 1
     chain = font["GPOS"].table.LookupList.Lookup[-1]
     assert chain.SubTable[0].BacktrackCoverage[-1].glyphs == ["half"]
-    assert build.extend_realign_bases(font, ["cjk", "half"]) == 4
+    assert nerdpatch.extend_realign_bases(font, ["cjk", "half"]) == 4
     gid = font.getGlyphID
     for sub in chain.SubTable:
         names = sub.BacktrackCoverage[-1].glyphs
         assert names == sorted(set(names), key=gid) == sorted(["half", "cjk"], key=gid)
-    assert build.extend_realign_bases(font, []) == 0
+    assert nerdpatch.extend_realign_bases(font, []) == 0
 
 
 def _ligature(components, name):
@@ -2374,7 +2376,7 @@ def test_classify_unicode_marks_follows_a_mark_through_its_substitutes():
         gsub.table.LookupList.Lookup.append(lookup)
     font["GSUB"] = gsub
 
-    fixed = build.classify_unicode_marks(font)
+    fixed = anchors.classify_unicode_marks(font)
     classes = font["GDEF"].table.GlyphClassDef.classDefs
     # the cmap'd mark, its variant, the variant's variant, and the
     # stack of two marks — but not the ligature a base takes part in
@@ -2382,4 +2384,1202 @@ def test_classify_unicode_marks_follows_a_mark_through_its_substitutes():
     assert classes["stack"] == 3
     assert classes["mark"] == classes["cap"] == classes["capalt"] == 3
     assert classes["base"] == 1 and "lig" not in classes
-    assert build.classify_unicode_marks(font) == []      # idempotent
+    assert anchors.classify_unicode_marks(font) == []      # idempotent
+
+
+class _Tbl:
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+
+def test_copy_line_metrics_takes_the_line_from_the_latin_and_pins_the_win_box():
+    """The line pitch comes from the Latin donor; the win box does not.
+    It is pinned, because it is a clipping bound in the GDI paths and
+    this family's ink runs far past any line it would be sane to
+    declare -- and because at Source Han Sans's own 288 the Latin
+    layer's box drawing (-400) and shade blocks (-454) were sliced."""
+    base = {"hhea": _Tbl(ascent=1160, descent=-288, lineGap=0),
+            "OS/2": _Tbl(sTypoAscender=1160, sTypoDescender=-288, sTypoLineGap=0,
+                         usWinAscent=1160, usWinDescent=288, fsSelection=0x40)}
+    latin = {"hhea": _Tbl(ascent=984, descent=-273, lineGap=0),
+             "OS/2": _Tbl(sTypoAscender=984, sTypoDescender=-273, sTypoLineGap=0,
+                          usWinAscent=1060, usWinDescent=454, fsSelection=0x40)}
+    build.copy_line_metrics(base, latin)
+    assert (base["hhea"].ascent, base["hhea"].descent) == (984, -273)
+    assert (base["OS/2"].sTypoAscender, base["OS/2"].sTypoDescender) == (984, -273)
+    assert base["OS/2"].fsSelection & (1 << 7)            # USE_TYPO_METRICS
+    assert (base["OS/2"].usWinAscent, base["OS/2"].usWinDescent) == build.WIN_METRICS
+    assert build.WIN_METRICS == (1160, 454)
+    # deep enough for the shade blocks, and not the typo descender
+    assert build.WIN_METRICS[1] >= 454 > 288
+
+
+def test_cell_fit_centres_what_fits_and_condenses_only_what_does_not():
+    """The one rule for seating a proportional glyph in a monospaced
+    cell, which build_latin.add_missing_from_sans applies. Condensing
+    costs stroke weight, so a glyph that already fits keeps its drawn
+    width and only its position moves."""
+    cell, bearing = 600, 8
+    room = cell - 2 * bearing
+
+    # fits: untouched horizontally, ink centred in the cell. 400 of ink
+    # in 600 leaves 100 either side, which is where it was already drawn
+    sx, dx = build.cell_fit((100, 0, 500, 700), cell, bearing)
+    assert (sx, dx) == (1.0, 0)
+    assert (100 + dx, 500 + dx) == (100, 500)
+
+    # too wide: condensed to exactly the room, then centred, so the ink
+    # lands on the bearing at each side
+    box = (0, 0, 918, 742)                       # Ж as Source Han Sans draws it
+    sx, dx = build.cell_fit(box, cell, bearing)
+    assert sx == room / 918
+    left, right = box[0] * sx + dx, box[2] * sx + dx
+    assert (round(left), round(right)) == (bearing, cell - bearing)
+
+    # exactly the room: still not condensed
+    sx, _ = build.cell_fit((0, 0, room, 100), cell, bearing)
+    assert sx == 1.0
+
+    # a blank glyph has nothing to seat
+    assert build.cell_fit(None, cell, bearing) == (1.0, 0)
+
+
+def test_cell_fit_ignores_where_the_ink_sits_when_centring():
+    """Only the ink's width decides the scale, and only its position
+    decides the offset: a glyph drawn far off its origin still lands in
+    the middle of the cell."""
+    for x0 in (-300, 0, 250):
+        sx, dx = build.cell_fit((x0, 0, x0 + 400, 500), 600, 8)
+        assert sx == 1.0
+        assert round(x0 + dx) == 100          # (600 - 400) / 2
+
+
+# --- prune_orphan_lookups --------------------------------------------------
+
+def _single(mapping):
+    st = otTables.SingleSubst()
+    st.mapping = dict(mapping)
+    lk = otTables.Lookup()
+    lk.LookupType, lk.LookupFlag, lk.SubTable = 1, 0, [st]
+    lk.SubTableCount = 1
+    return lk
+
+
+def _chain_f3(*targets):
+    """A format 3 chain context: its records sit on the subtable."""
+    st = otTables.ChainContextSubst()
+    st.Format = 3
+    st.SubstLookupRecord = []
+    for seq, idx in enumerate(targets):
+        rec = otTables.SubstLookupRecord()
+        rec.SequenceIndex, rec.LookupListIndex = seq, idx
+        st.SubstLookupRecord.append(rec)
+    lk = otTables.Lookup()
+    lk.LookupType, lk.LookupFlag, lk.SubTable = 6, 0, [st]
+    lk.SubTableCount = 1
+    return lk
+
+
+def _chain_f1(target):
+    """A format 1 chain context, whose records sit two objects down —
+    the nesting _lookup_records has to walk rather than enumerate."""
+    rec = otTables.SubstLookupRecord()
+    rec.SequenceIndex, rec.LookupListIndex = 0, target
+    rule = otTables.ChainSubRule()
+    rule.SubstLookupRecord = [rec]
+    rule.Backtrack, rule.Input, rule.LookAhead = [], [], []
+    rs = otTables.ChainSubRuleSet()
+    rs.ChainSubRule = [rule]
+    st = otTables.ChainContextSubst()
+    st.Format = 1
+    st.ChainSubRuleSet = [rs]
+    lk = otTables.Lookup()
+    lk.LookupType, lk.LookupFlag, lk.SubTable = 6, 0, [st]
+    lk.SubTableCount = 1
+    return lk
+
+
+class _FakeLookupList:
+    def __init__(self, lookups):
+        self.Lookup = list(lookups)
+        self.LookupCount = len(self.Lookup)
+
+
+def _gsub_with(lookups, feature_lookups):
+    """One 'calt' record over `feature_lookups`, named by one LangSys:
+    reachability starts at the LangSys, so a record nothing names is
+    no root."""
+    default = FakeLangSys([0])
+    default.ReqFeatureIndex = 0xFFFF
+    gsub = FakeGSUB([FakeFeatureRecord("calt", FakeFeature(list(feature_lookups)))],
+                    [FakeScriptRecord(FakeScript(default))])
+    gsub.LookupList = _FakeLookupList(lookups)
+    return gsub
+
+
+def test_prune_orphan_lookups_keeps_what_a_feature_reaches_through_a_chain():
+    """Reachability, not membership: lookup 3 is in no feature at all and
+    survives because a chain context calls it, while 1 and 2 go."""
+    gsub = _gsub_with([_chain_f3(3), _single({"a": "b"}), _single({"c": "d"}),
+                       _single({"e": "f"})], [0])
+    font = {"GSUB": FakeTable(gsub)}
+
+    assert build.prune_orphan_lookups(font) == {"GSUB": 2}
+
+    assert gsub.LookupList.LookupCount == 2
+    assert [lk.LookupType for lk in gsub.LookupList.Lookup] == [6, 1]
+    # the chain's callee moved from 3 to 1, and the feature still points at 0
+    assert (gsub.LookupList.Lookup[0].SubTable[0]
+            .SubstLookupRecord[0].LookupListIndex) == 1
+    assert gsub.FeatureList.FeatureRecord[0].Feature.LookupListIndex == [0]
+    assert gsub.LookupList.Lookup[1].SubTable[0].mapping == {"e": "f"}
+
+
+def test_prune_orphan_lookups_follows_a_chain_nested_in_rule_sets():
+    """Format 1 buries its records two objects deeper. Missing them would
+    drop a live lookup, which is worse than leaving a dead one."""
+    gsub = _gsub_with([_chain_f1(2), _single({"a": "b"}), _single({"e": "f"})],
+                      [0])
+    font = {"GSUB": FakeTable(gsub)}
+
+    assert build.prune_orphan_lookups(font) == {"GSUB": 1}
+    assert gsub.LookupList.Lookup[1].SubTable[0].mapping == {"e": "f"}
+    assert (gsub.LookupList.Lookup[0].SubTable[0].ChainSubRuleSet[0]
+            .ChainSubRule[0].SubstLookupRecord[0].LookupListIndex) == 1
+
+
+def test_prune_orphan_lookups_follows_a_chain_through_a_chain():
+    """Transitive: 0 calls 2, and 2 calls 3."""
+    gsub = _gsub_with([_chain_f3(2), _single({"a": "b"}), _chain_f3(3),
+                       _single({"e": "f"})], [0])
+    font = {"GSUB": FakeTable(gsub)}
+
+    assert build.prune_orphan_lookups(font) == {"GSUB": 1}
+    assert [lk.LookupType for lk in gsub.LookupList.Lookup] == [6, 6, 1]
+
+
+def test_prune_orphan_lookups_leaves_a_font_with_nothing_orphaned_alone():
+    lookups = [_single({"a": "b"}), _single({"c": "d"})]
+    gsub = _gsub_with(lookups, [0, 1])
+    font = {"GSUB": FakeTable(gsub)}
+
+    assert build.prune_orphan_lookups(font) == {}
+    assert gsub.LookupList.Lookup == lookups
+
+
+def test_prune_orphan_lookups_leaves_a_font_with_jstf_alone():
+    """JSTF indexes this same LookupList and nothing here renumbers it."""
+    gsub = _gsub_with([_single({"a": "b"}), _single({"c": "d"})], [0])
+    font = {"GSUB": FakeTable(gsub), "JSTF": object()}
+
+    assert build.prune_orphan_lookups(font) == {}
+    assert gsub.LookupList.LookupCount == 2
+
+
+# --- update_bbox_after -----------------------------------------------------
+
+class _FakeCFFTop:
+    def __init__(self):
+        self.FontBBox = [0, 0, 0, 0]
+
+
+class _FakeCFFIndex:
+    def __init__(self):
+        self.fontNames = ["T"]
+        self._td = _FakeCFFTop()
+
+    def __getitem__(self, name):
+        return self._td
+
+
+class _FakeCFFTable:
+    def __init__(self):
+        self.cff = _FakeCFFIndex()
+
+
+class _FakeMtx:
+    def __init__(self, metrics):
+        self.metrics = dict(metrics)
+
+
+def _extent_font(*, box=(0, -200, 600, 800), hhea=(600, 10, 20, 500),
+                 hmtx=None, vertical=False):
+    head = SimpleNamespace(xMin=box[0], yMin=box[1], xMax=box[2], yMax=box[3])
+    h = SimpleNamespace(advanceWidthMax=hhea[0], minLeftSideBearing=hhea[1],
+                        minRightSideBearing=hhea[2], xMaxExtent=hhea[3])
+    font = {"head": head, "hhea": h, "CFF ": _FakeCFFTable(),
+            "hmtx": _FakeMtx(hmtx or {})}
+    if vertical:
+        font["vhea"] = SimpleNamespace(advanceHeightMax=1000,
+                                       minTopSideBearing=5,
+                                       minBottomSideBearing=15,
+                                       yMaxExtent=900)
+        font["vmtx"] = _FakeMtx({n: (1000, 5) for n in (hmtx or {})})
+    return font
+
+
+def test_update_bbox_after_widens_the_box_and_the_extents():
+    font = _extent_font(hmtx={"icon": (600, 30)})
+    assert nerdpatch.update_bbox_after(font, {"icon": (30, -300, 700, 900)}, {})
+    head = font["head"]
+    assert (head.xMin, head.yMin, head.xMax, head.yMax) == (0, -300, 700, 900)
+    assert font["CFF "].cff["T"].FontBBox == [0, -300, 700, 900]
+    h = font["hhea"]
+    assert h.advanceWidthMax == 600                 # not beaten
+    assert h.minLeftSideBearing == 10               # 30 is not smaller
+    # size 670, advance 600, sb 30 -> far side -100, which is smaller
+    assert h.minRightSideBearing == -100
+    assert h.xMaxExtent == 700                      # 30 + 670
+
+
+def test_update_bbox_after_leaves_extents_a_new_glyph_cannot_beat():
+    font = _extent_font(hmtx={"icon": (600, 100)})
+    assert nerdpatch.update_bbox_after(font, {"icon": (100, 0, 200, 100)}, {})
+    h = font["hhea"]
+    assert (h.advanceWidthMax, h.minLeftSideBearing) == (600, 10)
+    assert (h.minRightSideBearing, h.xMaxExtent) == (20, 500)
+    head = font["head"]
+    assert (head.xMin, head.yMin, head.xMax, head.yMax) == (0, -200, 600, 800)
+
+
+def test_update_bbox_after_refuses_when_a_redrawn_glyph_held_the_box_up():
+    """The Latin faces' real case: a Powerline glyph reaching 1060 is
+    redrawn to 1000, and the old maximum cannot be taken back out of an
+    aggregate. Refusing is the whole point -- the alternative is a face
+    declaring ink it no longer has."""
+    font = _extent_font(box=(0, -200, 600, 1060), hmtx={"pl": (600, 0)})
+    dropped = {"pl": ((0, -200, 600, 1060), (600, 0), None)}
+    assert nerdpatch.update_bbox_after(font, {"pl": (0, -200, 600, 1000)},
+                                   dropped) is False
+    assert font["head"].yMax == 1060                # untouched, caller remeasures
+
+
+def test_update_bbox_after_refuses_when_a_redrawn_glyph_held_an_extent_up():
+    """Its old side bearing of 10 was minLeftSideBearing, and the glyph
+    that replaced it sits at 40."""
+    font = _extent_font(hhea=(600, 10, 20, 500), hmtx={"pl": (600, 40)})
+    dropped = {"pl": ((10, 0, 100, 100), (600, 10), None)}
+    assert nerdpatch.update_bbox_after(font, {"pl": (40, 0, 130, 100)},
+                                   dropped) is False
+
+
+def test_update_bbox_after_allows_a_rewrite_that_reaches_as_far():
+    """A rewrite takes nothing away while the new outline still holds
+    every extreme the old one did — which is what keeps the fast path
+    open for the JP faces, whose redrawn glyphs keep their cell."""
+    font = _extent_font(hhea=(600, 10, 20, 500), hmtx={"pl": (600, 10)})
+    dropped = {"pl": ((10, 0, 100, 100), (600, 10), None)}
+    assert nerdpatch.update_bbox_after(font, {"pl": (10, 0, 100, 100)}, dropped)
+    assert font["hhea"].minLeftSideBearing == 10
+
+
+def test_update_bbox_after_checks_the_vertical_extents_too():
+    """vhea has the same four, and a face with vmtx has to clear them
+    as well as hhea's."""
+    font = _extent_font(hmtx={"pl": (600, 40)}, vertical=True)
+    font["vmtx"].metrics["pl"] = (1000, 50)         # was 5, which WAS the min
+    dropped = {"pl": ((40, 0, 100, 100), (600, 40), (1000, 5))}
+    assert nerdpatch.update_bbox_after(font, {"pl": (40, 0, 100, 100)},
+                                   dropped) is False
+
+
+def test_append_glyph_gives_a_zero_width_mark_no_vertical_advance_either():
+    """A combining mark must not advance in either direction. Copying
+    the donor's vertical advance gave every grafted accent a full cell
+    of it, which is not what a mark is."""
+    font = _cff_font_with_widths({"A": 600})
+    font["vmtx"] = _FakeMtx({"A": (1000, 120)})
+    font["vhea"] = SimpleNamespace(ascent=880, descent=-120)
+    cff = font["CFF "].cff
+    td = cff[cff.fontNames[0]]
+    pen = T2CharStringPen(0, None)
+    pen.moveTo((0, 0))
+    pen.lineTo((100, 0))
+    pen.lineTo((100, 100))
+    pen.closePath()
+    cs = pen.getCharString()
+
+    build.append_glyph(font, td, "mark", cs, None, 0, vdonor="A")
+    build.append_glyph(font, td, "letter", cs, None, 600, vdonor="A")
+
+    assert font["hmtx"].metrics["mark"][0] == 0
+    assert font["vmtx"].metrics["mark"][0] == 0          # not the donor's 1000
+    assert font["hmtx"].metrics["letter"][0] == 600
+    assert font["vmtx"].metrics["letter"][0] == 1000     # a letter still does
+
+
+# --- import_donor_base_anchors ---------------------------------------------
+
+def _anchor(x, y):
+    a = otTables.Anchor()
+    a.Format, a.XCoordinate, a.YCoordinate = 1, x, y
+    return a
+
+
+def _markbase(marks, bases):
+    """One MarkBasePos: {mark glyph: (class, anchor)}, {base: [anchors]}."""
+    st = otTables.MarkBasePos()
+    st.Format = 1
+    st.ClassCount = 1
+    st.MarkCoverage = otTables.MarkCoverage()
+    st.MarkCoverage.glyphs = list(marks)
+    st.MarkArray = otTables.MarkArray()
+    st.MarkArray.MarkRecord = []
+    for cls, anc in marks.values():
+        rec = otTables.MarkRecord()
+        rec.Class, rec.MarkAnchor = cls, anc
+        st.MarkArray.MarkRecord.append(rec)
+    st.BaseCoverage = otTables.BaseCoverage()
+    st.BaseCoverage.glyphs = list(bases)
+    st.BaseArray = otTables.BaseArray()
+    st.BaseArray.BaseRecord = []
+    for anchor_list in bases.values():
+        rec = otTables.BaseRecord()
+        rec.BaseAnchor = list(anchor_list)
+        st.BaseArray.BaseRecord.append(rec)
+    st.BaseArray.BaseCount = len(bases)
+    lk = otTables.Lookup()
+    lk.LookupType, lk.LookupFlag, lk.SubTable = 4, 0, [st]
+    lk.SubTableCount = 1
+    return lk
+
+
+class _GposFont:
+    """Enough font for the mark helpers: a GPOS with `mark` over the
+    given lookups, a cmap, and a glyph order for getGlyphID."""
+
+    def __init__(self, lookups, cmap, order):
+        table = otTables.GPOS()
+        table.LookupList = _FakeLookupList(lookups)
+        fr = FakeFeatureRecord("mark", FakeFeature(list(range(len(lookups)))))
+        table.FeatureList = FakeFeatureList([fr])
+        self._tables = {"GPOS": FakeTable(table)}
+        self._cmap = dict(cmap)
+        self._order = list(order)
+
+    def __contains__(self, key):
+        return key in self._tables
+
+    def __getitem__(self, key):
+        return self._tables[key]
+
+    def getBestCmap(self):
+        return self._cmap
+
+    def getGlyphID(self, name):
+        return self._order.index(name)
+
+
+def test_pair_mark_lookups_matches_on_the_marks_each_one_attaches():
+    """Position would be an assumption; the marks they cover are the
+    fonts' own statement of what each lookup is for."""
+    top = {"acute": (0, _anchor(0, 0))}
+    bottom = {"cedilla": (0, _anchor(0, 0))}
+    ours = _GposFont([_markbase(bottom, {}), _markbase(top, {})],
+                     {0x0301: "acute", 0x0327: "cedilla"},
+                     [".notdef", "acute", "cedilla"])
+    theirs = _GposFont([_markbase(top, {}), _markbase(bottom, {})],
+                       {0x0301: "acute", 0x0327: "cedilla"},
+                       [".notdef", "acute", "cedilla"])
+    # ours: 0 is bottom, 1 is top; theirs: 0 is top, 1 is bottom
+    assert anchors.pair_mark_lookups(ours, theirs) == {0: 1, 1: 0}
+
+
+def test_pair_mark_lookups_gives_up_rather_than_guess():
+    """Two of ours wanting the same one of theirs is not a pairing, and
+    writing one class's anchors into another would misplace every accent
+    of that class."""
+    top = {"acute": (0, _anchor(0, 0))}
+    ours = _GposFont([_markbase(top, {}), _markbase(top, {})],
+                     {0x0301: "acute"}, [".notdef", "acute"])
+    theirs = _GposFont([_markbase(top, {})], {0x0301: "acute"},
+                       [".notdef", "acute"])
+    assert anchors.pair_mark_lookups(ours, theirs) == {}
+
+
+def test_pair_mark_lookups_refuses_a_tie():
+    """Two of theirs equally close to one of ours: picking either is a
+    coin toss, and the anchors of the wrong class land every accent of
+    that class somewhere else."""
+    top = {"acute": (0, _anchor(0, 0))}
+    ours = _GposFont([_markbase(top, {})], {0x0301: "acute"},
+                     [".notdef", "acute"])
+    theirs = _GposFont([_markbase(top, {}), _markbase(top, {})],
+                       {0x0301: "acute"}, [".notdef", "acute"])
+    assert anchors.pair_mark_lookups(ours, theirs) == {}
+
+
+def _cff_font_with_heights(heights):
+    """A CFF font whose glyphs are 100 units wide and as tall as given,
+    all one cell of advance. Varying heights are what tell a top-mark
+    lookup from a below-mark one: an anchor a fixed distance off one
+    edge is a varying distance off the other."""
+    glyph_order = [".notdef", *heights]
+    charstrings = {}
+    for g in glyph_order:
+        pen = T2CharStringPen(0, None)
+        pen.moveTo((0, 0))
+        pen.lineTo((100, 0))
+        pen.lineTo((100, heights.get(g, 100)))
+        pen.closePath()
+        charstrings[g] = pen.getCharString()
+    return make_cff_font(glyph_order, charstrings,
+                         {0xE000 + i: g for i, g in enumerate(heights)},
+                         {".notdef": (0, 0), **{g: (600, 0) for g in heights}})
+
+
+def _drawn_gpos_font(heights, cmap, lookups):
+    """A real CFF font (so _bounds can measure it) carrying a GPOS with
+    `mark` over the given lookups."""
+    font = _cff_font_with_heights(heights)
+    font["cmap"].tables[0].cmap = dict(cmap)
+    table = otTables.GPOS()
+    table.LookupList = _FakeLookupList(lookups)
+    table.FeatureList = FakeFeatureList(
+        [FakeFeatureRecord("mark", FakeFeature(list(range(len(lookups)))))])
+    font["GPOS"] = FakeTable(table)
+    return font
+
+
+def _edge_markbase(marks, heights, dy, top):
+    """A MarkBasePos whose base anchors sit `dy` off each base's ink top
+    (or bottom), centred on its 100-unit width."""
+    return _markbase(marks, {g: [_anchor(50, (h if top else 0) + dy)]
+                             for g, h in heights.items()})
+
+
+# heights that differ letter to letter: an anchor 20 above the ink top
+# is then a different distance above the ink bottom for each one, which
+# is what lets the fit tell the two edges apart
+_HEIGHTS = {f"b{i}": 400 + 20 * i for i in range(20)}
+
+
+def _letters_cmap(names, extra=()):
+    return {0x41 + i: g for i, g in enumerate(names)} | dict(extra)
+
+
+def test_anchor_loose_letters_gives_a_letter_the_rule_its_neighbours_follow():
+    """A mark these donors cannot place does not land approximately --
+    the shaper zeroes its spacing advance, so it lands a whole cell to
+    the right, on the next character. The rule comes from the anchors
+    the lookup already carries."""
+    heights = {**_HEIGHTS, "loose": 500, "acute": 100}
+    marks = {"acute": (0, _anchor(0, 0))}
+    font = _drawn_gpos_font(
+        heights,
+        _letters_cmap(_HEIGHTS, {0x0301: "acute", 0x5A: "loose"}),
+        [_edge_markbase(marks, _HEIGHTS, 20, top=True)])
+
+    assert anchors.anchor_loose_letters(font) == 1
+    sub = font["GPOS"].table.LookupList.Lookup[0].SubTable[0]
+    assert "loose" in sub.BaseCoverage.glyphs
+    assert sub.BaseCoverage.glyphs == sorted(sub.BaseCoverage.glyphs,
+                                             key=font.getGlyphID)
+    got = sub.BaseArray.BaseRecord[sub.BaseCoverage.glyphs.index("loose")]
+    # centred on the 100-unit width, 20 above this letter's own ink top
+    assert (got.BaseAnchor[0].XCoordinate,
+            got.BaseAnchor[0].YCoordinate) == (50, 520)
+    assert sub.BaseArray.BaseCount == len(sub.BaseCoverage.glyphs)
+
+
+def test_anchor_loose_letters_takes_the_x_of_the_letter_it_is_built_on():
+    """A letter the donor anchored off centre, and the same drawing with
+    something added to it: they are one shape, so the mark belongs in
+    one place. Predicted from the ink centre instead, the accent jumped
+    between them -- the diaeresis over L's stem and over the empty space
+    beside L-with-line-below, 149 units apart in the built face.
+
+    The y still comes off this letter's own ink, which is what puts a
+    mark above the accent the letter already carries."""
+    # U+1E3A is L with line below: canonically L + U+0331
+    heights = {"L": 656, "Lbar": 656, "acute": 100}
+    marks = {"acute": (0, _anchor(0, 0))}
+    # 20 bases so the rule fits, but L's anchor is 30 left of centre
+    filler = {f"b{i}": 400 + 20 * i for i in range(20)}
+    covered = _markbase(marks,
+                        {**{g: [_anchor(50, h + 20)] for g, h in filler.items()},
+                         "L": [_anchor(20, 676)]})
+    font = _drawn_gpos_font(
+        {**filler, **heights},
+        {**{0x41 + i: g for i, g in enumerate(filler)},
+         0x004C: "L", 0x1E3A: "Lbar", 0x0301: "acute"},
+        [covered])
+
+    assert anchors.anchor_loose_letters(font) == 1      # Lbar only; L is covered
+    sub = font["GPOS"].table.LookupList.Lookup[0].SubTable[0]
+    got = sub.BaseArray.BaseRecord[sub.BaseCoverage.glyphs.index("Lbar")]
+    assert got.BaseAnchor[0].XCoordinate == 20        # L's, not the centre 50
+    assert got.BaseAnchor[0].YCoordinate == 676       # its own ink top + 20
+
+
+def test_anchor_loose_letters_does_not_follow_a_compatibility_mapping():
+    """A superscript w is not a w with something added to it -- it is a
+    different letter drawn somewhere else, and its marks belong where
+    they fall, not over the letter it was derived from."""
+    filler = {f"b{i}": 400 + 20 * i for i in range(20)}
+    marks = {"acute": (0, _anchor(0, 0))}
+    covered = _markbase(marks,
+                        {**{g: [_anchor(50, h + 20)] for g, h in filler.items()},
+                         "w": [_anchor(11, 520)]})
+    font = _drawn_gpos_font(
+        {**filler, "w": 500, "wsuper": 700, "acute": 100},
+        {**{0x41 + i: g for i, g in enumerate(filler)},
+         0x0077: "w", 0x02B7: "wsuper", 0x0301: "acute"},
+        [covered])
+    assert anchors.anchor_loose_letters(font) == 1
+    sub = font["GPOS"].table.LookupList.Lookup[0].SubTable[0]
+    got = sub.BaseArray.BaseRecord[sub.BaseCoverage.glyphs.index("wsuper")]
+    assert got.BaseAnchor[0].XCoordinate == 50        # the rule's, not w's 11
+
+
+def test_anchor_loose_letters_reads_a_below_mark_lookup_off_the_ink_bottom():
+    """Which edge the anchors track is the lookup's own statement of
+    what it is for. Read off the top instead, a cedilla would be placed
+    an ink-height above where it belongs -- and the height differs per
+    letter, which is exactly why the wrong edge does not fit."""
+    heights = {**_HEIGHTS, "loose": 500, "cedilla": 100}
+    marks = {"cedilla": (0, _anchor(0, 0))}
+    font = _drawn_gpos_font(
+        heights,
+        _letters_cmap(_HEIGHTS, {0x0327: "cedilla", 0x5A: "loose"}),
+        [_edge_markbase(marks, _HEIGHTS, -14, top=False)])
+
+    assert anchors.anchor_loose_letters(font) == 1
+    sub = font["GPOS"].table.LookupList.Lookup[0].SubTable[0]
+    got = sub.BaseArray.BaseRecord[sub.BaseCoverage.glyphs.index("loose")]
+    # the ink bottom is 0, so -14; read off the top it would be 486
+    assert got.BaseAnchor[0].YCoordinate == -14
+
+
+def test_anchor_loose_letters_leaves_a_lookup_that_follows_no_rule_alone():
+    """Anchors scattered against both edges are a lookup placing each
+    mark by hand. Predicting one would put it somewhere of this build's
+    own invention, which is worse than the donor's answer -- even when
+    that answer is nothing."""
+    marks = {"acute": (0, _anchor(0, 0))}
+    scattered = _markbase(marks, {g: [_anchor(50, 300 + 37 * i)]
+                                  for i, g in enumerate(_HEIGHTS)})
+    font = _drawn_gpos_font(
+        {**_HEIGHTS, "loose": 500, "acute": 100},
+        _letters_cmap(_HEIGHTS, {0x0301: "acute", 0x5A: "loose"}),
+        [scattered])
+    assert anchors.anchor_loose_letters(font) == 0
+    assert font["GPOS"].table.LookupList.Lookup[0].SubTable[0] \
+        .BaseCoverage.glyphs == list(_HEIGHTS)
+
+
+def test_anchor_loose_letters_leaves_a_lookup_with_too_few_bases_alone():
+    marks = {"acute": (0, _anchor(0, 0))}
+    font = _drawn_gpos_font(
+        {"b0": 400, "loose": 500, "acute": 100},
+        {0x0301: "acute", 0x41: "b0", 0x5A: "loose"},
+        [_markbase(marks, {"b0": [_anchor(50, 420)]})])
+    assert anchors.anchor_loose_letters(font) == 0
+    assert font["GPOS"].table.LookupList.Lookup[0].SubTable[0] \
+        .BaseCoverage.glyphs == ["b0"]
+
+
+def test_fit_anchor_rules_keys_by_lookup_and_subtable():
+    """What a variable font's masters share. The rule is fitted once, on
+    the default master, and handed to the others, so the key has to name
+    the same subtable in every one of them."""
+    marks = {"acute": (0, _anchor(0, 0))}
+    font = _drawn_gpos_font(
+        {**_HEIGHTS, "loose": 500, "acute": 100},
+        _letters_cmap(_HEIGHTS, {0x0301: "acute", 0x5A: "loose"}),
+        [_edge_markbase(marks, _HEIGHTS, 20, top=True)])
+    rules = anchors.fit_anchor_rules(font)
+    assert list(rules) == [(0, 0)]
+    assert rules[(0, 0)] == (True, 0, 20)      # top edge, centred, +20
+
+
+def test_anchor_loose_letters_uses_the_rule_it_is_handed():
+    """Handed a rule, it does not refit: that is what keeps a variable
+    font's masters placing the same letters. Here the handed rule says
+    something the face's own anchors do not, and the handed one wins."""
+    marks = {"acute": (0, _anchor(0, 0))}
+    font = _drawn_gpos_font(
+        {**_HEIGHTS, "loose": 500, "acute": 100},
+        _letters_cmap(_HEIGHTS, {0x0301: "acute", 0x5A: "loose"}),
+        [_edge_markbase(marks, _HEIGHTS, 20, top=True)])
+    assert anchors.anchor_loose_letters(font, rules={(0, 0): (True, 7, 99)}) == 1
+    sub = font["GPOS"].table.LookupList.Lookup[0].SubTable[0]
+    got = sub.BaseArray.BaseRecord[sub.BaseCoverage.glyphs.index("loose")]
+    assert (got.BaseAnchor[0].XCoordinate,
+            got.BaseAnchor[0].YCoordinate) == (57, 599)   # 50+7, 500+99
+
+
+def test_anchor_loose_letters_handed_nothing_places_nothing():
+    """An empty rule set is how the variable path could have degraded in
+    silence -- every master agreeing perfectly on having done nothing.
+    The builders turn a count of 0 into an error for that reason."""
+    marks = {"acute": (0, _anchor(0, 0))}
+    font = _drawn_gpos_font(
+        {**_HEIGHTS, "loose": 500, "acute": 100},
+        _letters_cmap(_HEIGHTS, {0x0301: "acute", 0x5A: "loose"}),
+        [_edge_markbase(marks, _HEIGHTS, 20, top=True)])
+    assert anchors.anchor_loose_letters(font, rules={}) == 0
+    assert "loose" not in (font["GPOS"].table.LookupList.Lookup[0]
+                           .SubTable[0].BaseCoverage.glyphs)
+
+
+def test_anchor_loose_letters_skips_what_takes_no_accent():
+    """A symbol outside the Latin layer's spacing characters (an arrow)
+    gets no anchor; the ASCII period does (anchors.accent_bases)."""
+    marks = {"acute": (0, _anchor(0, 0))}
+    font = _drawn_gpos_font(
+        {**_HEIGHTS, "arrow": 100, "acute": 100},
+        _letters_cmap(_HEIGHTS, {0x0301: "acute", 0x2190: "arrow"}),
+        [_edge_markbase(marks, _HEIGHTS, 20, top=True)])
+    assert anchors.anchor_loose_letters(font) == 0
+    font = _drawn_gpos_font(
+        {**_HEIGHTS, "period": 100, "acute": 100},
+        _letters_cmap(_HEIGHTS, {0x0301: "acute", 0x2E: "period"}),
+        [_edge_markbase(marks, _HEIGHTS, 20, top=True)])
+    assert anchors.anchor_loose_letters(font) == 1
+
+
+def test_accent_bases_excludes_space_and_out_of_range_letters():
+    """The boundary decisions, not what gets in (that is covered above
+    through anchor_loose_letters): U+0020 SPACE is category Zs and below
+    the ASCII/Latin-1 branch's 0x21 floor, excluded on both counts; a
+    CJK ideograph (U+4E00, category Lo -- a letter by unicodedata) sits
+    in none of LETTER_RANGES, which is exactly the point of keying off
+    ranges rather than category alone -- LETTER_RANGES's own comment
+    says a JP face maps 17,000 such kanji "letters" that take no accent;
+    and U+037E GREEK QUESTION MARK falls inside LETTER_RANGES numerically
+    but is category Po, not a letter, and sits above 0xFF so the
+    ASCII/Latin-1 branch does not rescue it either."""
+    cmap = {0x41: "A", 0x20: "space", 0x4E00: "cjk", 0x37E: "greekq"}
+    assert anchors.accent_bases(cmap) == {"A"}
+
+
+def test_import_donor_base_anchors_moves_the_anchor_with_the_outline():
+    marks = {"acute": (0, _anchor(0, 0))}
+    ours = _GposFont([_markbase(marks, {"z": [_anchor(300, 700)]})],
+                     {0x0301: "acute", ord("z"): "z"},
+                     [".notdef", "acute", "alpha", "z"])
+    theirs = _GposFont([_markbase(marks, {"donor_alpha": [_anchor(400, 500)]})],
+                       {0x0301: "acute"}, [".notdef", "acute", "donor_alpha"])
+
+    added = anchors.import_donor_base_anchors(
+        ours, theirs, {"donor_alpha": ["alpha"]}, {"alpha": (0.5, 20)})
+
+    assert added == 1
+    sub = ours["GPOS"].table.LookupList.Lookup[0].SubTable[0]
+    # sorted by glyph id: alpha (2) before z (3), not appended at the end
+    assert sub.BaseCoverage.glyphs == ["alpha", "z"]
+    assert sub.BaseArray.BaseCount == 2
+    got = sub.BaseArray.BaseRecord[0].BaseAnchor[0]
+    assert (got.XCoordinate, got.YCoordinate) == (220, 500)   # 400*0.5 + 20
+    assert got.Format == 1
+    assert sub.BaseArray.BaseRecord[1].BaseAnchor[0].XCoordinate == 300
+
+
+def test_import_donor_base_anchors_leaves_a_base_the_face_already_has():
+    marks = {"acute": (0, _anchor(0, 0))}
+    ours = _GposFont([_markbase(marks, {"alpha": [_anchor(300, 700)]})],
+                     {0x0301: "acute"}, [".notdef", "acute", "alpha"])
+    theirs = _GposFont([_markbase(marks, {"donor_alpha": [_anchor(9, 9)]})],
+                       {0x0301: "acute"}, [".notdef", "acute", "donor_alpha"])
+    assert anchors.import_donor_base_anchors(
+        ours, theirs, {"donor_alpha": ["alpha"]}, {}) == 0
+    sub = ours["GPOS"].table.LookupList.Lookup[0].SubTable[0]
+    assert sub.BaseArray.BaseRecord[0].BaseAnchor[0].XCoordinate == 300
+
+
+def test_import_donor_base_anchors_serves_every_codepoint_one_glyph_draws():
+    """Source Sans draws U+03C6 and U+03D5 with a single 'phi', so the
+    map from donor glyph to ours is one-to-many. Keyed the other way it
+    kept the last codepoint only, and phi -- the Greek letter a
+    programmer is likeliest to type -- took its accent at offset 0,
+    a cell and a half to the right, on top of the next character."""
+    marks = {"acute": (0, _anchor(0, 0))}
+    ours = _GposFont([_markbase(marks, {})],
+                     {0x0301: "acute", 0x03C6: "phi", 0x03D5: "phi_symbol"},
+                     [".notdef", "acute", "phi", "phi_symbol"])
+    theirs = _GposFont([_markbase(marks, {"donor_phi": [_anchor(300, 500)]})],
+                       {0x0301: "acute"}, [".notdef", "acute", "donor_phi"])
+
+    added = anchors.import_donor_base_anchors(
+        ours, theirs, {"donor_phi": ["phi", "phi_symbol"]},
+        {"phi": (1.0, 0), "phi_symbol": (1.0, 0)})
+
+    assert added == 2
+    sub = ours["GPOS"].table.LookupList.Lookup[0].SubTable[0]
+    assert sub.BaseCoverage.glyphs == ["phi", "phi_symbol"]
+
+
+# --- import_donor_decompositions -------------------------------------------
+
+class _GsubFont:
+    """A GSUB whose 'ccmp' names `feature` (every lookup by default),
+    plus a cmap and a glyph order."""
+
+    def __init__(self, lookups, cmap, feature=None, glyph_order=None):
+        table = otTables.GSUB()
+        table.LookupList = _FakeLookupList(lookups)
+        named = list(range(len(lookups))) if feature is None else list(feature)
+        fr = FakeFeatureRecord("ccmp", FakeFeature(named))
+        table.FeatureList = FakeFeatureList([fr])
+        table.ScriptList = FakeScriptList([])
+        self._tables = {"GSUB": FakeTable(table)}
+        self._cmap = dict(cmap)
+        self._order = list(glyph_order or sorted(cmap.values()))
+
+    def __contains__(self, key):
+        return key in self._tables
+
+    def __getitem__(self, key):
+        return self._tables[key]
+
+    def getBestCmap(self):
+        return self._cmap
+
+    def getGlyphID(self, name):
+        return self._order.index(name)
+
+
+def _multiple(mapping):
+    st = otTables.MultipleSubst()
+    st.Format, st.mapping = 1, dict(mapping)
+    lk = otTables.Lookup()
+    lk.LookupType, lk.LookupFlag, lk.SubTable = 2, 0, [st]
+    lk.SubTableCount = 1
+    return lk
+
+
+def _chain(inputs, lookahead, callee, backtrack=()):
+    """A format-3 chain context calling `callee` at the input glyph."""
+    st = otTables.ChainContextSubst()
+    st.Format = 3
+    st.BacktrackCoverage = [_coverage(c) for c in backtrack]
+    st.BacktrackGlyphCount = len(st.BacktrackCoverage)
+    st.InputCoverage = [_coverage(inputs)]
+    st.InputGlyphCount = 1
+    st.LookAheadCoverage = [_coverage(c) for c in lookahead]
+    st.LookAheadGlyphCount = len(st.LookAheadCoverage)
+    rec = otTables.SubstLookupRecord()
+    st.SubstLookupRecord = [rec]
+    rec.SequenceIndex, rec.LookupListIndex = 0, callee
+    st.SubstCount = 1
+    lk = otTables.Lookup()
+    lk.LookupType, lk.LookupFlag, lk.SubTable = 6, 0, [st]
+    lk.SubTableCount = 1
+    return lk
+
+
+def _yi_donor(feature=(1,)):
+    """The shape Source Sans actually ships: the decomposition is a
+    callee, and only the chain that names a following acute is in ccmp."""
+    return _GsubFont([_multiple({"yi": ["dotlessi", "diaeresis"]}),
+                      _chain(["yi"], [["acute"]], 0)],
+                     {0x0131: "dotlessi", 0x0308: "diaeresis",
+                      0x0457: "yi", 0x0301: "acute"},
+                     feature=feature)
+
+
+def _yi_face(**cmap):
+    base = {0x0131: "our_dotlessi", 0x0308: "our_diaeresis",
+            0x0457: "our_yi", 0x0301: "our_acute"}
+    base.update(cmap)
+    return _GsubFont([_single({"a": "b"})], base)
+
+
+def test_import_donor_decompositions_keeps_the_donor_condition():
+    """The letter comes apart into glyphs the face already has at the
+    same codepoints -- but only where the donor takes it apart, which is
+    before a combining acute and nowhere else."""
+    ours, theirs = _yi_face(), _yi_donor()
+
+    assert anchors.import_donor_decompositions(
+        ours, theirs, {"yi": ["our_yi"]}) == 1
+
+    table = ours["GSUB"].table
+    # at the front, because a shaper runs a stage in LookupList order and
+    # this has to happen before the marks are composed
+    chain, multi = table.LookupList.Lookup[0], table.LookupList.Lookup[1]
+    assert (chain.LookupType, multi.LookupType) == (6, 2)
+    assert multi.SubTable[0].mapping == {
+        "our_yi": ["our_dotlessi", "our_diaeresis"]}
+    st = chain.SubTable[0]
+    assert st.InputCoverage[0].glyphs == ["our_yi"]
+    assert [c.glyphs for c in st.LookAheadCoverage] == [["our_acute"]]
+    assert st.SubstLookupRecord[0].LookupListIndex == 1      # the multi
+    # the lookup that was there is renumbered, and ccmp names the chain
+    # alone: naming the substitution is what strips the condition
+    assert table.LookupList.Lookup[2].LookupType == 1
+    assert table.FeatureList.FeatureRecord[0].Feature.LookupListIndex == [0, 2]
+
+
+def test_import_donor_decompositions_drops_a_rule_no_context_reaches():
+    """The regression this guards: copied unconditionally, every bare
+    Ukrainian yi in ordinary text was replaced by the Latin dotless i --
+    a different letterform, 23% wider in the ink -- plus a floating
+    diaeresis, and the yi we had just imported was never reached."""
+    ours = _yi_face()
+    theirs = _GsubFont([_multiple({"yi": ["dotlessi", "diaeresis"]})],
+                       {0x0131: "dotlessi", 0x0308: "diaeresis",
+                        0x0457: "yi", 0x0301: "acute"})
+    assert anchors.import_donor_decompositions(
+        ours, theirs, {"yi": ["our_yi"]}) == 0
+    assert len(ours["GSUB"].table.LookupList.Lookup) == 1     # nothing added
+
+
+def test_import_donor_decompositions_drops_a_context_it_cannot_reproduce():
+    """A lookahead we have no glyph for cannot be narrowed away -- the
+    rule would fire everywhere instead of before that one mark."""
+    ours = _yi_face()
+    del ours._cmap[0x0301]                       # no acute in this face
+    assert anchors.import_donor_decompositions(
+        ours, _yi_donor(), {"yi": ["our_yi"]}) == 0
+    assert len(ours["GSUB"].table.LookupList.Lookup) == 1
+
+
+def test_import_donor_decompositions_leaves_a_rule_we_cannot_resolve():
+    """An output the face has no glyph for would have to be grafted, and
+    grafting a mark means guessing at its advance and its anchors."""
+    ours = _GsubFont([], {0x0457: "our_yi", 0x0301: "our_acute"})
+    assert anchors.import_donor_decompositions(
+        ours, _yi_donor(), {"yi": ["our_yi"]}) == 0
+    assert ours["GSUB"].table.LookupList.Lookup == []
+
+
+def test_import_donor_decompositions_ignores_a_letter_we_did_not_import():
+    ours = _GsubFont([], {0x0131: "our_dotlessi", 0x0308: "our_diaeresis"})
+    theirs = _GsubFont([_multiple({"yi": ["dotlessi", "diaeresis"]})],
+                       {0x0131: "dotlessi", 0x0308: "diaeresis", 0x0457: "yi"})
+    assert anchors.import_donor_decompositions(ours, theirs, {}) == 0
+
+
+# --- the marks' side of the anchor gap, and the stacked-accent lift ------
+
+def _gdef_marks(font, marks):
+    """A GDEF filing `marks` as marks (class 3) on a font that has none."""
+    from fontTools.ttLib import newTable
+    gdef = newTable("GDEF")
+    gdef.table = otTables.GDEF()
+    gdef.table.Version = 0x00010000
+    gdef.table.GlyphClassDef = otTables.GlyphClassDef()
+    gdef.table.GlyphClassDef.classDefs = {g: 3 for g in marks}
+    gdef.table.AttachList = gdef.table.LigCaretList = None
+    gdef.table.MarkAttachClassDef = gdef.table.MarkGlyphSetsDef = None
+    font["GDEF"] = gdef
+
+
+def _sixteen_marks(anchor=(50, 0)):
+    return {f"m{i}": (0, _anchor(*anchor)) for i in range(16)}
+
+
+def test_anchor_loose_marks_gives_an_uncovered_mark_the_lookups_anchor():
+    """Source Code Pro Italic leaves the candrabindu out of the lookup
+    the upright has it in, so on every italic face it landed a cell to
+    the right of its letter. Within a lookup the donor gives every
+    mark one anchor; the median is what the missing one gets, in the
+    lookup whose marks' ink sits where its own does. A mark drawn far
+    from any lookup's marks (an overlay, a mark below) gets nothing
+    from a lookup of above-marks, and a double diacritic is not a mark
+    to place on one base."""
+    marks = _sixteen_marks()
+    heights = {**_HEIGHTS, **dict.fromkeys(marks, 100),
+               "candra": 100, "tall": 800, "dbl": 100}
+    cmap = _letters_cmap(_HEIGHTS, {0x0300 + i: g for i, g in enumerate(marks)})
+    cmap |= {0x0310: "candra", 0x0334: "tall", 0x035F: "dbl"}
+    font = _drawn_gpos_font(heights, cmap,
+                            [_markbase(marks, {g: [_anchor(50, h + 20)]
+                                               for g, h in _HEIGHTS.items()})])
+    _gdef_marks(font, [*marks, "candra", "tall", "dbl"])
+
+    assert anchors.anchor_loose_marks(font) == 1
+    sub = font["GPOS"].table.LookupList.Lookup[0].SubTable[0]
+    assert "candra" in sub.MarkCoverage.glyphs
+    assert "tall" not in sub.MarkCoverage.glyphs and "dbl" not in sub.MarkCoverage.glyphs
+    assert sub.MarkCoverage.glyphs == sorted(sub.MarkCoverage.glyphs, key=font.getGlyphID)
+    rec = sub.MarkArray.MarkRecord[sub.MarkCoverage.glyphs.index("candra")]
+    assert (rec.Class, rec.MarkAnchor.XCoordinate, rec.MarkAnchor.YCoordinate) == (0, 50, 0)
+    assert sub.MarkArray.MarkCount == len(sub.MarkCoverage.glyphs)
+
+
+def test_anchor_loose_marks_needs_a_lookup_big_enough_to_speak_for_a_mark():
+    """Five marks are a donor's special case, not a rule to extend."""
+    marks = {f"m{i}": (0, _anchor(50, 0)) for i in range(5)}
+    heights = {**_HEIGHTS, **dict.fromkeys(marks, 100), "candra": 100}
+    cmap = _letters_cmap(_HEIGHTS, {0x0300 + i: g for i, g in enumerate(marks)})
+    cmap |= {0x0310: "candra"}
+    font = _drawn_gpos_font(heights, cmap,
+                            [_markbase(marks, {g: [_anchor(50, h + 20)]
+                                               for g, h in _HEIGHTS.items()})])
+    _gdef_marks(font, [*marks, "candra"])
+    assert anchors.anchor_loose_marks(font) == 0
+
+
+def _markmark(mark1, mark2):
+    """One MarkMarkPos: {mark: (class, anchor)} stacking on {mark: [anchors]}."""
+    st = otTables.MarkMarkPos()
+    st.Format = 1
+    st.ClassCount = 1
+    st.Mark1Coverage = otTables.Mark1Coverage()
+    st.Mark1Coverage.glyphs = list(mark1)
+    st.Mark1Array = otTables.Mark1Array()
+    st.Mark1Array.MarkRecord = []
+    for cls, anc in mark1.values():
+        rec = otTables.MarkRecord()
+        rec.Class, rec.MarkAnchor = cls, anc
+        st.Mark1Array.MarkRecord.append(rec)
+    st.Mark2Coverage = otTables.Mark2Coverage()
+    st.Mark2Coverage.glyphs = list(mark2)
+    st.Mark2Array = otTables.Mark2Array()
+    st.Mark2Array.Mark2Record = []
+    for anchor_list in mark2.values():
+        rec = otTables.Mark2Record()
+        rec.Mark2Anchor = list(anchor_list)
+        st.Mark2Array.Mark2Record.append(rec)
+    st.Mark2Array.MarkCount = len(mark2)
+    lk = otTables.Lookup()
+    lk.LookupType, lk.LookupFlag, lk.SubTable = 6, 0, [st]
+    lk.SubTableCount = 1
+    return lk
+
+
+def _mkmk_font(stack):
+    """A font whose one mkmk lookup stacks grave and acute on each
+    other: {mark: (Mark1 y, Mark2 y)}."""
+    cmap = {0x0300: "grave", 0x0301: "acute"}
+    font = _GposFont([_markmark({g: (0, _anchor(50, y1)) for g, (y1, _) in stack.items()},
+                                {g: [_anchor(50, y2)] for g, (_, y2) in stack.items()})],
+                     cmap, [".notdef", "grave", "acute"])
+    font["GPOS"].table.FeatureList.FeatureRecord[0].FeatureTag = "mkmk"
+    return font
+
+
+def _mark2_y(font, name):
+    st = font["GPOS"].table.LookupList.Lookup[0].SubTable[0]
+    return st.Mark2Array.Mark2Record[st.Mark2Coverage.glyphs.index(name)].Mark2Anchor[0].YCoordinate
+
+
+def test_mirror_stack_lift_copies_the_uprights_lift_onto_a_collapsed_anchor():
+    """Source Code Pro Italic's grave carries its Mark2 anchor at the
+    height its own Mark1 attaches at, so a second accent stacks ON it;
+    the upright lifts the second by 111 at Regular. The italic takes
+    that lift. A mark whose Mark2 already differs from its Mark1 is the
+    designer's and stays."""
+    ours = _mkmk_font({"grave": (500, 500), "acute": (500, 640)})
+    model = _mkmk_font({"grave": (500, 611), "acute": (500, 700)})
+    assert anchors.mirror_stack_lift(ours, model) == 1
+    assert _mark2_y(ours, "grave") == 611
+    assert _mark2_y(ours, "acute") == 640
+
+
+def test_mirror_stack_lift_leaves_what_the_model_does_not_lift():
+    """At wght 200 the upright collapses too; there is nothing to copy."""
+    ours = _mkmk_font({"grave": (500, 500), "acute": (500, 500)})
+    model = _mkmk_font({"grave": (500, 500), "acute": (500, 500)})
+    assert anchors.mirror_stack_lift(ours, model) == 0
+    assert _mark2_y(ours, "grave") == 500
+
+
+def _with_gsub(font, fea):
+    from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
+    addOpenTypeFeaturesFromString(font, fea, tables=["GSUB"])
+    return font
+
+
+def test_letter_variants_follows_single_and_alternate_substitutions_two_steps():
+    """The shaper substitutes before it positions: an accent on a letter
+    locl has swapped attaches to the substitute."""
+    heights = {"a": 500, "a.srb": 500, "a.srb2": 500, "b": 500, "b.alt": 500, "c": 500}
+    font = _cff_font_with_heights(heights)
+    font["cmap"].tables[0].cmap = {0x61: "a", 0x62: "b", 0x63: "c"}
+    _with_gsub(font, "feature locl { sub a by a.srb; } locl;\n"
+                     "feature ss01 { sub a.srb by a.srb2; } ss01;\n"
+                     "feature salt { sub b from [b.alt]; } salt;\n")
+    assert anchors._letter_variants(font, {"a", "b", "c"}) == {"a.srb", "a.srb2", "b.alt"}
+
+
+def test_anchor_loose_letters_covers_what_gsub_makes_of_a_letter():
+    """The Serbian locl б was in no BaseCoverage, so under `sr` an
+    accent on it landed a cell right, on the next character."""
+    heights = {**_HEIGHTS, "z": 500, "z.srb": 520, "acute": 100}
+    marks = {"acute": (0, _anchor(0, 0))}
+    font = _drawn_gpos_font(
+        heights, _letters_cmap(_HEIGHTS, {0x0301: "acute", 0x7A: "z"}),
+        [_edge_markbase(marks, _HEIGHTS, 20, top=True)])
+    _with_gsub(font, "feature locl { sub z by z.srb; } locl;\n")
+    assert anchors.anchor_loose_letters(font) == 2
+    sub = font["GPOS"].table.LookupList.Lookup[0].SubTable[0]
+    got = sub.BaseArray.BaseRecord[sub.BaseCoverage.glyphs.index("z.srb")].BaseAnchor[0]
+    assert (got.XCoordinate, got.YCoordinate) == (50, 540)
+
+
+def test_round_outlines_merges_the_overlaps_the_instancer_leaves():
+    """A variable font's masters keep overlapping contours; the static
+    faces drew 300 letters with them, and FreeType rendered a seam at
+    each join. Two overlapping squares come out as one outline of
+    their union's area."""
+    import build_latin
+    from fontTools.pens.areaPen import AreaPen
+    font = _cff_font_with_heights({"a": 100})
+    pen = T2CharStringPen(0, None)
+    for x0 in (0, 50):
+        pen.moveTo((x0, 0))
+        pen.lineTo((x0 + 100, 0))
+        pen.lineTo((x0 + 100, 100))
+        pen.lineTo((x0, 100))
+        pen.closePath()
+    td = font["CFF "].cff.topDictIndex[0]
+    td.CharStrings["a"] = pen.getCharString(private=td.Private)
+    build_latin.round_outlines(font)
+    area = AreaPen(font.getGlyphSet())
+    font.getGlyphSet()["a"].draw(area)
+    assert abs(area.value) == 150 * 100
+    assert font["hmtx"].metrics["a"] == (600, 0)
+
+
+def test_anchor_loose_marks_keeps_every_other_marks_anchor_across_two_insertions():
+    """The second insertion once paired a record list kept from before
+    the first with the fresh coverage, one off: the italic's caron took
+    the .cap anchor and drew through b's ascender."""
+    marks = _sixteen_marks()
+    marks["hi0"] = (0, _anchor(50, 180))       # a higher-drawn mark, its own anchor
+    heights = {**_HEIGHTS, **dict.fromkeys(marks, 100), "hi0": 300,
+               "candra": 100, "candra.cap": 300}
+    cmap = _letters_cmap(_HEIGHTS, {0x0300 + i: g for i, g in enumerate(marks)})
+    cmap |= {0x0310: "candra"}
+    font = _drawn_gpos_font(heights, cmap,
+                            [_markbase(marks, {g: [_anchor(50, h + 20)]
+                                               for g, h in _HEIGHTS.items()})])
+    _gdef_marks(font, [*marks, "candra", "candra.cap"])
+    _with_gsub(font, "feature ccmp { sub candra by candra.cap; } ccmp;\n")
+    before = {g: (r.MarkAnchor.XCoordinate, r.MarkAnchor.YCoordinate)
+              for g, r in zip(*[(s.MarkCoverage.glyphs, s.MarkArray.MarkRecord)
+                                for s in [font["GPOS"].table.LookupList.Lookup[0].SubTable[0]]][0])}
+    assert anchors.anchor_loose_marks(font) == 2
+    sub = font["GPOS"].table.LookupList.Lookup[0].SubTable[0]
+    after = {g: (r.MarkAnchor.XCoordinate, r.MarkAnchor.YCoordinate)
+             for g, r in zip(sub.MarkCoverage.glyphs, sub.MarkArray.MarkRecord)}
+    assert all(after[g] == a for g, a in before.items())
+    assert after["candra"] == (50, 0) and after["candra.cap"] == (50, 180)
+
+
+def test_letter_variants_reach_a_lookup_only_a_chain_context_calls():
+    """The .cap forms of the marks come out of lookups no feature lists
+    (ccmp chains to them): with no feature filter every lookup is
+    walked; with the default filter, ccmp's are not letter variants."""
+    heights = {"a": 500, "a.cap": 500, "b": 500}
+    font = _cff_font_with_heights(heights)
+    font["cmap"].tables[0].cmap = {0x61: "a", 0x62: "b"}
+    _with_gsub(font, "lookup CAP { sub a by a.cap; } CAP;\n"
+                     "feature ccmp { sub b a' lookup CAP; } ccmp;\n")
+    assert anchors._letter_variants(font, {"a"}, features=None) == {"a.cap"}
+    assert anchors._letter_variants(font, {"a"}) == set()
+
+
+def test_anchor_loose_marks_leaves_a_mark_no_covered_mark_is_drawn_beside():
+    """Within the lookup's band but with no covered mark within `near`
+    of its own height, the mark has no anchor to take and is left."""
+    marks = _sixteen_marks()
+    heights = {**_HEIGHTS, **dict.fromkeys(marks, 100), "odd": 300}
+    cmap = _letters_cmap(_HEIGHTS, {0x0300 + i: g for i, g in enumerate(marks)})
+    cmap |= {0x0310: "odd"}
+    font = _drawn_gpos_font(heights, cmap,
+                            [_markbase(marks, {g: [_anchor(50, h + 20)]
+                                               for g, h in _HEIGHTS.items()})])
+    _gdef_marks(font, [*marks, "odd"])
+    assert anchors.anchor_loose_marks(font) == 0
+
+
+def test_mirror_stack_lift_skips_a_mark_whose_classes_differ_from_the_models():
+    ours = _mkmk_font({"grave": (500, 500)})
+    model = _mkmk_font({"grave": (500, 611)})
+    st = model["GPOS"].table.LookupList.Lookup[0].SubTable[0]
+    st.Mark2Array.Mark2Record[0].Mark2Anchor.append(_anchor(50, 700))
+    assert anchors.mirror_stack_lift(ours, model) == 0
+    assert _mark2_y(ours, "grave") == 500
+
+
+def test_raise_marks_after_capitals_adds_every_capital_to_the_swap_context():
+    """The donor's ccmp names the capitals after which an above-mark is
+    swapped for its raised form; the italic named the Latin ones only.
+    Every cmapped capital of the Latin scripts joins the backtrack of
+    the chain context that calls the swap (a class of twenty capitals
+    or more, calling a lookup that takes the encoded marks to unencoded
+    forms); a lowercase letter does not."""
+    caps = [f"C{i}" for i in range(20)]
+    marks = [f"m{i}" for i in range(20)]
+    heights = {**dict.fromkeys(caps, 700), "Alpha": 700, "Be": 700, "a": 500,
+               "acute.cap": 500, **dict.fromkeys(marks, 500)}
+    font = _cff_font_with_heights(heights)
+    font["cmap"].tables[0].cmap = {**{0x41 + i: g for i, g in enumerate(caps)},
+                                   0x391: "Alpha", 0x411: "Be", 0x61: "a",
+                                   **{0x300 + i: g for i, g in enumerate(marks)}}
+    _with_gsub(font, "lookup CAP { " + " ".join(f"sub {m} by acute.cap;" for m in marks)
+               + " } CAP;\nfeature ccmp { sub [" + " ".join(caps) + "] ["
+               + " ".join(marks) + "]' lookup CAP; } ccmp;\n")
+    assert anchors.raise_marks_after_capitals(font) == 2
+    gsub = font["GSUB"].table
+    chain = [st for lk in gsub.LookupList.Lookup for st in lk.SubTable
+             if lk.LookupType == 6][0]
+    back = set(chain.BacktrackCoverage[0].glyphs)
+    assert {"Alpha", "Be", *caps} <= back and "a" not in back
+    assert chain.BacktrackCoverage[0].glyphs == sorted(back, key=font.getGlyphID)
+    assert anchors.raise_marks_after_capitals(font) == 0
+
+
+def test_add_feature_where_gives_an_unnamed_language_the_script_default():
+    """Source Han Sans keeps a Japanese LangSys under every script; the
+    donor's locl names grek/dflt only. A LangSys is complete -- nothing
+    cascades to it -- so grek/JAN must get the default list too, or a
+    shaper told the text is Japanese sets the Latin acute on beta."""
+    class FakeLangSysRecord:
+        def __init__(self, tag, langsys):
+            self.LangSysTag = tag
+            self.LangSys = langsys
+    default, japanese, serbian = FakeLangSys([]), FakeLangSys([]), FakeLangSys([])
+    script = FakeScript(default, [FakeLangSysRecord("JAN ", japanese),
+                                  FakeLangSysRecord("SRB ", serbian)])
+    record = FakeScriptRecord(script)
+    record.ScriptTag = "cyrl"
+    gsub = FakeGSUB([], [record])
+    build._add_feature_where(gsub, "locl", {("cyrl", None): [5], ("cyrl", "SRB "): [5, 6]})
+    records = gsub.FeatureList.FeatureRecord
+
+    def reach(ls):
+        return [records[i].Feature.LookupListIndex for i in ls.FeatureIndex]
+    assert reach(default) == [[5]]
+    assert reach(japanese) == [[5]]        # the default, not nothing
+    assert reach(serbian) == [[5, 6]]      # its own, as named
+
+
+def test_prune_orphan_features_drops_what_no_langsys_names_and_remaps():
+    records = [FakeFeatureRecord(tag, FakeFeature([i])) for i, tag in enumerate(("aalt", "locl", "mark"))]
+    default = FakeLangSys([0, 2])
+    default.ReqFeatureIndex = 0xFFFF
+    script = FakeScript(default)
+    gsub = FakeGSUB(records, [FakeScriptRecord(script)])
+    assert build.prune_orphan_features(gsub) == 1
+    assert [fr.FeatureTag for fr in gsub.FeatureList.FeatureRecord] == ["aalt", "mark"]
+    assert default.FeatureIndex == [0, 1] and default.FeatureCount == 2
+    assert build.prune_orphan_features(gsub) == 0
+
+
+def test_add_feature_where_leaves_no_orphan_record():
+    """The base's own locl record, swapped out of every LangSys, goes."""
+    old = FakeFeatureRecord("locl", FakeFeature([1]))
+    default = FakeLangSys([0])
+    default.ReqFeatureIndex = 0xFFFF
+    record = FakeScriptRecord(FakeScript(default))
+    record.ScriptTag = "grek"
+    gsub = FakeGSUB([old], [record])
+    build._add_feature_where(gsub, "locl", {("grek", None): [5]})
+    assert [fr.Feature.LookupListIndex for fr in gsub.FeatureList.FeatureRecord] == [[1, 5]]
+    assert default.FeatureIndex == [0]
+
+
+def test_prune_orphan_lookups_roots_at_the_langsys_not_the_feature_list():
+    """A FeatureRecord no LangSys names is no route to its lookups."""
+    gsub = _gsub_with([_single({"a": "b"}), _single({"c": "d"})], [0])
+    gsub.FeatureList.FeatureRecord.append(FakeFeatureRecord("locl", FakeFeature([1])))
+    gsub.FeatureList.FeatureCount = 2
+    font = {"GSUB": FakeTable(gsub)}
+    assert build.prune_orphan_lookups(font) == {"GSUB": 1}
+    assert gsub.FeatureList.FeatureRecord[1].Feature.LookupListIndex == []

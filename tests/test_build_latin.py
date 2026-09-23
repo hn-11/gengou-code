@@ -1,19 +1,18 @@
 """Unit tests for scripts/build_latin.py that need no font files.
 
 build_latin.py no longer cuts the Latin layer out of the 35 faces; it
-assembles Sumi Moji from the Source Code Pro and Monaspace variable
+assembles Gengou Code from the Source Code Pro and Monaspace variable
 fonts directly (see the module docstring). These tests cover the pure
 logic left behind: zone-order repair on a CFF FDArray, the typo/win
-metrics helpers, per-family win-metric harmonization, donor credits,
-the SCP stylistic-set remap, and the two weight profiles / constants.
+metrics helpers, the pinned Latin win metrics, donor credits, the SCP
+stylistic-set remap, and the two weight profiles / constants.
 """
 
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 
-from fontTools.pens.ttGlyphPen import TTGlyphPen
-from fontTools.ttLib import TTFont
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -21,7 +20,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import build  # noqa: E402
 import build_latin  # noqa: E402
 import test_build as tb  # noqa: E402 -- reuse its GSUB fakes
-from conftest import make_font  # noqa: E402
+from conftest import make_cff_font, make_font  # noqa: E402
 
 # --- fix_zone_order -------------------------------------------------------
 
@@ -127,95 +126,47 @@ def test_use_typo_metrics_matches_hhea_and_sets_fsselection_bit7():
     assert os2.fsSelection & 0x40   # untouched bits survive
 
 
-def test_fit_win_metrics_takes_the_max_of_existing_bbox_and_given():
-    font = _metrics_font(win_ascent=500, win_descent=100)
-    font["head"].yMax = 700
-    font["head"].yMin = -50
-
-    build_latin.fit_win_metrics(font, ascent=600, descent=80)
-
-    os2 = font["OS/2"]
-    assert os2.usWinAscent == 700     # bbox (700) beats existing (500) and given (600)
-    assert os2.usWinDescent == 100    # existing (100) beats bbox (50) and given (80)
-
-
-def test_fit_win_metrics_given_value_wins_when_it_is_largest():
+def test_pin_win_metrics_sets_the_pinned_pair():
     font = _metrics_font(win_ascent=10, win_descent=10)
     font["head"].yMax = 20
     font["head"].yMin = -20
 
-    build_latin.fit_win_metrics(font, ascent=999, descent=888)
+    build_latin.pin_win_metrics(font)
 
     os2 = font["OS/2"]
-    assert os2.usWinAscent == 999
-    assert os2.usWinDescent == 888
+    assert (os2.usWinAscent, os2.usWinDescent) == build_latin.LATIN_WIN_METRICS
 
 
-def test_fit_win_metrics_defaults_are_zero():
-    font = _metrics_font(win_ascent=50, win_descent=50)
-    font["head"].yMax = 10
-    font["head"].yMin = -5
+def test_pin_win_metrics_overwrites_whatever_the_face_already_declared():
+    # a face that came in already covering more than the pin: pinning
+    # brings it down rather than taking the max, the way fit_win_metrics
+    # used to
+    font = _metrics_font(win_ascent=2000, win_descent=2000)
+    font["head"].yMax = 100
+    font["head"].yMin = -100
 
-    build_latin.fit_win_metrics(font)   # ascent=0, descent=0
+    build_latin.pin_win_metrics(font)
 
     os2 = font["OS/2"]
-    assert os2.usWinAscent == 50
-    assert os2.usWinDescent == 50
+    assert (os2.usWinAscent, os2.usWinDescent) == build_latin.LATIN_WIN_METRICS
 
 
-# --- harmonize_win_metrics ------------------------------------------------
+def test_pin_win_metrics_raises_naming_the_extents_when_ascent_is_exceeded():
+    font = _metrics_font(win_ascent=0, win_descent=0)
+    font["head"].yMax = 1061
+    font["head"].yMin = -100
 
-def _glyph_with_bbox(ymin, ymax):
-    pen = TTGlyphPen(None)
-    pen.moveTo((0, ymin))
-    pen.lineTo((100, ymin))
-    pen.lineTo((100, ymax))
-    pen.lineTo((0, ymax))
-    pen.closePath()
-    return pen.glyph()
+    with pytest.raises(RuntimeError, match="1061"):
+        build_latin.pin_win_metrics(font)
 
 
-def _write_metrics_font(path, win_ascent, win_descent, ymin, ymax):
-    font = make_font([".notdef", "a"], {ord("a"): "a"}, {"a": 600},
-                     glyphs={"a": _glyph_with_bbox(ymin, ymax)},
-                     os2={"usWinAscent": win_ascent, "usWinDescent": win_descent})
-    font.save(path)
+def test_pin_win_metrics_raises_naming_the_extents_when_descent_is_exceeded():
+    font = _metrics_font(win_ascent=0, win_descent=0)
+    font["head"].yMax = 100
+    font["head"].yMin = -455
 
-
-def test_harmonize_win_metrics_gives_every_face_the_same_max(tmp_path):
-    p1 = tmp_path / "a.ttf"
-    p2 = tmp_path / "b.ttf"
-    # p1 has the bigger usWinAscent, p2 the bigger usWinDescent; neither
-    # face's own bbox exceeds the eventual target, so the numbers stay
-    # exactly the plain max() of the two OS/2 tables
-    _write_metrics_font(p1, win_ascent=900, win_descent=200,
-                        ymin=-50, ymax=700)
-    _write_metrics_font(p2, win_ascent=1200, win_descent=150,
-                        ymin=-80, ymax=1100)
-
-    ascent, descent = build_latin.harmonize_win_metrics([str(p1), str(p2)])
-
-    assert (ascent, descent) == (1200, 200)
-
-    f1, f2 = TTFont(str(p1)), TTFont(str(p2))
-    assert (f1["OS/2"].usWinAscent, f1["OS/2"].usWinDescent) == (1200, 200)
-    assert (f2["OS/2"].usWinAscent, f2["OS/2"].usWinDescent) == (1200, 200)
-
-
-def test_harmonize_win_metrics_noop_when_already_matched(tmp_path):
-    p1 = tmp_path / "a.ttf"
-    p2 = tmp_path / "b.ttf"
-    _write_metrics_font(p1, win_ascent=1000, win_descent=200,
-                        ymin=-10, ymax=10)
-    _write_metrics_font(p2, win_ascent=1000, win_descent=200,
-                        ymin=-10, ymax=10)
-    before = p1.stat().st_mtime, p2.stat().st_mtime
-
-    ascent, descent = build_latin.harmonize_win_metrics([str(p1), str(p2)])
-
-    assert (ascent, descent) == (1000, 200)
-    # both faces already matched: neither file gets rewritten
-    assert (p1.stat().st_mtime, p2.stat().st_mtime) == before
+    with pytest.raises(RuntimeError, match="455"):
+        build_latin.pin_win_metrics(font)
 
 
 # --- credits_from ---------------------------------------------------------
@@ -236,7 +187,7 @@ def test_credits_from_returns_scp_then_monaspace():
     scp = _donor({0: "SCP Copyright", 9: "Paul D. Hunt, Teo Tuominen"})
     mona = _donor({0: "Mona Copyright", 9: "Riley Cran"})
 
-    credits = build_latin.credits_from(scp, mona)
+    credits = build_latin.credits_from(("Source Code Pro", scp), ("Monaspace", mona))
 
     assert credits == [
         ("Source Code Pro", "SCP Copyright", "Paul D. Hunt, Teo Tuominen"),
@@ -248,7 +199,7 @@ def test_credits_from_monaspace_falls_back_to_nameid7_when_nameid0_absent():
     scp = _donor({0: "SCP Copyright", 9: "Paul D. Hunt"})
     mona = _donor({0: None, 7: "Trademark: Monaspace", 9: "Riley Cran"})
 
-    credits = build_latin.credits_from(scp, mona)
+    credits = build_latin.credits_from(("Source Code Pro", scp), ("Monaspace", mona))
 
     label, copyright_, designer = credits[1]
     assert label == "Monaspace"
@@ -280,7 +231,7 @@ def test_remap_scp_stylistic_sets_shifts_ss_and_sorts_the_feature_list():
 
 def test_family_is_the_latin_family_build_reads_back():
     assert (build_latin.FAMILY, build_latin.PS_FAMILY) == build.LATIN_FAMILY
-    assert build_latin.PS_FAMILY == "SumiMoji"
+    assert build_latin.PS_FAMILY == "GengouCode"
 
 
 # --- CELL / MONA_K constants ----------------------------------------------
@@ -314,3 +265,70 @@ def test_fix_zone_order_rounds_the_zones_and_stems():
     assert (private.StdHW, private.StdVW) == (115, 148)
     assert private.StemSnapH == [67, 115]
     assert private.BlueScale == 0.0375     # the one real number, untouched
+
+
+# --- add_missing_from_sans ------------------------------------------------
+
+def _cff_with_greek(inks, *, cmap_extra=()):
+    """A CFF font whose Greek glyphs are rectangles of the given ink
+    widths, keyed by codepoint. 'A' comes along because append_context
+    keys the FD and its Private dict off it."""
+    from fontTools.pens.t2CharStringPen import T2CharStringPen
+    names = {cp: f"uni{cp:04X}" for cp in inks}
+    order = [".notdef", "A", *names.values()]
+    charstrings = {}
+    for g, w in [("A", 400)] + [(names[cp], w) for cp, w in inks.items()]:
+        pen = T2CharStringPen(0, None)
+        pen.moveTo((10, 0))
+        pen.lineTo((10 + w, 0))
+        pen.lineTo((10 + w, 500))
+        pen.closePath()
+        charstrings[g] = pen.getCharString()
+    charstrings[".notdef"] = T2CharStringPen(0, None).getCharString()
+    font = make_cff_font(order, charstrings,
+                         {ord("A"): "A", **{cp: names[cp] for cp in names},
+                          **dict(cmap_extra)},
+                         {g: (600, 0) for g in order})
+    font.master = False          # what a VFSource instance carries (vfsource.Instance)
+    return font
+
+
+def test_add_missing_from_sans_takes_the_block_inside_the_upright_set():
+    """Three rules at once: a codepoint the face already has is taken
+    over anyway, so the block comes from one donor; one the upright
+    faces do not draw is not taken even though the donor has it; and
+    what is taken is one cell wide.
+
+    The replacement is what fixes pi: Source Code Pro Italic draws it
+    and does not anchor it, and leaving the face's own glyph in place
+    left that one letter of the block behind its own donor."""
+    face = _cff_with_greek({0x03B1: 300})              # alpha already drawn
+    donor = _cff_with_greek({0x03B1: 300, 0x03B2: 700,
+                             0x03B3: 300, 0x03B4: 300})
+    before = face.getBestCmap()[0x03B1]
+    added, condensed, anchors = build_latin.add_missing_from_sans(
+        face, donor, {0x03B1, 0x03B2, 0x03B4})        # gamma withheld
+    assert (added, condensed) == (3, 1)                # beta's 700 does not fit
+    assert anchors == 0                                # this donor has no GPOS
+    cmap = face.getBestCmap()
+    assert 0x03B3 not in cmap                          # not in the upright set
+    assert cmap[0x03B1] != before                      # the donor's now
+    assert {cmap[0x03B1], cmap[0x03B2], cmap[0x03B4]} <= set(face.getGlyphOrder())
+    for cp in (0x03B1, 0x03B2, 0x03B4):
+        assert face["hmtx"].metrics[cmap[cp]][0] == build_latin.CELL
+
+
+def test_add_missing_from_sans_seats_the_ink_in_the_cell():
+    """What is added is centred, and condensed only as far as the cell
+    less a bearing at each side — cell_fit's rule, reaching the glyph."""
+    face = _cff_with_greek({})
+    donor = _cff_with_greek({0x03B2: 700, 0x03B4: 300})
+    build_latin.add_missing_from_sans(face, donor, {0x03B2, 0x03B4})
+    cmap, gs = face.getBestCmap(), face.getGlyphSet()
+    wide = build._bounds(gs, cmap[0x03B2])
+    narrow = build._bounds(gs, cmap[0x03B4])
+    bearing = build.LETTER_BEARING
+    assert (round(wide[0]), round(wide[2])) == (bearing,
+                                                build_latin.CELL - bearing)
+    assert round(narrow[2] - narrow[0]) == 300         # not condensed
+    assert round(narrow[0]) == round((build_latin.CELL - 300) / 2)
