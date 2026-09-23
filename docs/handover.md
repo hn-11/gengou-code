@@ -402,8 +402,31 @@ CONTRIBUTING の CI 説明を `ci.yml` / `release.yml` の冒頭コメントへ�
 | 3 | `docs/gengou-plan.md` の §1〜§6（v5 以前の計画書） | 約 400 行 | **決定: 2 と同じ刷新に含める**（未着手） |
 | 4 | ~~常に同じ値が渡る引数（`update_bbox(bounds=)`、`check_tables(codepages=)`、`append_glyph(lsb=)`）~~ | 約 15 行 | **済**（消した） |
 | 5 | ~~`fetch-upstreams` と `setup-build` の二段構え~~ | 約 30 行 | **済**（`setup-build` 1 つに統合。ピンもここ。`bump_pins.py` の書き換え先も変更） |
-| 6 | 欧文の 2 本の verifier（`verify_latin.py` / `verify_latin_vf.py`）の重複（GSUB tag 一覧、インク中心、合字セル） | 約 20〜30 行 | **決定: 検証体系の全面刷新**（配る欧文は可変だけになったので、静的面の検査の要否から組み直す） |
-| 7 | 外接箱を測る定型 3 行（約 28 か所）と似た関数 3 つ | 約 30 行 | **決定: 6 に含める** |
+| 6 | ~~欧文の検証の重複~~ → 検証体系の刷新 | `verify_latin.py`（205 行）ほか | **済**（下の「検証体系」） |
+| 7 | ~~外接箱を測る定型 3 行~~ | `verify_jp.py` の 11 か所 | **済**（`build._bounds` に寄せた） |
+
+### 検証体系（6・7 の結果）
+
+**原則: 門番は配る物だけに掛ける。** 配るのは JP 面（とその NF 版）と、欧文の
+可変フォント（とその NF 版）の 2 種類で、`verify.py` はこの 2 種類だけを
+`verify_jp.py` / `verify_latin_vf.py` に振り分け、それ以外（欧文の静的面）は
+「配布物ではない」と止める。欧文の静的面は JP 面の材料と可変フォントの比較
+相手で、その欠陥は JP 面・可変フォントの門番で捕まる。
+
+- `verify_latin.py` を削除。47 の検査を 1 本ずつ突き合わせ、44 は JP 面側で同じ
+  `verifylib` の門番が見ているか、静的面自身のメタデータ（JP 面では
+  `build.py` が付け直す）だった。**JP 面側に無かった 3 つを足した**:
+  Source Code Pro がインクを持つ字はすべて描ける（`check_donor_draws`。
+  それまで JP 面は A〜z しか数えておらず、ギリシャ・キリル・アクセント付きの
+  字が空になっても通った）、欧文の字の平均中心（`mean_ink_offset`、
+  漢字・かなと並べて）、`ss11` を含む欧文の feature 一覧（`FEATURE_SURFACE`）
+- 可変フォント側の重複を解消: `check_ligature_cells` が各位置で見ている合字の
+  2 検査を削除、「700 字以上が描ける」は `check_donor_draws` に置換、
+  平均中心と feature 一覧は共通のものに
+- CI・リリースは静的面を検証しない（CI の Light Italic ジョブが静的面の
+  `check_family_cmap` のために Regular Italic も組んでいたのも廃止）
+- **示したこと**: 配る 44 面の検証ログを前後で比べ、消えた行は重複と置き換えの
+  分だけ、増えた行は新しい門番だけで**すべて ok**、ヒント以外の FAIL は 0
 
 **やらないほうがよいもの**: 箱の計算が 3 通りある件（`build.update_bbox`、
 `nerdpatch.update_bbox_after`、`build_latin_vf.master_extents`）。

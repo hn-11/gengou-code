@@ -1956,3 +1956,40 @@ def test_check_substitution_identity_allows_the_ukrainian_yi_decomposition():
                       cmap_extra={0x457: "b0", 0x131: "dotlessi", 0x308: "diaeresis"},
                       fea_extra="feature ccmp { sub b0 by dotlessi diaeresis; } ccmp;\n")
     assert _gate(verifylib.check_substitution_identity, font) == []
+
+
+def test_mean_ink_offset_is_the_layer_s_shift_and_none_when_nothing_draws():
+    cmap = {0x41: "A", 0x42: "B", 0x3042: "a"}
+    boxes = {"A": (100, 0, 500, 700), "B": (200, 0, 600, 700), "a": (0, 0, 1000, 800)}
+    advance = {"A": 600, "B": 600, "a": 1000}.get
+    # A sits 0 off the middle of its cell, B 100 right: the mean is 50
+    assert verifylib.mean_ink_offset(boxes, advance, cmap, ((0x41, 0x5A),)) == 50
+    assert verifylib.mean_ink_offset(boxes, advance, cmap, ((0x61, 0x7A),)) is None
+    # a zero-advance glyph (a mark) has no cell to be centred in
+    zero = {"A": 0, "B": 600, "a": 1000}.get
+    assert verifylib.mean_ink_offset(boxes, zero, cmap, ((0x41, 0x5A),)) == 100
+
+
+def test_check_donor_draws_names_a_letter_left_blank(tmp_path, monkeypatch):
+    from conftest import make_font
+    from fontTools.pens.ttGlyphPen import TTGlyphPen
+    pen = TTGlyphPen(None)
+    pen.moveTo((0, 0))
+    pen.lineTo((100, 0))
+    pen.lineTo((100, 100))
+    pen.closePath()
+    ink = pen.glyph()
+    donor = make_font([".notdef", "a", "b", "space"], {0x61: "a", 0x62: "b", 0x20: "space"},
+                      {"a": 600, "b": 600, "space": 600}, glyphs={"a": ink, "b": ink})
+    path = tmp_path / "donor.ttf"
+    donor.save(path)
+    monkeypatch.setenv("SCP_VF_U", str(path))
+    cmap = {0x61: "a", 0x62: "b", 0x20: "space"}
+    gate = lambda drawn: _gate(  # noqa: E731
+        lambda f, chk: verifylib.check_donor_draws(chk, cmap, drawn), None)
+    assert gate({"a", "b"}) == []                 # the space draws in neither
+    assert gate({"a"}) == ["every character Source Code Pro inks draws here too "
+                           "(2 codepoints; blank 1: ['0x62'])"]
+    monkeypatch.delenv("SCP_VF_U")
+    # no donor: reported as not checked (None), never as a pass
+    assert gate(set()) == ["every character Source Code Pro inks draws: SCP_VF_U unset"]

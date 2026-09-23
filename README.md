@@ -355,7 +355,7 @@ python scripts/build_latin_vf.py        # dist/latin/GengouCode[wght].otf, -Ital
 python scripts/build.py                 # 両ファミリー（JP / Term × 10 面）
 python scripts/build.py "Regular"       # Regular系のみ（動作確認用）
 python scripts/verify.py dist/GengouCodeJP-Regular.otf          # 回帰テスト（面ごと）
-python scripts/verify.py 'dist/*.otf' 'dist/latin/*.otf'   # まとめて
+python scripts/verify.py 'dist/*.otf' 'dist/nerd/*.otf'    # まとめて（配る面だけ）
 python scripts/verify.py "dist/latin/GengouCode[wght].otf"     # 可変版（SCP と突き合わせ）
 python scripts/golden.py <前の dist> dist                  # 出力が変わる変更の前後比較（CONTRIBUTING）
 NF_SYMBOLS=... python scripts/nerdpatch.py                 # Nerd Fonts 版
