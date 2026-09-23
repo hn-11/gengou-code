@@ -28,8 +28,9 @@ jobs:
       - run: ruff check scripts/ tests/
       - run: python -m pytest tests/ -q
   # one weight and style per job, BOTH families: the Latin donor
-  # (build_latin.py), then the JP face and its Term sibling on top
-  # (build.py), then all of them verified side by side; the Regular
+  # (build_latin.py, an intermediate: it is not verified or shipped as
+  # itself), then the JP face and its Term sibling on top (build.py),
+  # then both verified side by side; the Regular
   # Upright job also grafts the Nerd Fonts symbols into the JP faces
   # (nerdpatch.py) and verifies that.
   #
@@ -50,27 +51,17 @@ jobs:
         include:
           - face: Regular Upright
             nerd: "true"
-          # the Light Italic job builds the Latin Regular Italic as
-          # well, so that check_family_cmap has the face it compares
-          # against. It is the Regular of the face's own family AND
-          # style, and a matrix split by style never had one beside the
-          # face, so the gate skipped on every run it ever made (round
-          # 12). A Latin static is seconds; a JP one is a minute, so
-          # the JP families still compare only in the release, whose
-          # jobs build a family's two weights each
-          - face: Light Italic
-            latin: Light Regular Italic
     name: faces (${{ matrix.face }})
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/setup-build
       # the Latin layer (Gengou Code) is assembled first
       # from the VFs; build.py grafts it into Source Han Sans
-      - run: python scripts/build_latin.py "${{ matrix.latin || matrix.face }}"
+      - run: python scripts/build_latin.py "${{ matrix.face }}"
       - run: python scripts/build.py "${{ matrix.face }} base Term"
       - if: matrix.nerd
         run: python scripts/nerdpatch.py dist/*.otf
-      - run: python scripts/verify.py 'dist/latin/*.otf' 'dist/*.otf' 'dist/nerd/*.otf'
+      - run: python scripts/verify.py 'dist/*.otf' 'dist/nerd/*.otf'
   # the variable Gengou Code, BOTH styles. The italic is where every piece of
   # the second donor lives -- the Source Sans masters, the imported
   # anchors, the fitted ones, the varLib merge of anchors that differ

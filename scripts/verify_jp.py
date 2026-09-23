@@ -12,7 +12,6 @@ import unicodedata
 from pathlib import Path
 
 import pathops
-from fontTools.pens.boundsPen import BoundsPen
 from fontTools.pens.transformPen import TransformPen
 from fontTools.ttLib import TTFont
 
@@ -33,6 +32,8 @@ from build import (  # noqa: E402
     tiling_glyphs,
 )
 from verifylib import (  # noqa: E402
+    FEATURE_SURFACE,
+    LATIN_LETTERS,
     WIDE_IN_ONE_CELL,
     Checker,
     check_blank_glyphs,
@@ -40,6 +41,7 @@ from verifylib import (  # noqa: E402
     check_cells,
     check_charstring_metrics,
     check_coverage_order,
+    check_donor_draws,
     check_donor_letters,
     check_donor_repertoire,
     check_family_cmap,
@@ -73,6 +75,7 @@ from verifylib import (  # noqa: E402
     hmtx_mismatches,
     is_italic,
     make_shaper,
+    mean_ink_offset,
     weight_name,
 )
 
@@ -450,11 +453,10 @@ def placed(face, text, feats=None):
     infos, positions = face.shape(text, feats or {})
     out, pen_x = [], 0
     for info, pos in zip(infos, positions):
-        pen = BoundsPen(face.gs)
-        face.gs[face.order[info.codepoint]].draw(pen)
-        out.append(None if pen.bounds is None else
-                   (pen.bounds[0] + pen_x + pos.x_offset,
-                    pen.bounds[2] + pen_x + pos.x_offset))
+        ink = build._bounds(face.gs, face.order[info.codepoint])
+        out.append(None if ink is None else
+                   (ink[0] + pen_x + pos.x_offset,
+                    ink[2] + pen_x + pos.x_offset))
         pen_x += pos.x_advance
     return out
 
@@ -573,8 +575,8 @@ def check_advance_grid(face, check):
 def check_names(face, check):
     tf, exp_full = face.tf, face.exp_full
     # the names the face ships under -- GengouCodeJP.zip carries these
-    # faces. The family pair and the weight are the gates verify_latin.py
-    # asks of its own faces
+    # faces. The family pair and the weight are verifylib's
+    # (check_family_names, check_weight_class)
     term = exp_full > 1000
     is_nf = check_family_names(tf, check, "Gengou Code JP" + (" Term" if term else ""),
                        "GengouCodeJP" + ("Term" if term else ""))
@@ -650,19 +652,21 @@ def check_ink_placement(face, check):
     # within 2u of the advance centre for kanji and 8u for kana (spacing
     # glyphs; +5.6 Bold to +7.3 Light). A pass that shifts the layer
     # moves the mean with it
-    def mean_off_centre(lo, hi):
-        # spacing glyphs only: a combining mark (゛゜ U+3099/309A) has no
-        # advance to be centred in, and its −360u would pull the mean
-        offs = [(box[0] + box[2]) / 2 - hmtx[name][0] / 2
-                for cp, name in cmap.items() if lo <= cp <= hi and hmtx[name][0] > 0
-                for box in (bounds.get(name),) if box is not None]
-        return sum(offs) / len(offs) if offs else 0.0
+    # (spacing glyphs only: a combining mark such as ゛゜ U+3099/309A has
+    # no advance to be centred in, and its -360u would pull the mean.)
+    # And the Latin layer's letters and digits the same way: asked only
+    # of the Latin statics before, which no longer ship, so a uniform
+    # 100u shift of the layer -- under the per-glyph band of
+    # check_glyph_placement -- would have reached the JP faces
+    def advance(name):
+        return hmtx[name][0]
 
-    centred = {"kanji": mean_off_centre(0x4E00, 0x9FFF),
-               "kana": mean_off_centre(0x3041, 0x30FF)}
-    check(all(abs(v) <= 25 for v in centred.values()),
-          f"the Japanese layer is centred in its advance (mean ink-centre "
-          f"offset {', '.join(f'{k} {v:+.1f}u' for k, v in centred.items())}; "
+    centred = {"kanji": mean_ink_offset(bounds, advance, cmap, ((0x4E00, 0x9FFF),)),
+               "kana": mean_ink_offset(bounds, advance, cmap, ((0x3041, 0x30FF),)),
+               "latin": mean_ink_offset(bounds, advance, cmap, LATIN_LETTERS)}
+    check(all(v is not None and abs(v) <= 25 for v in centred.values()),
+          f"every layer is centred in its advance (mean ink-centre offset "
+          f"{', '.join(f'{k} {v:+.1f}u' if v is not None else f'{k} none' for k, v in centred.items())}; "
           f"bound 25u)")
 
 
@@ -687,6 +691,8 @@ def check_repertoire_draws(face, check):
     check(len(cmap) >= 15000 and kanji >= 10000 and kana >= 150 and latin >= 50,
           f"the Japanese repertoire is there and draws ({len(cmap)} "
           f"codepoints; {kanji} kanji, {kana} kana, {latin} Latin with ink)")
+    # and the Latin layer, letter by letter
+    check_donor_draws(check, cmap, set(bounds))
 
 
 def check_vertical_metrics(face, check):
@@ -802,7 +808,7 @@ def check_feature_set(face, check):
     for tag in ("fwid", "hwid"):
         check(tag not in tags, f"GSUB has no {tag}")
     for tag in ("aalt", "dlig", "ruby",
-                "jp78", "jp83", "jp90", "nlck", "locl", "ccmp"):
+                "jp78", "jp83", "jp90", "nlck", "locl", "ccmp") + FEATURE_SURFACE:
         check(tag in tags, f"GSUB carries {tag}")
     for tag in ("vkrn", "vhal", "vpal"):
         check(tag in gpos, f"GPOS carries {tag} ({sorted(gpos)})")
@@ -875,9 +881,7 @@ def check_tiling(face, check):
         infos, _ = shape_infos(ch, {})
         name = glyph_order[infos[0].codepoint]
         adv = tf["hmtx"][name][0]
-        pen = BoundsPen(gs)
-        gs[name].draw(pen)
-        box = pen.bounds
+        box = build._bounds(gs, name)
         if box is None or box[0] > 2 or box[2] < adv - 2:
             seam[ch] = None if box is None else (round(box[0]), round(box[2]), adv)
     check(not seam, f"every tiling character spans its whole advance "
@@ -946,11 +950,10 @@ def check_vertical_rules(face, check):
     vseam = {}
     for ch in VTILING:
         infos, _ = shape_infos(ch, {})
-        pen = BoundsPen(gs)
-        gs[glyph_order[infos[0].codepoint]].draw(pen)
-        if not spans_line(pen.bounds):
-            vseam[ch] = None if pen.bounds is None else (
-                round(pen.bounds[1]), round(pen.bounds[3]))
+        ink = build._bounds(gs, glyph_order[infos[0].codepoint])
+        if not spans_line(ink):
+            vseam[ch] = None if ink is None else (
+                round(ink[1]), round(ink[3]))
     check(not vseam, f"every vertical rule spans the whole line "
                      f"({hhea.ascent}..{hhea.descent}; "
                      f"{len(VTILING)} probes; off: {vseam})")
@@ -970,9 +973,7 @@ def check_long_dashes(face, check):
             continue
         name = cmap[ord(ch)]
         adv = hmtx[name][0]
-        pen = BoundsPen(gs)
-        gs[name].draw(pen)
-        box = pen.bounds
+        box = build._bounds(gs, name)
         joint = None if box is None else box[0] + adv - box[2]
         if joint is None or joint > adv // 16:
             joints[ch] = joint if joint is None else round(joint)
@@ -1003,9 +1004,8 @@ def check_ccmp_composes(face, check):
         if len(names) == 2:
             boxes = []
             for name in names:
-                pen = BoundsPen(gs)
-                gs[name].draw(pen)
-                boxes.append(pen.bounds)
+                ink = build._bounds(gs, name)
+                boxes.append(ink)
             if boxes[0] and boxes[1] and boxes[0][3] > boxes[1][1]:
                 ccmp[base + mark] = (round(boxes[0][3]), round(boxes[1][1]))
     check(not ccmp, f"the donor's ccmp composes ({probes} probes; "
@@ -1062,10 +1062,9 @@ def check_accent_stacking(face, check):
                 lifted += positions[2].y_offset > 0
                 feet = []
                 for info, pos in zip(infos, positions):
-                    pen = BoundsPen(gs)
-                    gs[order[info.codepoint]].draw(pen)
-                    feet.append(None if pen.bounds is None
-                                else pen.bounds[1] + pos.y_offset)
+                    ink = build._bounds(gs, order[info.codepoint])
+                    feet.append(None if ink is None
+                                else ink[1] + pos.y_offset)
                 above += None not in feet and feet[2] >= feet[1]
         return above, probes, lifted
 
@@ -1136,13 +1135,12 @@ def check_voicing_marks(face, check):
             infos, positions = shape_infos(kana + mark, {})
             if len(infos) != 2:
                 continue
-            pen = BoundsPen(None)
-            gs[glyph_order[infos[1].codepoint]].draw(pen)
-            if pen.bounds is None:
+            ink = build._bounds(gs, glyph_order[infos[1].codepoint])
+            if ink is None:
                 continue
             x0 = positions[0].x_advance + positions[1].x_offset
-            place = (round(x0 + pen.bounds[0]), round(positions[1].y_offset + pen.bounds[1]),
-                     round(x0 + pen.bounds[2]), round(positions[1].y_offset + pen.bounds[3]))
+            place = (round(x0 + ink[0]), round(positions[1].y_offset + ink[1]),
+                     round(x0 + ink[2]), round(positions[1].y_offset + ink[3]))
             first = places.setdefault(mark, (kana, place))
             if place != first[1]:
                 voiced[kana + mark] = ("place", place, "after", first[0], first[1])
@@ -1232,11 +1230,10 @@ def check_mark_after_ligature(face, check):
         """Where the last glyph's ink centre sits relative to the pen
         the base run leaves it at — GPOS placement included."""
         infos, positions = shape_infos(text, {"calt": True, "liga": True})
-        pen = BoundsPen(gs)
-        gs[glyph_order[infos[-1].codepoint]].draw(pen)
-        if pen.bounds is None or positions[-1].x_advance:
+        ink = build._bounds(gs, glyph_order[infos[-1].codepoint])
+        if ink is None or positions[-1].x_advance:
             return None
-        return round((pen.bounds[0] + pen.bounds[2]) / 2
+        return round((ink[0] + ink[2]) / 2
                      + positions[-1].x_offset)
 
     after_lig = {}
@@ -1277,11 +1274,10 @@ def check_enclosing_mark_down_a_column(face, check):
             continue
         boxes = []
         for info, pos in zip(infos, positions):
-            pen = BoundsPen(gs)
-            gs[glyph_order[info.codepoint]].draw(pen)
-            boxes.append(None if pen.bounds is None else
-                         (pen.bounds[0] + pos.x_offset,
-                          pen.bounds[2] + pos.x_offset))
+            ink = build._bounds(gs, glyph_order[info.codepoint])
+            boxes.append(None if ink is None else
+                         (ink[0] + pos.x_offset,
+                          ink[2] + pos.x_offset))
         if None in boxes:
             column[base] = None
             continue
@@ -1330,9 +1326,8 @@ def check_marks_on_the_column(face, check):
             infos, positions = shape_infos(base + mark, {}, direction="ttb")
             if len(infos) != 2:
                 continue
-            pen = BoundsPen(gs)
-            gs[glyph_order[infos[1].codepoint]].draw(pen)
-            if pen.bounds is None:
+            ink = build._bounds(gs, glyph_order[infos[1].codepoint])
+            if ink is None:
                 continue
             # the vertical column is ±500, and Source Han Sans's own
             # tone marks sit right against its edge: at Bold U+302C
@@ -1341,8 +1336,8 @@ def check_marks_on_the_column(face, check):
             # regression it catches is 100 units
             column = FULLWIDTH / 2
             slack = FULLWIDTH // 20
-            lo = pen.bounds[0] + positions[1].x_offset
-            hi = pen.bounds[2] + positions[1].x_offset
+            lo = ink[0] + positions[1].x_offset
+            hi = ink[2] + positions[1].x_offset
             if lo < -column - slack or hi > column + slack:
                 outside[base + mark] = (round(lo), round(hi))
     check(not outside, f"a mark stays on the column after a half-width "
@@ -1481,9 +1476,7 @@ def check_rules_not_slabs(face, check):
     for ch in "\uFF3F\uFFE3":
         if ord(ch) not in cmap:
             continue
-        pen = BoundsPen(gs)
-        gs[cmap[ord(ch)]].draw(pen)
-        box = pen.bounds
+        box = build._bounds(gs, cmap[ord(ch)])
         if box is None or box[3] - box[1] > 100:
             slabs[ch] = None if box is None else round(box[3] - box[1])
     check(not slabs, f"the full-width low line and macron are rules, not "

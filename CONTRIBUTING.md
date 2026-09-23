@@ -18,7 +18,7 @@ Monaspace VF・Source Sans 3 VF Italic（斜体のギリシャ・キリル）か
 （`build.py` は両段階の共通ヘルパーと JP の接ぎ木、`vfsource.py` は
 VF のインスタンス化と Monaspace の合成、`anchors.py` は欧文レイヤーが
 足す mark アンカー、`nerdpatch.py` は Nerd Fonts の接ぎ木、`verifylib.py`
-は 3 本の verifier が共有する検査）。
+は 2 本の verifier（`verify_jp.py`・`verify_latin_vf.py`）が共有する検査）。
 それぞれが読む環境変数:
 
 | 変数 | 読むスクリプト | 内容 | 入手元 |
@@ -73,7 +73,7 @@ python scripts/build.py "Light Upright Term"   # 1 面だけ
 python -m pytest tests/ -q                                  # 単体テスト
 python scripts/verify.py dist/GengouCodeJP-Regular.otf          # 面を名指し
 python scripts/verify.py "dist/latin/GengouCode[wght].otf"      # 可変版も同じ入口
-python scripts/verify.py 'dist/*.otf' 'dist/latin/*.otf' 'dist/nerd/*.otf'
+python scripts/verify.py 'dist/*.otf' 'dist/nerd/*.otf'       # 配る面をまとめて
 ```
 
 グリフの合成漏れやメトリクスの崩れなど、シェイピングまわりの回帰を
@@ -96,8 +96,10 @@ name・家族の cmap、JP の縦組みと VORG（ドナーと突き合わせ）
 リリースの所要時間を測るだけなら Run workflow の dry-run にチェックを入れるか、
 コミットメッセージに `[release-dry]` と書いたコミットをブランチに push します。
 どちらもビルドと梱包まで走って Release は作りません。複数の面をまとめて検証するときは
-`python scripts/verify.py 'dist/*.otf' 'dist/latin/*.otf'` が面ごとに
-プロセスを分けて走らせます（どの門番に掛けるかはフォント自身が決める）。
+`python scripts/verify.py 'dist/*.otf' 'dist/nerd/*.otf'` が面ごとに
+プロセスを分けて走らせます（どの門番に掛けるかはフォント自身が決める。検証するのは
+配る面――JP 面とその NF 版、可変フォント――だけで、欧文の静的面は JP 面の材料と
+可変フォントの比較相手なので、渡すと「配布物ではない」と止まります）。
 
 **フォントの出力が変わる変更では、`scripts/golden.py` で「変わってよい所だけが
 変わった」ことを示してください。** 門番が答えるのは「壊れていないか」で、

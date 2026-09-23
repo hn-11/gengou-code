@@ -62,10 +62,21 @@ def test_gates_for_sends_a_font_that_draws_hiragana_to_verify_jp(tmp_path):
     assert verify.gates_for(path) == "verify_jp.py"
 
 
-def test_gates_for_sends_everything_else_to_verify_latin(tmp_path):
+def test_gates_for_has_no_gates_for_a_static_latin_face(tmp_path):
+    # a build intermediate (the JP faces' donor, the variable fonts'
+    # reference), held to account through what it becomes
     path = tmp_path / "GengouCode-Regular.otf"
     _latin_font().save(path)
-    assert verify.gates_for(path) == "verify_latin.py"
+    assert verify.gates_for(path) is None
+
+
+def test_main_refuses_a_face_that_does_not_ship(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "GengouCode-Regular.otf"
+    _latin_font().save(path)
+    monkeypatch.setattr(sys, "argv", ["verify.py", str(path)])
+    with pytest.raises(SystemExit) as exc:
+        verify.main()
+    assert "not a face that ships" in str(exc.value)
 
 
 def test_gates_for_ignores_the_path_a_jp_font_under_a_latin_directory_still_gets_jp(tmp_path):
@@ -78,14 +89,6 @@ def test_gates_for_ignores_the_path_a_jp_font_under_a_latin_directory_still_gets
     path = latin_dir / "GengouCodeJP-Regular.otf"
     _jp_font().save(path)
     assert verify.gates_for(path) == "verify_jp.py"
-
-
-def test_gates_for_ignores_the_path_a_latin_font_outside_any_latin_directory_still_gets_latin(tmp_path):
-    outside = tmp_path / "dist"
-    outside.mkdir()
-    path = outside / "GengouCode-Regular.otf"
-    _latin_font().save(path)
-    assert verify.gates_for(path) == "verify_latin.py"
 
 
 # --- main(): argument handling ----------------------------------------------
@@ -108,6 +111,7 @@ def test_main_a_pattern_matching_nothing_is_skipped_not_an_error(monkeypatch, tm
     seen = []
     monkeypatch.setattr(verify, "run",
                         lambda path: (seen.append(path), (path, "gate", 0, ""))[1])
+    monkeypatch.setattr(verify, "gates_for", lambda path: "gate")
     monkeypatch.setattr(sys, "argv",
                         ["verify.py", str(real), str(tmp_path / "*.nosuchext")])
     verify.main()          # no SystemExit: something else matched
@@ -130,6 +134,7 @@ def test_main_takes_an_existing_bracketed_path_as_itself_not_a_pattern(monkeypat
     seen = []
     monkeypatch.setattr(verify, "run",
                         lambda path: (seen.append(path), (path, "gate", 0, ""))[1])
+    monkeypatch.setattr(verify, "gates_for", lambda path: "gate")
     monkeypatch.setattr(sys, "argv", ["verify.py", str(vf)])
     verify.main()
     assert seen == [str(vf)]
@@ -145,6 +150,8 @@ def test_main_exits_nonzero_when_any_run_failed(monkeypatch, tmp_path):
         return path, "gate", (1 if path == str(bad) else 0), ""
 
     monkeypatch.setattr(verify, "run", fake_run)
+
+    monkeypatch.setattr(verify, "gates_for", lambda path: "gate")
     monkeypatch.setattr(sys, "argv", ["verify.py", str(ok), str(bad)])
     with pytest.raises(SystemExit) as exc:
         verify.main()
@@ -155,6 +162,7 @@ def test_main_exits_zero_when_every_run_passed(monkeypatch, tmp_path):
     ok = tmp_path / "a.otf"
     ok.write_bytes(b"")
     monkeypatch.setattr(verify, "run", lambda path: (path, "gate", 0, ""))
+    monkeypatch.setattr(verify, "gates_for", lambda path: "gate")
     monkeypatch.setattr(sys, "argv", ["verify.py", str(ok)])
     verify.main()          # falls off the end: no SystemExit, exit code 0
 

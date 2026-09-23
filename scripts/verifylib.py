@@ -1,8 +1,7 @@
-"""Shared pieces of the verification scripts (verify_jp.py,
-verify_latin.py, verify_latin_vf.py and golden.py, which verify.py
-dispatches to): a HarfBuzz shaper, the ok/FAIL check tally, the texts
-every driver shapes, the CFF hint probe, and the static-face listing
-nerdpatch.py shares.
+"""Shared pieces of the verification scripts -- verify_jp.py and
+verify_latin_vf.py, which verify.py dispatches to, and golden.py: a
+HarfBuzz shaper, the ok/FAIL check tally, the texts every driver shapes,
+the CFF hint probe, the static-face listing, and the gates themselves.
 
 "round N, mutant X" in a gate's comment names the deliberately broken
 font that gate was written to catch. The harness that made them is no
@@ -188,7 +187,7 @@ def check_version_stamp(tf, check, unique_id=False):
               f"{head5!r})")
 
 
-# --- the gates verify_latin.py and verify_jp.py used to write twice ---------
+# --- the gates the Latin and JP drivers used to write twice -----------------
 # each driver had its own copy, word for word apart from the message, and a
 # fix to one of them reached the other only when someone remembered (round 12
 # found the JP side's NF_SYMBOLS gate missing that way)
@@ -331,6 +330,57 @@ def check_donor_repertoire(check, cmap, label=""):
           f"({len(donor)} codepoints; missing {len(missing)}: "
           f"{[hex(cp) for cp in missing[:5]]})")
 
+
+
+def check_donor_draws(check, cmap, drawn, label=""):
+    """... and draws it with ink wherever Source Code Pro does. The
+    Latin layer is the donor's glyphs, so a letter the donor inks and
+    this face leaves blank was lost on the way. `drawn` is the set of
+    this face's glyphs that have ink.
+
+    The Latin statics were the only faces this was asked of, as a count
+    (700 mapped glyphs draw), and they no longer ship; the JP faces
+    counted A-z only, so a blanked Greek, Cyrillic or accented letter
+    would have shipped blank in them. Every codepoint, not a count."""
+    path = os.environ.get("SCP_VF_U")
+    if not (path and Path(path).is_file()):
+        check(None, f"every character Source Code Pro inks draws{label}: SCP_VF_U unset")
+        return
+    from fontTools.ttLib import TTFont
+    donor = TTFont(path)
+    gs = donor.getGlyphSet()
+    inked = [cp for cp, g in sorted(donor.getBestCmap().items())
+             if build._bounds(gs, g) is not None]
+    blank = [cp for cp in inked if cp in cmap and cmap[cp] not in drawn]
+    check(inked and not blank,
+          f"every character Source Code Pro inks draws here too{label} "
+          f"({len(inked)} codepoints; blank {len(blank)}: "
+          f"{[hex(cp) for cp in blank[:5]]})")
+
+
+def mean_ink_offset(boxes, advance, cmap, ranges):
+    """The mean of (ink centre - advance centre) over the spacing glyphs
+    of the codepoints in `ranges` ((lo, hi) pairs): how far a layer sits
+    off the middle of its cells. `boxes` is {glyph: box} for the glyphs
+    with ink, `advance` glyph -> advance. A per-glyph bound has to allow
+    a design that sits off centre on purpose (氵, a leaning italic); the
+    mean does not, and a pass that shifts the whole layer moves it. None
+    when nothing in `ranges` draws."""
+    offs = [(box[0] + box[2]) / 2 - advance(g) / 2
+            for cp, g in cmap.items()
+            if any(lo <= cp <= hi for lo, hi in ranges) and advance(g) > 0
+            for box in (boxes.get(g),) if box is not None]
+    return sum(offs) / len(offs) if offs else None
+
+
+# the digits and the ASCII letters, whose mean ink centre stands for the
+# Latin layer's placement (mean_ink_offset)
+LATIN_LETTERS = ((0x30, 0x39), (0x41, 0x5A), (0x61, 0x7A))
+
+# the features the Latin layer carries into every shipped face: the
+# ligatures (calt, liga, the ss01-ss08 groups, cv99) and Source Code
+# Pro's own variants (zero, cv01, and its stylistic sets moved to ss11+)
+FEATURE_SURFACE = ("calt", "liga", "ss01", "ss08", "cv99", "zero", "cv01", "ss11")
 
 def check_grid(check, metrics, cell):
     """Every advance is 0 or a whole number of cells (at most four)."""

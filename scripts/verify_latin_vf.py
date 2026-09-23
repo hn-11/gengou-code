@@ -15,7 +15,6 @@ import os
 import sys
 from pathlib import Path
 
-from fontTools.pens.boundsPen import BoundsPen
 from fontTools.ttLib import TTFont
 from fontTools.varLib.instancer import instantiateVariableFont
 
@@ -25,11 +24,14 @@ import build  # noqa: E402
 import build_latin_vf  # noqa: E402
 from verifylib import (  # noqa: E402
     DONOR_LETTERS,
+    FEATURE_SURFACE,
+    LATIN_LETTERS,
     NERD_FONT_MARK,
     Checker,
     check_blank_glyphs,
     check_cells,
     check_coverage_order,
+    check_donor_draws,
     check_donor_repertoire,
     check_family_cmap,
     check_features_work,
@@ -58,6 +60,7 @@ from verifylib import (  # noqa: E402
     family_reference,
     ink_spill,
     make_shaper,
+    mean_ink_offset,
     static_faces,
     vf_region_peaks,
 )
@@ -76,9 +79,7 @@ WEIGHTS = [w for w, _ in build.FACES]
 def bounds(gs, cmap, ch):
     """Bounds of `ch` drawn from the glyph set `gs` (a font's, or a VF's
     at a location)."""
-    pen = BoundsPen(gs)
-    gs[cmap[ord(ch)]].draw(pen)
-    return pen.bounds
+    return build._bounds(gs, cmap[ord(ch)])
 
 
 def close(a, b, tol):
@@ -218,17 +219,15 @@ def main():
     union = rsb = None
     metrics = tf["hmtx"].metrics     # no HVAR: advances are the same everywhere
 
-    # the three things verify_latin.py checks on a static face and this
-    # never did: the repertoire, the grid, and the feature surface. The
+    # the repertoire, the grid, and the feature surface, which only the
+    # static faces' gates asked at first. The
     # two variable fonts are the whole of GengouCode.zip, and this is their
     # only gate — a VF that lost every codepoint above U+024F, or every
-    # stylistic set, passed here while the same loss on a static face
-    # failed three checks
+    # stylistic set, passed here
     vf_cmap = tf.getBestCmap()
     check_latin_repertoire(check, vf_cmap)
     check_donor_repertoire(check, vf_cmap)
-    # the tables verify_latin.py has gated since round 43 and this file
-    # never read: a VF with embedding restricted, the vendor id blanked,
+    # the tables, which this file once never read: a VF with embedding restricted, the vendor id blanked,
     # the range bits or the char-index range zeroed, or both format-4
     # cmap subtables deleted, passed here — and these two files ARE
     # GengouCode.zip. head's box is checked below instead, against every
@@ -255,21 +254,11 @@ def main():
     check_coverage_order(tf, check)
     check_mark_class_closure(tf, check)
     check_private(tf, check)
-    letters = {g for cp, g in vf_cmap.items()
-               if 0x30 <= cp <= 0x39 or 0x41 <= cp <= 0x5A or 0x61 <= cp <= 0x7A}
-    # ... and they DRAW: the count is a cmap count, so a VF with 1,626
-    # of its 1,632 glyphs emptied passed this file, which is the only
-    # gate the two variable fonts have
+    # ... and they DRAW: the repertoire is a cmap count, so a VF with
+    # 1,626 of its 1,632 glyphs emptied passed this file
     default_gs = tf.getGlyphSet(location={"wght": axis.defaultValue})
-    drawn = set()
-    for g in tf.getGlyphOrder():
-        pen = BoundsPen(default_gs)
-        default_gs[g].draw(pen)
-        if pen.bounds is not None:
-            drawn.add(g)
-    inked = sum(1 for g in vf_cmap.values() if g in drawn)
-    check(inked >= 700, f"{inked} mapped glyphs draw at the default weight")
-    ligs = []
+    drawn = {g for g in tf.getGlyphOrder() if build._bounds(default_gs, g) is not None}
+    check_donor_draws(check, vf_cmap, drawn)
     shape_default = make_shaper(FONT, {"wght": axis.defaultValue})
     check_heights(tf, check, default_gs, vf_cmap)
     check_zones(tf, check, vf_cmap)
@@ -305,45 +294,27 @@ def main():
         check_ligature_cells(inst, shape_at, check, gs_at, build.CELL, label=f" at wght {round(loc, 2):g}")
         check_blank_glyphs(inst, check, gs_at)
     check_features_work(shape_default, check, vf_cmap)
-    # the nameIDs verify_latin.py requires of the statics; 13 and 14 are
-    # the licence and its URL, and dropping all seven passed this file
+    # the nameIDs a static face is held to; 13 and 14 are the licence
+    # and its URL, and dropping all seven passed this file
     check_name_ids(tf, check, (3, 4, 8, 9, 11, 13, 14))
-    for seq in build.LIGATURES:
-        infos, _p = shape_default(f"a {seq} b", {"calt": True, "liga": True})
-        ligs += [tf.getGlyphOrder()[i.codepoint] for i in infos[2:len(infos) - 2]
-                 if tf.getGlyphOrder()[i.codepoint] not in drawn]
-    check(not ligs, f"every ligature draws ({len(build.LIGATURES)} probes; "
-                    f"blank: {ligs[:5]})")
     check_version_stamp(tf, check)
     check_style_bits(tf, check, tf["name"].getDebugName(2) or "",
                      "Italic" in (tf["name"].getDebugName(17)
                                   or tf["name"].getDebugName(2) or ""))
     check_gdi_family_name(tf, check)
     check_grid(check, metrics, build.CELL)
-    # on the grid is not the same as the RIGHT number of cells: only the
-    # glyph count of three ligature cases was read here, so widening
-    # '==' from two cells to three shaped 'a == b' at 4,200 units and
-    # passed (verify_latin.py has had this for every one of the 61 since
-    # v3, and the one-cell checks beside it)
-    wrong = {}
-    for seq, spec in build.LIGATURES.items():
-        infos, positions = shape_default(f"a {seq} b", {"calt": True, "liga": True})
-        adv = sum(p.x_advance for p in positions[2:len(infos) - 2])
-        if adv != spec["cells"] * build.CELL:
-            wrong[seq] = adv
-    check(not wrong, f"every ligature is the cells it declares "
-                     f"({len(build.LIGATURES)} probes; off: {wrong})")
+    # (every ligature drawing, at the cells it declares, is
+    # check_ligature_cells' -> check_ligatures_fire's, above, at every
+    # location)
     check(hhea.advanceWidthMax == max(adv for adv, _ in metrics.values()),
           f"hhea advanceWidthMax is the widest advance "
           f"({hhea.advanceWidthMax} vs {max(adv for adv, _ in metrics.values())})")
     tags = {fr.FeatureTag for fr in tf["GSUB"].table.FeatureList.FeatureRecord}
-    missing = [t for t in ("calt", "liga", "ss01", "ss08", "cv99",
-                           "zero", "cv01", "ss11") if t not in tags]
-    check(not missing, f"GSUB carries the feature surface the statics do "
+    missing = [t for t in FEATURE_SURFACE if t not in tags]
+    check(not missing, f"GSUB carries the Latin feature surface "
                        f"(missing: {missing})")
     # WHERE the ink lands, at every location and not only the default
-    # one: verify_latin.py has held the statics to this since v3, and
-    # the only ink test here was "it draws at all", at the default.
+    # one: the only ink test here was "it draws at all", at the default.
     # A master translated a cell sideways is point-compatible, so
     # varLib merges it happily, head/hhea are computed from the same
     # corrupted masters and hold it, and the SCP exactness check probes
@@ -370,24 +341,20 @@ def main():
           f"({[round(w, 2) for w in probes]})")
     for w in probes:
         gs = tf.getGlyphSet(location={"wght": w})
-        offs = []
-        for g in tf.getGlyphOrder():
-            pen = BoundsPen(gs)
-            gs[g].draw(pen)
-            if pen.bounds is None:
-                continue
-            if w == axis.defaultValue:
-                default_boxes[g] = pen.bounds
-            union = pen.bounds if union is None else tuple(
-                f(a, b) for f, a, b in zip((min, min, max, max), union, pen.bounds))
-            right = metrics[g][0] - pen.bounds[2]
+        boxes = {g: b for g in tf.getGlyphOrder()
+                 for b in (build._bounds(gs, g),) if b is not None}
+        if w == axis.defaultValue:
+            default_boxes = boxes
+        for g, box in boxes.items():
+            union = box if union is None else tuple(
+                f(a, b) for f, a, b in zip((min, min, max, max), union, box))
+            right = metrics[g][0] - box[2]
             rsb = right if rsb is None else min(rsb, right)
-            adv = metrics[g][0]
-            for hit in ink_spill({g: pen.bounds}, lambda _: adv, vf_cmap, build.CELL):
-                spill.setdefault(round(w), []).append(hit)
-            if g in letters:
-                offs.append((pen.bounds[0] + pen.bounds[2]) / 2 - adv / 2)
-        centres[round(w)] = sum(offs) / len(offs) if offs else None
+        spill_at = ink_spill(boxes, lambda g: metrics[g][0], vf_cmap, build.CELL)
+        if spill_at:
+            spill[round(w)] = spill_at
+        centres[round(w)] = mean_ink_offset(boxes, lambda g: metrics[g][0],
+                                            vf_cmap, LATIN_LETTERS)
     check(not spill, f"every glyph's ink is inside its advance at every "
                      f"location, give or take the lean "
                      f"({ {k: (len(v), v[:2]) for k, v in spill.items()} })")
@@ -424,8 +391,8 @@ def main():
           f"hhea.minRightSideBearing {hhea.minRightSideBearing} <= smallest right side "
           f"bearing {None if rsb is None else round(rsb, 3)}")
 
-    # every named instance: shape the ligature cases, same as the static
-    # faces (verify_latin.py / verify.py CASES) -- HarfBuzz on the VF at
+    # every named instance: shape the ligature cases (as verifylib's
+    # CASES do on the JP faces) -- HarfBuzz on the VF at
     # that location: the actual varLib.build-merged GSUB, per weight
     on = {"calt": True, "liga": True}
     scp, to_scp = scp_reference(is_italic)

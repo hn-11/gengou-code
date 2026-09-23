@@ -84,11 +84,11 @@ jobs:
         run: |
           python scripts/build_latin_vf.py ${{ matrix.variable }}
           python scripts/nerdpatch.py dist/latin/*\[wght\].otf
-      # the statics only: a variable font is held to every static of its
-      # family (verify_latin_vf), and only the package job has them all
-      - run: |
-          statics=$(ls dist/latin/GengouCode-*.otf | grep -v '\[wght\]')
-          python scripts/verify.py 'dist/*.otf' 'dist/nerd/*.otf' $statics
+      # the JP faces and their Nerd Fonts grafts. A variable font is held
+      # to every static of its family (verify_latin_vf), and only the
+      # package job has them all; the Latin statics themselves ship as
+      # nothing and are verified as nothing
+      - run: python scripts/verify.py 'dist/*.otf' 'dist/nerd/*.otf'
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: faces-${{ matrix.style }}-${{ strategy.job-index }}
