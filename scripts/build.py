@@ -400,7 +400,9 @@ def append_glyph(font, td, name, cs, fd_index, width, lsb=None, vdonor=None):
     ships them with, which is its vertical design, not ours to rewrite."""
     order = font.getGlyphOrder()
     order.append(name)
-    if td.charset is not order:  # same list object for CFF fonts
+    # the same list object for CFF fonts; a CFF2 has no charset, its
+    # names are post's
+    if getattr(td, "charset", order) is not order:
         td.charset.append(name)
     if fd_index is not None:     # CID-keyed; a plain CFF has no FDSelect
         td.FDSelect.gidArray.append(fd_index)
@@ -452,9 +454,11 @@ def append_context(font):
     dict the top dict's own. Every face this repo builds is CID-keyed,
     Gengou Code included; the branch is for a caller handed something else
     (the unit tests' fixtures). A face with no vmtx has no donor
-    either."""
-    cff = font["CFF "].cff
-    td = cff[cff.fontNames[0]]
+    either. A variable font's CFF2 has no names of its own and keeps its
+    one top dict in an index; nerdpatch appends to the variable Gengou
+    Code too."""
+    cff = font["CFF2" if "CFF2" in font else "CFF "].cff
+    td = cff.topDictIndex[0] if "CFF2" in font else cff[cff.fontNames[0]]
     cmap = font.getBestCmap()
     a = cmap[ord("A")]
     return (td, cmap, glyph_fd(font, td, a), glyph_private(font, td, a),
@@ -479,15 +483,19 @@ def graft_outline(font, ctx, draws, width, simplify=True):
 def glyph_fd(font, td, name):
     """The FontDict index `name` lives in, or None in a plain CFF (which
     has one Private dict and no FDSelect — the tests' fixtures; every
-    face this repo builds is CID-keyed)."""
-    return td.FDSelect[font.getGlyphID(name)] if hasattr(td, "FDArray") else None
+    face this repo builds is CID-keyed). A CFF2 with a single FontDict
+    may leave FDSelect out as well, and then this is None too."""
+    return td.FDSelect[font.getGlyphID(name)] if hasattr(td, "FDSelect") else None
 
 
 def glyph_private(font, td, name):
     """The Private dict a charstring for `name` is written against: its
-    own FD's, or the top dict's in a plain CFF."""
+    own FD's, the only FD's in a CFF2 without FDSelect, or the top
+    dict's in a plain CFF."""
     fd = glyph_fd(font, td, name)
-    return td.Private if fd is None else td.FDArray[fd].Private
+    if fd is None:
+        return td.FDArray[0].Private if hasattr(td, "FDArray") else td.Private
+    return td.FDArray[fd].Private
 
 
 def set_cmap(font, mapping, add_new=False):
