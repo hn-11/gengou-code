@@ -101,9 +101,24 @@ GitHub Release を作り、5 分程度。所要時間を測るだけなら Run w
 チェックを入れるか、コミットメッセージに `[release-dry]` と書いたコミットを
 ブランチに push する。どちらもビルドと梱包まで走って Release は作らない）。複数の面をまとめて検証するときは
 `python scripts/verify.py 'dist/*.otf' 'dist/latin/*.otf'` が面ごとに
-プロセスを分けて走らせます（どの門番に掛けるかはフォント自身が決める）。ビルド前後の出力を比べたいときは
-`python scripts/golden.py <前の dist> <今の dist>` が cmap・送り幅・
-シェーピング・アウトライン・メタデータ・ヒントを突き合わせます。
+プロセスを分けて走らせます（どの門番に掛けるかはフォント自身が決める）。
+
+**フォントの出力が変わる変更では、`scripts/golden.py` で「変わってよい所だけが
+変わった」ことを示してください。** 門番が答えるのは「壊れていないか」で、
+「狙った所以外は何も動いていないか」には答えません。変更前のコミットで組んだ
+`dist` を別の場所に取っておき、変更後に組んだものと突き合わせます:
+
+```sh
+python scripts/golden.py <前の dist> dist                 # JP 面
+python scripts/golden.py <前の dist>/latin dist/latin     # 欧文の静的面
+python scripts/golden.py <前の dist>/nerd dist/nerd       # Nerd Fonts 版
+```
+
+cmap・送り幅・GSUB/GPOS の feature tag・コーパスのシェーピング・
+アウトライン・メタデータ・ヒントを面ごとに比べ、グリフの番号が振り直されて
+いても同じものは同じと見ます（ディレクトリは下へ辿らないので、上のように
+1 段ずつ渡す）。出た差分が全部、その変更で動くと分かっているものなら、
+それを PR に書きます。ビルドが 2 回要るので CI には載っていません。
 
 NF（Nerd Fonts）変種の生成を試す場合（`NF_SYMBOLS` に Symbols Nerd Font
 Mono を渡す。fontTools で接ぎ木するので FontForge も font-patcher も要らず、
