@@ -35,7 +35,7 @@ runs:
         # letter (build_latin.add_missing_from_sans).
         echo "SS_TAG=3.052R" >> "$GITHUB_ENV"
         echo "MONA_TAG=v1.400" >> "$GITHUB_ENV"
-        echo "NF_TAG=v3.4.0" >> "$GITHUB_ENV"
+        echo "NF_TAG=v3.5.1" >> "$GITHUB_ENV"
         # A GitHub release asset can be replaced without the tag moving, so
         # the tag alone does not say which bytes were built. These do, and
         # the fetch below refuses anything else. bump_pins.py rewrites them
@@ -45,7 +45,7 @@ runs:
         echo "SCP_SHA=0660ba0cd1478f92cfcf2ad790b7aa29f8adb2daf15598f452a65ae61c9c9fb1" >> "$GITHUB_ENV"
         echo "SS_SHA=d8e2ac355e06e6a0f0e0a0b1ac0c2451afa707584d7bb9d6b11ef9e4b749904c" >> "$GITHUB_ENV"
         echo "MONA_SHA=b69a7f2a3c455c89dcb6cc23b61bb3fb8beecba728ccdebeccd80577e58de0c8" >> "$GITHUB_ENV"
-        echo "NF_SHA=8e617904b980fe3648a4b116808788fe50c99d2d495376cb7c0badbd8a564c47" >> "$GITHUB_ENV"
+        echo "NF_SHA=fdca3682534f6f65e1ccb2345b0362ccf67d9b8eca7c8025330946e93e2473bc" >> "$GITHUB_ENV"
     - name: Fetch upstreams (cached)
       uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       id: up
