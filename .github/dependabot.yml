@@ -1,0 +1,27 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    # Dependabot does not descend into .github/actions from "/".
+    # SHA pins keep their "# vX.Y.Z" comment in step with the bump.
+    directories:
+      - /
+      - /.github/actions/setup-build
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "chore"
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # requirements.txt pins ranges, not versions: a PR here means a new
+  # major is out and the upper bound would have to move to take it.
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "chore"
+    groups:
+      pip:
+        patterns: ["*"]
