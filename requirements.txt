@@ -1,11 +1,11 @@
-fonttools>=4.52.4,<4.67   # cffLib.CFF2ToCFF, instancer.instantiateCFF2(round=)
+fonttools>=4.66.1,<4.67   # cffLib.CFF2ToCFF, instancer.instantiateCFF2(round=)
 # 4.67 makes CFF2ToCFF write a name-keyed CFF when the font has one FontDict
 # (Source Code Pro's VF does); the Latin donors are built as CID-keyed fonts,
 # down to their cidNNNNN glyph names (build_latin.static_base), and
 # vfsource.replace_from_mona fails on the missing FDArray. Lift the cap
 # together with that port, and golden.py the build before and after.
-uharfbuzz>=0.39,<1
-skia-pathops>=0.8,<1
-afdko>=5,<6
-cffsubr>=0.3,<1
-pyyaml>=6,<7          # scripts/lint_workflows.py and its test
+uharfbuzz>=0.56.3,<1
+skia-pathops>=0.9.2,<1
+afdko>=5.0.1,<6
+cffsubr>=0.4.0,<1
+pyyaml>=6.0.3,<7          # scripts/lint_workflows.py and its test
