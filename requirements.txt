@@ -1,4 +1,9 @@
-fonttools>=4.52.4,<5   # cffLib.CFF2ToCFF, instancer.instantiateCFF2(round=)
+fonttools>=4.52.4,<4.67   # cffLib.CFF2ToCFF, instancer.instantiateCFF2(round=)
+# 4.67 makes CFF2ToCFF write a name-keyed CFF when the font has one FontDict
+# (Source Code Pro's VF does); the Latin donors are built as CID-keyed fonts,
+# down to their cidNNNNN glyph names (build_latin.static_base), and
+# vfsource.replace_from_mona fails on the missing FDArray. Lift the cap
+# together with that port, and golden.py the build before and after.
 uharfbuzz>=0.39,<1
 skia-pathops>=0.8,<1
 afdko>=5,<6

@@ -1,0 +1,8 @@
+# Shapes the notes release.yml generates from merged pull requests
+# (generate_release_notes). Dependabot labels its PRs "dependencies";
+# a bumped CI action changes nothing for someone using the font, so
+# those stay out of the notes.
+changelog:
+  exclude:
+    labels:
+      - dependencies
