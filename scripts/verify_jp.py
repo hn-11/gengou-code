@@ -528,11 +528,21 @@ def check_width_policy(face, check):
     check(not off_policy, f"width policy ({len(policy)} probes; off: {off_policy})")
     if term:
         # every ambiguous character, not a probe set: none is wider than
-        # the column a terminal gives it, and each sits centred on it
-        # (Source Han Sans's own, which arrive full width) or is the
-        # Latin layer's, a cell by construction
+        # the column a terminal gives it, and Source Han Sans's own,
+        # which arrive full width, sit centred on it. The Latin layer's
+        # (its FontDict is 'A''s) is a cell by construction and drawn as
+        # its donor drew it -- ŉ, the double diacritics, ▓, an italic Æ
+        # reach past the cell on purpose -- so the centring is not asked
+        # of it
         wide, off_centre = [], []
         gs = face.tf.getGlyphSet()
+        td = face.tf["CFF "].cff.topDictIndex[0]
+        fd_select = getattr(td, "FDSelect", None)
+
+        def fd(g):
+            return fd_select[face.tf.getGlyphID(g)] if fd_select is not None else 0
+
+        latin_fd = fd(cmap[ord("A")])
         for cp, g in sorted(cmap.items()):
             if unicodedata.east_asian_width(chr(cp)) != "A":
                 continue
@@ -540,13 +550,15 @@ def check_width_policy(face, check):
             if adv > exp_half:
                 wide.append(f"U+{cp:04X}")
                 continue
+            if fd(g) == latin_fd:
+                continue
             box = build._bounds(gs, g)
             if box and box[2] - box[0] > exp_half and abs(box[0] + box[2] - adv) > 2:
                 off_centre.append(f"U+{cp:04X}")
         check(not wide, f"Term: every ambiguous-width character is one cell "
                         f"({len(wide)} wider: {wide[:6]})")
-        check(not off_centre, f"Term: an ambiguous glyph wider than its cell "
-                              f"is centred on it ({len(off_centre)} off: {off_centre[:6]})")
+        check(not off_centre, f"Term: a Source Han Sans ambiguous glyph wider "
+                              f"than its cell is centred on it ({len(off_centre)} off: {off_centre[:6]})")
 
 
 def check_greek_cyrillic_cells(face, check):
