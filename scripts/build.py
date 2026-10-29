@@ -3149,6 +3149,57 @@ def narrow_halfwidth(font, cell):
     return len(new)
 
 
+def center_ambiguous(font, cell):
+    """Term only: every East_Asian_Width Ambiguous character still on a
+    Source Han Sans full width (※ ① ★ ∈ ≒ -- the ones Gengou Code has
+    no glyph for) gets a one-cell copy of its glyph, the outline
+    unchanged and its ink centred on the cell. A terminal gives an
+    ambiguous character one column (Ghostty has no setting for anything
+    else, Windows Terminal defaults to it, and glibc counts it so); a
+    two-cell glyph drawn from that column's left put ※'s centre on the
+    boundary with the next character, through 148 units of a following
+    あ. Centred, ※ stops 90 units short of あ and ① 15 short of 漢's
+    full-width cell, spilling half its excess into each neighbouring
+    cell instead of all of it into one. Nothing is scaled: the
+    alternative, shrinking ① to 0.63 to fit, is what Term once did and
+    gave up.
+
+    Whatever else shares the glyph (a vertical form, a feature) keeps
+    the original, which widen_fullwidth then puts on two cells; the
+    caller re-points the vertical features at the copies. Runs after
+    fit_to_grid and before widen_fullwidth, while a full width is still
+    FULLWIDTH. Returns {codepoint: the glyph it had}."""
+    cmap = font.getBestCmap()
+    hmtx = font["hmtx"]
+    gs = font.getGlyphSet()
+    cff = font["CFF "].cff
+    td = cff[cff.fontNames[0]]
+    vdon = vmtx_donor(font)
+    built = state_of(font).built
+    made, new, was = {}, {}, {}
+    for cp, name in sorted(cmap.items()):
+        if (unicodedata.east_asian_width(chr(cp)) != "A"
+                or hmtx[name][0] != FULLWIDTH or name in built):
+            continue
+        if name not in made:
+            box = _bounds(gs, name)
+            dx = (cell - (box[0] + box[2])) / 2 if box else (cell - FULLWIDTH) / 2
+            fd = glyph_fd(font, td, name)
+            private = glyph_private(font, td, name)
+            pen = T2CharStringPen(pen_width(private, cell), gs)
+            gs[name].draw(TransformPen(pen, (1, 0, 0, 1, round(dx), 0)))
+            made[name] = alloc_glyph_name(font)
+            append_glyph(font, td, made[name], pen.getCharString(private=private),
+                         fd, cell, vdon)
+            # keep it in its Source Han Sans FontDict, as narrow_halfwidth's
+            # copies do, so add_latin_fd does not hint it as Latin
+            state_of(font).appended.discard(made[name])
+        new[cp] = made[name]
+        was[cp] = name
+    set_cmap(font, new)
+    return was
+
+
 def repoint_features(font, replaced, tags=("vert", "vrt2")):
     """Source Han Sans's own features substitute FROM the glyphs the
     graft replaced, so once the cmap points at Gengou Code's they never
@@ -3727,7 +3778,11 @@ def build_face(job):
     if freed:
         print("  lookups no feature reaches any more: "
               + ", ".join(f"{t} {n}" for t, n in sorted(freed.items())))
-    n_vert = repoint_features(base, replaced)
+    # Term: the ambiguous-width characters Source Han Sans draws full
+    # width onto one cell, centred, before widen_fullwidth would put
+    # them on two; their vertical forms follow them like the graft's
+    n_amb = center_ambiguous(base, CELL) if term else {}
+    n_vert = repoint_features(base, {**replaced, **n_amb})
     if term:
         # the ligatures are the Latin layer's only multi-cell glyphs, so
         # the only ones an advance test cannot tell from a full width
@@ -3756,7 +3811,7 @@ def build_face(job):
     write_face(base, out, state_of(base).redrawn)
     return (f"{face_label}{f' [{suffix}]' if suffix else ''}: "
             f"latin={n_scp} vert={n_vert} "
-            f"fitted={n_fit} half={n_half} "
+            f"fitted={n_fit} half={n_half} ambiguous={len(n_amb)} "
             f"ligs={len(added)} ccmp={n_ccmp} locl={n_locl} mark={n_mark} loose={n_loose} "
             f"-> {out.name}")
 
