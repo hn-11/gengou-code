@@ -255,6 +255,16 @@ def icon_transform(cp, ink, ctx):
     return (k, 0, 0, k, (cell - k * (x0 + x1)) / 2, (asc + desc) / 2 - k * (y0 + y1) / 2)
 
 
+# xterm.js (VS Code's terminal) squeezes a one-cell glyph whose ink is
+# wider than 1.5 cells into its cell, horizontally only, unless the
+# codepoint is in the BMP private use area (RendererUtils.allowRescaling:
+# isNerdFontGlyph is U+E000-F8FF). The icons outside it -- the Material
+# Design set from U+F0001, and the few Nerd Fonts keeps at real
+# codepoints -- are held under that, with a margin for the rasteriser's
+# rounding, so they keep their aspect there too
+OUTSIDE_PUA_MAX_CELLS = 1.45
+
+
 def overhang_context(font, icons):
     """What overhang_transform is derived from: the icons font's em and
     line box, this face's em, cell and line box."""
@@ -263,7 +273,7 @@ def overhang_context(font, icons):
             font["hhea"].ascent, font["hhea"].descent)
 
 
-def overhang_transform(ink, octx):
+def overhang_transform(ink, octx, cp=0xE000):
     """The affine transform taking one icon of Symbols Nerd Font (Nerd
     Fonts' default flavour, not Mono) onto our cell: scaled em to em, so
     the icon keeps the size Nerd Fonts gives it beside text and the
@@ -281,17 +291,19 @@ def overhang_transform(ink, octx):
     fitted into them instead, keeping its aspect, never enlarged, its
     left edge on the cell's: 407 of Nerd Fonts' icons are drawn wider
     than its own 2048 em, and the widest would otherwise reach 2.2
-    cells, into whatever follows the space."""
+    cells, into whatever follows the space. An icon outside the BMP
+    private use area gets OUTSIDE_PUA_MAX_CELLS instead of two cells."""
     s_em, s_asc, s_desc, em, cell, asc, desc = octx
+    reach = 2 * cell if 0xE000 <= cp <= 0xF8FF else OUTSIDE_PUA_MAX_CELLS * cell
     k = em / s_em
     dy = (asc + desc) / 2 - k * (s_asc + s_desc) / 2
     if ink is None or ink[2] <= ink[0] or ink[3] <= ink[1]:
         return (k, 0, 0, k, 0, dy)
     x0, y0, x1, y1 = ink
-    if (k * x0 >= -1 and k * x1 <= 2 * cell + 1
+    if (k * x0 >= -1 and k * x1 <= reach + 1
             and k * y0 + dy >= desc - 1 and k * y1 + dy <= asc + 1):
         return (k, 0, 0, k, 0, dy)
-    k = min(k, 2 * cell / (x1 - x0), (asc - desc) / (y1 - y0))
+    k = min(k, reach / (x1 - x0), (asc - desc) / (y1 - y0))
     return (k, 0, 0, k, -k * x0, (asc + desc) / 2 - k * (y0 + y1) / 2)
 
 
@@ -403,7 +415,7 @@ def graft_symbols(font, symbols, icons=None):
         if icons is not None and cp not in LINE_BOX:
             pen = _pen(font, private, cell, igs)
             igs[icm[cp]].draw(TransformPen(
-                pen, overhang_transform(build._bounds(igs, icm[cp]), octx)))
+                pen, overhang_transform(build._bounds(igs, icm[cp]), octx, cp)))
         else:
             pen = _pen(font, private, cell, sgs)
             sgs[scm[cp]].draw(TransformPen(pen, xform))
@@ -568,7 +580,7 @@ def icon_checks(font, symbols=None, icons=None):
         if src is None or got is None:
             continue                      # blankness is `blank`/`hollow`'s
         # always a diagonal matrix
-        xf = overhang_transform(src, octx) if overhang else icon_transform(cp, src, ctx)
+        xf = overhang_transform(src, octx, cp) if overhang else icon_transform(cp, src, ctx)
         box = (xf[0] * src[0] + xf[4], xf[3] * src[1] + xf[5],
                xf[0] * src[2] + xf[4], xf[3] * src[3] + xf[5])
         if max(abs(a - b) for a, b in zip(got, box)) > 4:

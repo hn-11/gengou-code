@@ -624,7 +624,9 @@ def test_graft_symbols_draws_icons_from_the_default_flavour(monkeypatch):
     sep = _bounds(face, cmap[0xE0B0])
     assert sep[0] == pytest.approx(0, abs=1) and sep[2] == pytest.approx(600, abs=1)
     assert hmtx[cmap[0xF0001]][0] == 600
-    assert _bounds(face, cmap[0xF0001])[2] == pytest.approx(1200, abs=1)
+    # outside the BMP private use area: held under xterm.js's rescale
+    assert _bounds(face, cmap[0xF0001])[2] == pytest.approx(
+        nerdpatch.OUTSIDE_PUA_MAX_CELLS * 600, abs=1)
 
 
 def test_icon_checks_holds_overhanging_icons_to_two_cells(monkeypatch):
@@ -656,3 +658,21 @@ def test_graft_symbols_refuses_an_icons_font_missing_an_icon(monkeypatch):
         table.cmap.pop(0xF0001, None)
     with pytest.raises(ValueError, match="lacks 1 of the symbols font's icons"):
         nerdpatch.graft_symbols(_face(), _symbols(), icons)
+
+
+def test_overhang_transform_holds_icons_outside_the_pua_under_1_5_cells():
+    """VS Code's terminal squeezes a glyph wider than 1.5 cells into its
+    cell unless it is in U+E000-F8FF; the Material Design icons are
+    not, so they stay under that, aspect kept. Inside the PUA the same
+    icon keeps its 1.54 cells."""
+    octx = nerdpatch.overhang_context(_face(), _icons())
+    folder = (0, -213, 1890, 1441)
+    inside = _place(nerdpatch.overhang_transform(folder, octx, 0xF07B), folder)
+    outside = _place(nerdpatch.overhang_transform(folder, octx, 0xF024B), folder)
+    assert inside[2] / 600 == pytest.approx(1.54, abs=0.01)
+    assert outside[2] == pytest.approx(nerdpatch.OUTSIDE_PUA_MAX_CELLS * 600)
+    assert (outside[2] - outside[0]) / (outside[3] - outside[1]) \
+        == pytest.approx(1890 / 1654)
+    narrow = (0, 0, 1000, 1000)
+    assert _place(nerdpatch.overhang_transform(narrow, octx, 0xF0001), narrow) == \
+        _place(nerdpatch.overhang_transform(narrow, octx, 0xE000), narrow)

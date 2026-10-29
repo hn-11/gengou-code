@@ -156,7 +156,9 @@ themselves are drawn at Nerd Fonts' default size, the one a
 their cell and run on to the right, up to two cells, into the space a
 prompt or a file listing leaves after an icon. The folder icon is 1.54
 cells of ink, as in HackGen. Icons drawn wider than two cells are scaled
-down to fit. If a character follows an icon directly, the two overlap.
+down to fit, and those outside the private use area U+E000–F8FF (the
+Material Design set) to 1.45 cells, which VS Code's terminal draws without
+squeezing. If a character follows an icon directly, the two overlap.
 
 The icons are copied from `Symbols Nerd Font`, the symbols-only font
 Nerd Fonts publishes, scaled em to em. Powerline separators and progress
