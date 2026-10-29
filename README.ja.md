@@ -105,9 +105,11 @@ Monaspaceの最も細いウェイトでも、横棒の太さは53ユニットあ
 
 ## Nerd Fonts版
 
-NF版はNerd Fontsのアイコンを追加したもので、アイコンはすべて1セルに収めています。ファミリー名は`Gengou Code NF`、`Gengou Code JP NF`、`Gengou Code JP Term NF`で、Cascadia CodeのNerd Fonts版と同じ付け方です。本家の命名規則どおり`Nerd Font Mono`を付けると、Windows GDIが扱える31文字を超える名前ができてしまいます（`Gengou Code JP Term Nerd Font Mono SemiBold`は43文字）。そうなると、古いWindowsアプリケーションでは別の名前で表示されます。なお、本家の命名では`NF`は「アイコンがセルからはみ出してもよい版」を意味しますが、このフォントではすべてのアイコンがセルに収まっています。
+NF版はNerd Fontsのアイコンを追加したものです。ファミリー名は`Gengou Code NF`、`Gengou Code JP NF`、`Gengou Code JP Term NF`で、Cascadia CodeのNerd Fonts版と同じ付け方です。本家の命名規則どおりの名前を付けると、Windows GDIが扱える31文字を超える名前ができてしまいます（`Gengou Code JP Term Nerd Font Mono SemiBold`は43文字）。そうなると、古いWindowsアプリケーションでは別の名前で表示されます。
 
-アイコンは、Nerd Fontsが配布している記号専用フォント`Symbols Nerd Font Mono`から取り込んでいます。収録するアイコンと1セルの送り幅は`font-patcher --complete --mono`で作ったものと同じです。大きさは少し異なり、font-patcherはこのフォントでは600×856の枠に収めますが、こちらは記号フォントの正方形のセル（600×600）のままです。Powerlineの区切り記号と進捗バーは、セル幅と行の高さいっぱいに引き伸ばしています。Source Code Pro自身のPowerline記号は置き換えています。
+アイコンの送り幅はすべて1セルなので、桁はずれません。アイコンそのものは、`--mono`を付けない`font-patcher`で作ったものと同じ、Nerd Fonts標準の大きさで描いています。セルの左端から描き始めて右へはみ出し、最大で2セル分まで使います。プロンプトやファイル一覧では、アイコンの後ろに空白が入るのが普通なので、その空白に重なる形になります。フォルダーのアイコンは1.54セル分の幅で、HackGenと同じです。2セルより幅の広いアイコンは、2セルに収まるよう縮めています。アイコンの直後に文字が続く場合は、その文字と重なります。
+
+アイコンは、Nerd Fontsが配布している記号専用フォント`Symbols Nerd Font`から、emの比率で拡大縮小して取り込んでいます。Powerlineの区切り記号と進捗バーはそのMono版から取り込み、隙間なく並ぶようセル幅と行の高さいっぱいに引き伸ばしています。Source Code Pro自身のPowerline記号は置き換えています。
 
 Gengou Code NFのアイコンは、どのウェイトでも同じ字形です。Nerd Fontsのライセンス（MIT）は、NF版のzipに`LICENSE-NerdFonts`として同梱しています。
 

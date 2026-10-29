@@ -11,9 +11,15 @@ the FontForge round trip that flattened the CID keying, dropped the
 STAT and rewrote the metadata (all of which nerdpatch.py used to put
 back), and in ten seconds a face instead of a minute and a half.
 
+The icons themselves come from Symbols Nerd Font, the default flavour
+in the same zip (NF_ICONS), at the size a font-patcher patch without
+--mono gives them: scaled em to em, one cell of advance, the ink running
+on to the right for up to two cells (overhang_transform). Everything
+drawn against the line box stays the Mono font's, by the rules below.
+
 Sizing follows font-patcher's own rules for each group (icon_transform):
 
-  - an icon: scaled uniformly by our cell over the symbols' em
+  - an icon, where no icons font is given: scaled uniformly by our cell over the symbols' em
     (600 / 2048), so it fits one cell and the groups keep the relative
     sizes Nerd Fonts gave them, with the symbols' line box (-410..1638)
     centred on ours (-273..984). An icon whose ink would then LAND
@@ -61,22 +67,15 @@ one codepoint (TEXT_OVER_ICON) and fails the build when the overlap
 widens, so an upstream release cannot quietly turn a character into an
 icon behind a maintainer's back.
 
-Icon size, the second divergence: font-patcher fits a `--mono` icon
-into cell x iconheight, and iconheight is (2 x capHeight + line) / 3 —
-a box taller than it is wide, 600 x 856 for these faces. Grafting from
-Symbols Nerd Font Mono cannot reproduce that, because the symbols font
-was itself fitted into a square 2048 x 2048 cell and the scale groups
-that hold sets of icons at one size are baked into it: 3,496 of the
-10,363 icons that keep the square cell (the separators and the progress
-bars are stretched instead) are taller than they are wide, and each is
-up to 1.43x smaller than an official patch would draw it (a group with
-font-patcher's own vertical padding, U+2770 among them, up to 2.1x).
-Re-fitting each icon on its own would break those groups, so the icons
-keep the square cell — the same relative size a reader gets today by
-adding Symbols Nerd Font Mono to a terminal as a fallback font, and the
-side no icon ever spills its cell on. Making it exact needs
-font-patcher's per-group tables, which is the whole complexity this
-module exists without; `git show a7c86ec:docs/gengou-plan.md` carries the measurement.
+Icon size: the Mono font cannot give the icons a Mono patch's size
+either. font-patcher fits a `--mono` icon into cell x iconheight
+((2 x capHeight + line) / 3, 600 x 856 for these faces), while Symbols
+Nerd Font Mono was fitted into a square 2048 cell with its scale groups
+baked in, so its icons came out up to 1.43x smaller than an official
+patch and looked small beside text (`git show a7c86ec:docs/gengou-plan.md`
+carries the measurement). The default flavour has no such cell to
+squeeze into, and HackGen and UDEV Gothic ship it the same way: one
+cell of advance, the ink overhanging into the space after the icon.
 
 Names: "<Family> NF", PostScript "<PSFamily>NF-" in every record, as
 Cascadia Code's Nerd Fonts faces are named (nf_name, NF_MARKER).
@@ -89,7 +88,8 @@ Usage:
     no argument: every JP face in dist/ and the two Gengou Code variable
     fonts in dist/latin/. Output: dist/nerd/ for the JP faces,
     dist/nerd/latin/ for Gengou Code.
-Env (required): NF_SYMBOLS = path to SymbolsNerdFontMono-Regular.ttf
+Env (required): NF_SYMBOLS = path to SymbolsNerdFontMono-Regular.ttf,
+                NF_ICONS = path to SymbolsNerdFont-Regular.ttf
 """
 
 import math
@@ -255,6 +255,46 @@ def icon_transform(cp, ink, ctx):
     return (k, 0, 0, k, (cell - k * (x0 + x1)) / 2, (asc + desc) / 2 - k * (y0 + y1) / 2)
 
 
+def overhang_context(font, icons):
+    """What overhang_transform is derived from: the icons font's em and
+    line box, this face's em, cell and line box."""
+    return (icons["head"].unitsPerEm, icons["hhea"].ascent, icons["hhea"].descent,
+            font["head"].unitsPerEm, face_cell(font),
+            font["hhea"].ascent, font["hhea"].descent)
+
+
+def overhang_transform(ink, octx):
+    """The affine transform taking one icon of Symbols Nerd Font (Nerd
+    Fonts' default flavour, not Mono) onto our cell: scaled em to em, so
+    the icon keeps the size Nerd Fonts gives it beside text and the
+    groups keep their relative sizes, with the symbols' line box centred
+    on ours. Its left edge stays where Nerd Fonts drew it, at the cell's
+    left, and the ink runs on to the right — up to two cells, the space
+    a terminal prompt leaves after an icon. The glyph still advances one
+    cell; graft_symbols sets that.
+
+    This is what a default (not --mono) font-patcher patch ships and what
+    HackGen and UDEV Gothic do: their folder icon (U+F07B) is one cell
+    of advance and 1.54 / 1.85 cells of ink. Ours comes out at 1.54.
+
+    An icon whose ink would land outside two cells or the line box is
+    fitted into them instead, keeping its aspect, never enlarged, its
+    left edge on the cell's: 407 of Nerd Fonts' icons are drawn wider
+    than its own 2048 em, and the widest would otherwise reach 2.2
+    cells, into whatever follows the space."""
+    s_em, s_asc, s_desc, em, cell, asc, desc = octx
+    k = em / s_em
+    dy = (asc + desc) / 2 - k * (s_asc + s_desc) / 2
+    if ink is None or ink[2] <= ink[0] or ink[3] <= ink[1]:
+        return (k, 0, 0, k, 0, dy)
+    x0, y0, x1, y1 = ink
+    if (k * x0 >= -1 and k * x1 <= 2 * cell + 1
+            and k * y0 + dy >= desc - 1 and k * y1 + dy <= asc + 1):
+        return (k, 0, 0, k, 0, dy)
+    k = min(k, 2 * cell / (x1 - x0), (asc - desc) / (y1 - y0))
+    return (k, 0, 0, k, -k * x0, (asc + desc) / 2 - k * (y0 + y1) / 2)
+
+
 def _pen(font, private, width, glyphs):
     """A charstring pen for one icon: its width encoded against
     `private` in a CFF, none at all in a variable font's CFF2 (the
@@ -265,11 +305,17 @@ def _pen(font, private, width, glyphs):
     return T2CharStringPen(build.pen_width(private, width), glyphs)
 
 
-def graft_symbols(font, symbols):
+def graft_symbols(font, symbols, icons=None):
     """Append every symbol codepoint the face lacks as a one-cell glyph
     drawn from the symbols font (quadratic outlines become cubic on the
     way, exactly), and redraw the Powerline glyphs the face already has
     from the symbols too.
+
+    `icons`, Symbols Nerd Font (the default flavour), draws the icons
+    instead, at its own size with the ink overhanging the cell to the
+    right (overhang_transform); the line-box glyphs stay the Mono font's,
+    which draws them against a cell. Without it every icon is the Mono
+    font's, fitted into one cell.
 
     Returns (icons grafted, the names redrawn over the face's own glyphs
     — the only ones that had hints to lose —, {name: box} for every
@@ -279,6 +325,13 @@ def graft_symbols(font, symbols):
     scm, sgs = symbols.getBestCmap(), symbols.getGlyphSet()
     ctx = icon_context(font, symbols)
     cell = ctx[3]
+    if icons is not None:
+        icm, igs = icons.getBestCmap(), icons.getGlyphSet()
+        octx = overhang_context(font, icons)
+        lost = sorted(set(scm) - set(icm) - LINE_BOX)
+        if lost:
+            raise ValueError(f"the icons font lacks {len(lost)} of the symbols "
+                             f"font's icons: {[hex(c) for c in lost[:8]]}")
     td, cmap, fd_index, private, vdon = build.append_context(font)
     # the supplementary-plane icons need a format 12 subtable. Every face
     # here inherits one from Source Code Pro's variable font; this is for
@@ -347,8 +400,13 @@ def graft_symbols(font, symbols):
             replaced[name] = cp
             written[name] = box
             continue
-        pen = _pen(font, private, cell, sgs)
-        sgs[scm[cp]].draw(TransformPen(pen, xform))
+        if icons is not None and cp not in LINE_BOX:
+            pen = _pen(font, private, cell, igs)
+            igs[icm[cp]].draw(TransformPen(
+                pen, overhang_transform(build._bounds(igs, icm[cp]), octx)))
+        else:
+            pen = _pen(font, private, cell, sgs)
+            sgs[scm[cp]].draw(TransformPen(pen, xform))
         name = build.alloc_glyph_name(font)
         written[name] = build.append_glyph(
             font, td, name, pen.getCharString(private=private),
@@ -374,7 +432,8 @@ def graft_symbols(font, symbols):
 # what the face has to say about its fourth donor once the icons are in:
 # set_names' rule is that every donor's notice ships inside the font, not
 # only in the LICENSE beside it
-NF_NOTICE = ("Nerd Fonts: the icon glyphs are Nerd Fonts' Symbols Nerd Font Mono "
+NF_NOTICE = ("Nerd Fonts: the icon glyphs are Nerd Fonts' Symbols Nerd Font and "
+             "Symbols Nerd Font Mono "
              "(https://github.com/ryanoasis/nerd-fonts), which Nerd Fonts assembles "
              "from the icon sets it collects. Nerd Fonts' own license ships beside "
              "this font as LICENSE-NerdFonts; each icon set keeps its own, listed "
@@ -418,14 +477,15 @@ def rename(font):
     return ps
 
 
-def icon_checks(font, symbols=None):
+def icon_checks(font, symbols=None, icons=None):
     """[(ok, message)] over a grafted face — what the sizing rules above
     are for, checked on the built face:
 
       - every codepoint the symbols font has is in the face, grafted or
         (TEXT_OVER_ICON) already drawn there — and every icon among them
-        is one cell wide, draws ink where the symbols font does, and
-        stays inside the cell and the line box;
+        advances one cell, draws ink where the symbols font does, and
+        stays inside the line box and the cell — two cells to the right
+        where the icons came from `icons` (graft_symbols);
       - every grafted glyph lands exactly where icon_transform puts it,
         measured against the symbols glyph it came from. The checks
         around it each bound a glyph from one side only, so an icon
@@ -494,22 +554,28 @@ def icon_checks(font, symbols=None):
     # against the source, which a wrong scale, a wrong em, a wrong cell
     # and a shift all move
     ctx = icon_context(font, symbols) if symbols is not None else None
+    if icons is not None:
+        icm, igs = icons.getBestCmap(), icons.getGlyphSet()
+        octx = overhang_context(font, icons)
     misplaced = []
     for cp in sorted(want or ()):
         name = cmap.get(cp)
         if name is None or cp in TEXT_OVER_ICON:
             continue
-        src = build._bounds(sgs, scm[cp])
+        overhang = icons is not None and cp not in LINE_BOX
+        src = build._bounds(igs, icm[cp]) if overhang else build._bounds(sgs, scm[cp])
         got = build._bounds(gs, name)
         if src is None or got is None:
             continue                      # blankness is `blank`/`hollow`'s
-        xf = icon_transform(cp, src, ctx)     # always a diagonal matrix
+        # always a diagonal matrix
+        xf = overhang_transform(src, octx) if overhang else icon_transform(cp, src, ctx)
         box = (xf[0] * src[0] + xf[4], xf[3] * src[1] + xf[5],
                xf[0] * src[2] + xf[4], xf[3] * src[3] + xf[5])
         if max(abs(a - b) for a, b in zip(got, box)) > 4:
             misplaced.append(f"U+{cp:04X}")
 
     hmtx = font["hmtx"].metrics
+    reach = 2 * cell if icons is not None else cell
     wide, hollow, over = [], [], []
     for cp in sorted(want or ()):
         name = cmap.get(cp)
@@ -522,7 +588,7 @@ def icon_checks(font, symbols=None):
             if build._bounds(sgs, scm[cp]) is not None:
                 hollow.append(f"U+{cp:04X}")
             continue
-        if (box[0] < -1 or box[2] > cell + 1
+        if (box[0] < -1 or box[2] > reach + 1
                 or box[1] < desc - 1 or box[3] > asc + 1):
             over.append(f"U+{cp:04X}")
 
@@ -548,11 +614,12 @@ def icon_checks(font, symbols=None):
                     f"(blank: {blank})"),
         (held(not misplaced), f"every grafted glyph is where icon_transform puts "
                         f"it ({few(misplaced)})"),
-        (held(not wide), f"every icon is one cell wide — a Nerd Font MONO "
+        (held(not wide), f"every icon advances one cell "
                    f"(off: {few(wide)})"),
         (held(not hollow), f"every icon the symbols font draws draws in the face "
                      f"(blank: {few(hollow)})"),
-        (held(not over), f"every icon fits the cell and the line "
+        (held(not over), f"every icon fits the line and "
+                   f"{'two cells' if icons is not None else 'the cell'} "
                    f"(over: {few(over)})"),
         (not short, f"every stretched glyph tiles the cell and the line "
                     f"({len(seen)} line-box glyphs, off: {short})"),
@@ -563,14 +630,14 @@ def icon_checks(font, symbols=None):
     ]
 
 
-def symbols_for_checks():
-    """The symbols font NF_SYMBOLS points at, or None where the caller
-    is verifying a face without the upstream at hand."""
-    path = os.environ.get("NF_SYMBOLS")
+def symbols_for_checks(var="NF_SYMBOLS"):
+    """The symbols font NF_SYMBOLS (or NF_ICONS) points at, or None where
+    the caller is verifying a face without the upstream at hand."""
+    path = os.environ.get(var)
     return _symbols(path) if path and Path(path).is_file() else None
 
 
-def patch_face(src, out_dir, symbols_path):
+def patch_face(src, out_dir, symbols_path, icons_path):
     """One face: graft, rename, extents, save (subroutinized; the icons
     unhinted, the glyphs redrawn over the face's own re-hinted). Returns
     the output path."""
@@ -578,7 +645,7 @@ def patch_face(src, out_dir, symbols_path):
     font = TTFont(src)
     font.recalcBBoxes = False
     symbols = _symbols(symbols_path)
-    n, rehint, written, dropped = graft_symbols(font, symbols)
+    n, rehint, written, dropped = graft_symbols(font, symbols, _symbols(icons_path))
     font["OS/2"].recalcAvgCharWidth(font)
     # 10,000 codepoints joined the cmap, most of them in the two private
     # use areas: the declared ranges are how a fallback picker finds them
@@ -657,12 +724,12 @@ def sources_for(args):
 
 
 def _job(job):
-    src, out_dir, symbols_path = job
-    return patch_face(src, out_dir, symbols_path)
+    src, out_dir, symbols_path, icons_path = job
+    return patch_face(src, out_dir, symbols_path, icons_path)
 
 
 def main():
-    env = build.env_paths({"NF_SYMBOLS": None})
+    env = build.env_paths({"NF_SYMBOLS": None, "NF_ICONS": None})
     sources = sources_for(sys.argv[1:])
     if not sources:
         sys.exit(f"nothing to patch for {sys.argv[1:]!r}")
@@ -677,7 +744,7 @@ def main():
             f.unlink()
         if stale:
             print(f"removed {len(stale)} stale patched face(s)")
-    jobs = [(src, out_dir, env["NF_SYMBOLS"]) for src, out_dir in sources]
+    jobs = [(src, out_dir, env["NF_SYMBOLS"], env["NF_ICONS"]) for src, out_dir in sources]
     build.run_faces(jobs, _job, label=lambda job: Path(job[0]).name,
                     on_result=lambda job, out: None)
 

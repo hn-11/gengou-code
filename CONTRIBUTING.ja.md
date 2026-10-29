@@ -23,7 +23,7 @@
 
 ```sh
 pip install -r requirements.txt
-export SCP_VF_U=... SCP_VF_I=... SS_VF_I=... MONA_VF=... SHS_DIR=... NF_SYMBOLS=...
+export SCP_VF_U=... SCP_VF_I=... SS_VF_I=... MONA_VF=... SHS_DIR=... NF_SYMBOLS=... NF_ICONS=...
 python scripts/build_latin_vf.py              # dist/latin/GengouCode[wght].otf, GengouCode-Italic[wght].otf
 python scripts/build.py                       # dist/GengouCodeJP*.otf（JPの2ファミリー）
 python scripts/build.py "Regular"             # RegularとRegular Italicのみ（短時間で済む）
@@ -39,6 +39,7 @@ python scripts/nerdpatch.py                   # 上記すべてのNF版をdist/n
 | `MONA_VF` | 同上 | `Monaspace Neon Var.ttf`のパス（[Monaspaceのリリース](https://github.com/githubnext/monaspace/releases)） |
 | `SHS_DIR` | `build.py` | `SourceHanSansJP-<Weight>.otf`を置いたディレクトリ（[Source Han Sansのリリース](https://github.com/adobe-fonts/source-han-sans/releases)） |
 | `NF_SYMBOLS` | `nerdpatch.py` | `SymbolsNerdFontMono-Regular.ttf`のパス（[Nerd Fontsのリリース](https://github.com/ryanoasis/nerd-fonts/releases)の`NerdFontsSymbolsOnly.zip`） |
+| `NF_ICONS` | `nerdpatch.py` | `SymbolsNerdFont-Regular.ttf`のパス（同じzipに入っています）。アイコンはNerd Fonts標準の大きさでこちらから取り込みます |
 | `GENGOU_VERSION` | ビルドと検査（任意） | リリースのバージョン番号（例: `6.0.0`）。未設定の場合、nameテーブルには元フォントのリビジョンが残ります |
 | `GENGOU_SKIP_AUTOHINT` | `build.py`、`nerdpatch.py`（任意） | `1`を設定するとヒンティングを省略します（手元で短時間にビルドしたい場合）。このときヒントの検査は失敗しますが、想定どおりの動作です |
 

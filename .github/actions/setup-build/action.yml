@@ -2,7 +2,7 @@
 # the requirements, then the pinned upstream font releases -- fetched,
 # checked against their sha256, cached -- exported as the build scripts'
 # environment variables: SHS_DIR, SCP_VF_U, SCP_VF_I, SS_VF_I, MONA_VF,
-# NF_SYMBOLS, NF_LICENSE.
+# NF_SYMBOLS, NF_ICONS, NF_LICENSE.
 #
 # The pins are the single source of truth for which upstream releases are
 # built. To bump one: edit the "Pin upstream releases" step below, nowhere
@@ -11,9 +11,9 @@
 name: Set up a build job
 description: >
   Python + requirements, and the pinned Source Han Sans / Source Code Pro /
-  Source Sans / Monaspace / Nerd Fonts (Symbols Nerd Font Mono) releases,
-  exported as SHS_DIR / SCP_VF_U / SCP_VF_I / SS_VF_I / MONA_VF /
-  NF_SYMBOLS / NF_LICENSE.
+  Source Sans / Monaspace / Nerd Fonts (Symbols Nerd Font and its Mono)
+  releases, exported as SHS_DIR / SCP_VF_U / SCP_VF_I / SS_VF_I / MONA_VF /
+  NF_SYMBOLS / NF_ICONS / NF_LICENSE.
 runs:
   using: composite
   steps:
@@ -112,18 +112,20 @@ runs:
         # so build.py's env check would wave an empty find straight
         # through and fail six jobs later on ./SourceHanSansJP-*.otf
         nf_symbols=$(find upstreams/nf -name 'SymbolsNerdFontMono-Regular.ttf' | sort | head -1)
+        nf_icons=$(find upstreams/nf -name 'SymbolsNerdFont-Regular.ttf' | sort | head -1)
         nf_license=$(find upstreams/nf -iname 'LICENSE*' | sort | head -1)
         shs_regular=$(find upstreams/shs -name 'SourceHanSansJP-Regular.otf' | head -1)
         scp_vf_u=$(find upstreams/scp -name 'SourceCodeVF-Upright.otf' | head -1)
         scp_vf_i=$(find upstreams/scp -name 'SourceCodeVF-Italic.otf' | head -1)
         ss_vf_i=$(find upstreams/ss -name 'SourceSans3VF-Italic.otf' | head -1)
         mona_vf=$(find upstreams/mona -name 'Monaspace Neon Var.ttf' | head -1)
-        for v in nf_symbols nf_license shs_regular scp_vf_u scp_vf_i ss_vf_i mona_vf; do
+        for v in nf_symbols nf_icons nf_license shs_regular scp_vf_u scp_vf_i ss_vf_i mona_vf; do
           tags="SHS $SHS_TAG, SCP $SCP_TAG, Source Sans $SS_TAG, Monaspace $MONA_TAG, Nerd Fonts $NF_TAG"
           [ -n "${!v}" ] || { echo "::error::$v not found in the upstream zips ($tags)"; exit 1; }
         done
         {
           echo "NF_SYMBOLS=$nf_symbols"
+          echo "NF_ICONS=$nf_icons"
           echo "NF_LICENSE=$nf_license"
           echo "SHS_DIR=$(dirname "$shs_regular")"
           echo "SCP_VF_U=$scp_vf_u"

@@ -143,22 +143,26 @@ have this problem: its Light thins the Monaspace outlines to match.
 
 ## Nerd Fonts
 
-The NF builds add the Nerd Fonts icons, each fitted to one cell. The
-families are named `Gengou Code NF`, `Gengou Code JP NF` and
-`Gengou Code JP Term NF`, the way Cascadia Code names its Nerd Fonts build.
-The usual `Nerd Font Mono` suffix would make some names longer than the 31
-characters Windows GDI allows (`Gengou Code JP Term Nerd Font Mono
-SemiBold` is 43), and those faces would show up under a different name in
-older Windows apps. In Nerd Fonts' own naming `NF` means the icons may
-overflow the cell. That is not the case here: every icon stays in its cell.
+The NF builds add the Nerd Fonts icons. The families are named
+`Gengou Code NF`, `Gengou Code JP NF` and `Gengou Code JP Term NF`, the
+way Cascadia Code names its Nerd Fonts build. Nerd Fonts' own suffixes
+would make some names longer than the 31 characters Windows GDI allows
+(`Gengou Code JP Term Nerd Font Mono SemiBold` is 43), and those faces
+would show up under a different name in older Windows apps.
 
-The icons are copied from `Symbols Nerd Font Mono`, the symbols-only font
-Nerd Fonts publishes. You get the same icon set and the same one-cell
-advance as a `font-patcher --complete --mono` build. The sizes differ
-slightly: font-patcher fits icons into a 600 × 856 box on this font, and
-here they keep the symbols font's square cell (600 × 600). Powerline
-separators and progress bars are stretched to the full cell and line
-height. Source Code Pro's own Powerline glyphs are replaced.
+Every icon advances one cell, so the grid never shifts. The icons
+themselves are drawn at Nerd Fonts' default size, the one a
+`font-patcher` build without `--mono` gives: they start at the left of
+their cell and run on to the right, up to two cells, into the space a
+prompt or a file listing leaves after an icon. The folder icon is 1.54
+cells of ink, as in HackGen. Icons drawn wider than two cells are scaled
+down to fit. If a character follows an icon directly, the two overlap.
+
+The icons are copied from `Symbols Nerd Font`, the symbols-only font
+Nerd Fonts publishes, scaled em to em. Powerline separators and progress
+bars come from its Mono build instead and are stretched to the full cell
+and line height, so they tile. Source Code Pro's own Powerline glyphs
+are replaced.
 
 In Gengou Code NF the icons are the same at every weight. The Nerd Fonts
 license (MIT) ships in the NF zips as `LICENSE-NerdFonts`.

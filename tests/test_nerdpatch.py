@@ -109,6 +109,35 @@ def _symbols():
     return fb.font
 
 
+def _icons():
+    """A Symbols Nerd Font (the default flavour) in miniature: the same
+    2048 em and line box as _symbols, but each glyph as wide as its ink
+    -- an icon 1.85 em-halves wide at U+E000 (Nerd Fonts' folder is
+    1890 wide), one wider than the em at U+F0001, and the line-box
+    glyphs, which graft_symbols takes from the Mono font instead."""
+    fb = FontBuilder(2048, isTTF=True)
+    glyphs, metrics = {}, {".notdef": (1024, 0)}
+    boxes = {"icon": (0, -213, 1890, 1441), "far": (0, 0, 2730, 1024),
+             "pl": (0, -410, 1324, 1638), "branch": (0, -410, 832, 1638),
+             "A": (0, 0, 1000, 1000)}
+    for name, box in boxes.items():
+        pen = TTGlyphPen(None)
+        _rect(pen, *box)
+        glyphs[name] = pen.glyph()
+        metrics[name] = (box[2], box[0])
+    glyphs[".notdef"] = TTGlyphPen(None).glyph()
+    fb.setupGlyphOrder([".notdef", *boxes])
+    fb.setupCharacterMap({0xE000: "icon", 0xE0B0: "pl", 0xE0A0: "branch",
+                          0xF0001: "far", ord("A"): "A"})
+    fb.setupGlyf(glyphs)
+    fb.setupHorizontalMetrics(metrics)
+    fb.setupHorizontalHeader(ascent=1638, descent=-410)
+    fb.setupNameTable({"familyName": "Symbols Nerd Font", "styleName": "Regular"})
+    fb.setupOS2()
+    fb.setupPost()
+    return fb.font
+
+
 def _bounds(font, name):
     pen = BoundsPen(font.getGlyphSet())
     font.getGlyphSet()[name].draw(pen)
@@ -493,7 +522,7 @@ def test_icon_checks_faults_a_two_cell_or_blank_icon(monkeypatch):
     icon = face.getBestCmap()[0xE000]
     face["hmtx"].metrics[icon] = (1200, face["hmtx"].metrics[icon][1])
     got = _checks(face, symbols)
-    assert got["every icon is one cell wide — a Nerd Font MONO"] is False
+    assert got["every icon advances one cell"] is False
     assert got["every icon the symbols font draws draws in the face"] is True
 
     face, symbols = _grafted(monkeypatch)
@@ -503,7 +532,7 @@ def test_icon_checks_faults_a_two_cell_or_blank_icon(monkeypatch):
     cs.program = ["endchar"]
     got = _checks(face, symbols)
     assert got["every icon the symbols font draws draws in the face"] is False
-    assert got["every icon fits the cell and the line"] is True   # no box to fault
+    assert got["every icon fits the line and the cell"] is True   # no box to fault
 
 
 def test_icon_checks_faults_an_icon_drawn_at_the_wrong_size(monkeypatch):
@@ -521,7 +550,7 @@ def test_icon_checks_faults_an_icon_drawn_at_the_wrong_size(monkeypatch):
     td.CharStrings[name] = pen.getCharString(private=private)
     got = _checks(face, symbols)
     assert got["every grafted glyph is where icon_transform puts it"] is False
-    assert got["every icon fits the cell and the line"] is True   # still inside
+    assert got["every icon fits the line and the cell"] is True   # still inside
 
 
 def test_icon_checks_says_so_when_it_cannot_measure(monkeypatch):
@@ -543,3 +572,87 @@ def test_icon_checks_faults_an_icon_that_never_reached_the_face(monkeypatch):
     # and with no symbols font at hand there is nothing to compare
     # against: "not checked", not a pass
     assert _checks(face)["every codepoint the symbols font has is in the face"] is None
+
+
+def test_overhang_transform_scales_em_to_em_from_the_cell_s_left():
+    """Nerd Fonts' default size beside text: the icon scaled by our em
+    over the symbols' (1000 / 2048), its left edge on the cell's, the ink
+    running on to the right -- the folder to 1.54 cells, as HackGen's."""
+    octx = nerdpatch.overhang_context(_face(), _icons())
+    k = 1000 / 2048
+    folder = (0, -213, 1890, 1441)
+    box = _place(nerdpatch.overhang_transform(folder, octx), folder)
+    assert box[0] == 0 and box[2] == pytest.approx(1890 * k)
+    assert box[2] / 600 == pytest.approx(1.54, abs=0.01)
+    # the symbols' line box centred on ours, as the Mono rule does
+    face = _face()
+    asc, desc = face["hhea"].ascent, face["hhea"].descent
+    assert (box[1] + box[3]) / 2 == pytest.approx(
+        (asc + desc) / 2 + k * ((-213 + 1441) / 2 - (1638 - 410) / 2))
+
+
+def test_overhang_transform_fits_an_icon_wider_than_two_cells():
+    """Wider than the em, it would run past the space after it into the
+    next character: fitted into two cells, aspect kept, left on the
+    cell's left -- and never enlarged."""
+    octx = nerdpatch.overhang_context(_face(), _icons())
+    wide = (-100, 0, 2730, 1024)
+    box = _place(nerdpatch.overhang_transform(wide, octx), wide)
+    assert box[0] == pytest.approx(0) and box[2] == pytest.approx(1200)
+    assert (box[2] - box[0]) / (box[3] - box[1]) == pytest.approx(2830 / 1024)
+    small = (0, 0, 100, 100)
+    assert _place(nerdpatch.overhang_transform(small, octx), small)[2] \
+        == pytest.approx(100 * 1000 / 2048)
+
+
+def _grafted_with_icons(monkeypatch):
+    monkeypatch.setattr(nerdpatch, "TEXT_OVER_ICON", frozenset({ord("A")}))
+    face, symbols, icons = _face(), _symbols(), _icons()
+    nerdpatch.graft_symbols(face, symbols, icons)
+    return face, symbols, icons
+
+
+def test_graft_symbols_draws_icons_from_the_default_flavour(monkeypatch):
+    """The icons come from Symbols Nerd Font, one cell of advance and
+    the ink overhanging; the separators stay the Mono font's, stretched
+    to the cell."""
+    face, _symbols_font, _icons_font = _grafted_with_icons(monkeypatch)
+    cmap, hmtx = face.getBestCmap(), face["hmtx"].metrics
+    icon = _bounds(face, cmap[0xE000])
+    assert hmtx[cmap[0xE000]][0] == 600
+    assert icon[0] == 0 and icon[2] > 900                  # past the cell
+    sep = _bounds(face, cmap[0xE0B0])
+    assert sep[0] == pytest.approx(0, abs=1) and sep[2] == pytest.approx(600, abs=1)
+    assert hmtx[cmap[0xF0001]][0] == 600
+    assert _bounds(face, cmap[0xF0001])[2] == pytest.approx(1200, abs=1)
+
+
+def test_icon_checks_holds_overhanging_icons_to_two_cells(monkeypatch):
+    face, symbols, icons = _grafted_with_icons(monkeypatch)
+    assert all(ok for ok, _ in nerdpatch.icon_checks(face, symbols, icons))
+    # the same face held to the Mono rule: the icons overhang its cell
+    got = _checks(face, symbols)
+    assert got["every icon fits the line and the cell"] is False
+    assert got["every grafted glyph is where icon_transform puts it"] is False
+
+    # an icon pushed a further cell right lands outside the two
+    name = face.getBestCmap()[0xE000]
+    cff = face["CFF "].cff
+    td = cff[cff.fontNames[0]]
+    gs = face.getGlyphSet()
+    private = build.glyph_private(face, td, name)
+    pen = T2CharStringPen(build.pen_width(private, 600), gs)
+    gs[name].draw(TransformPen(pen, (1, 0, 0, 1, 600, 0)))
+    td.CharStrings[name] = pen.getCharString(private=private)
+    got = dict((m.split(" (")[0], ok) for ok, m in nerdpatch.icon_checks(face, symbols, icons))
+    assert got["every icon fits the line and two cells"] is False
+    assert got["every grafted glyph is where icon_transform puts it"] is False
+
+
+def test_graft_symbols_refuses_an_icons_font_missing_an_icon(monkeypatch):
+    monkeypatch.setattr(nerdpatch, "TEXT_OVER_ICON", frozenset({ord("A")}))
+    icons = _icons()
+    for table in icons["cmap"].tables:
+        table.cmap.pop(0xF0001, None)
+    with pytest.raises(ValueError, match="lacks 1 of the symbols font's icons"):
+        nerdpatch.graft_symbols(_face(), _symbols(), icons)
