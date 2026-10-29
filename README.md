@@ -198,10 +198,15 @@ Width details:
   no source has a wider form: `☕ 🎵 🎶 💩 🔒 🤖`, two Hangul tone marks and
   five Bopomofo tone letters. A terminal gives them two columns, so they
   sit to the left.
-- If your terminal treats ambiguous-width characters as wide, `①` and
-  similar characters spill into the next cell. Set the terminal to wide
-  ambiguous width to give them two columns: in Windows Terminal,
-  `"compatibility.ambiguousWidth": "wide"`.
+- Ambiguous-width characters that only Source Han Sans draws (`※`, `①`,
+  `★`, `∈` and about 420 more) are full width in Gengou Code JP. In
+  Gengou Code JP Term they are one cell, as terminals count them: the
+  outline keeps its size and is centred on the cell, so the wider ones
+  reach a little into the neighbouring cells. `※` stops short of a
+  following `あ`; `①` overlaps a following Latin letter by about 130
+  units. Terminals set to treat ambiguous width as wide (Windows
+  Terminal's `"compatibility.ambiguousWidth": "wide"`) give them two
+  columns, and Gengou Code JP then fits better than Term.
 - There is no switch between half-width and full-width forms. `fwid` and
   `hwid` were removed in v6.0.0: an editor applies features to the whole
   buffer, so `fwid` turned every letter full width. For a full-width form,

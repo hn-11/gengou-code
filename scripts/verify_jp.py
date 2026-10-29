@@ -508,8 +508,12 @@ def check_width_policy(face, check):
     # (① ※) stay two cells. The italic faces' Greek comes from Source
     # Sans (build_latin.add_missing_from_sans), a cell wide by
     # construction like the upright's from Source Code Pro
+    # In Term they are one cell too, centred (build.center_ambiguous):
+    # a terminal gives them one column
+    term = exp_full > FULLWIDTH
+    amb_full = exp_half if term else exp_full
     policy = {"\u2192": exp_half, "\u2026": exp_half, "\u2500": exp_half,
-              "\u2212": exp_half, "\u2460": exp_full, "\u203b": exp_full,
+              "\u2212": exp_half, "\u2460": amb_full, "\u203b": amb_full,
               "\u0142": exp_half, "\u011f": exp_half, "\u20bd": exp_half}
     policy["\u03b1"] = policy["\u03c2"] = exp_half
     # half-width kana and the half-width symbols (￩ U+FFE9): Source Han
@@ -522,6 +526,27 @@ def check_width_policy(face, check):
         if got != want:
             off_policy[ch] = got
     check(not off_policy, f"width policy ({len(policy)} probes; off: {off_policy})")
+    if term:
+        # every ambiguous character, not a probe set: none is wider than
+        # the column a terminal gives it, and each sits centred on it
+        # (Source Han Sans's own, which arrive full width) or is the
+        # Latin layer's, a cell by construction
+        wide, off_centre = [], []
+        gs = face.tf.getGlyphSet()
+        for cp, g in sorted(cmap.items()):
+            if unicodedata.east_asian_width(chr(cp)) != "A":
+                continue
+            adv = hmtx[g][0]
+            if adv > exp_half:
+                wide.append(f"U+{cp:04X}")
+                continue
+            box = build._bounds(gs, g)
+            if box and box[2] - box[0] > exp_half and abs(box[0] + box[2] - adv) > 2:
+                off_centre.append(f"U+{cp:04X}")
+        check(not wide, f"Term: every ambiguous-width character is one cell "
+                        f"({len(wide)} wider: {wide[:6]})")
+        check(not off_centre, f"Term: an ambiguous glyph wider than its cell "
+                              f"is centred on it ({len(off_centre)} off: {off_centre[:6]})")
 
 
 def check_greek_cyrillic_cells(face, check):

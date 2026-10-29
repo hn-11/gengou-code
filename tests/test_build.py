@@ -3368,3 +3368,29 @@ def test_prune_orphan_lookups_roots_at_the_langsys_not_the_feature_list():
     font = {"GSUB": FakeTable(gsub)}
     assert build.prune_orphan_lookups(font) == {"GSUB": 1}
     assert gsub.FeatureList.FeatureRecord[1].Feature.LookupListIndex == []
+
+
+def test_center_ambiguous_puts_a_full_width_ambiguous_glyph_on_one_cell():
+    """Term: ※ (Ambiguous) on Source Han Sans's full width gets a
+    one-cell copy, the outline the same size and centred on the cell;
+    a kanji sharing nothing, the Latin donor's ambiguous glyph and an
+    ambiguous glyph already a cell are left alone, and a codepoint that
+    shares the original (a Wide one) keeps it."""
+    font = _cff_font_with_widths({"kome": 1000, "kanji": 1000, "arrow": 600,
+                                  "latin": 1000}, x0=450)
+    font["cmap"].tables[0].cmap = {0x203B: "kome", 0x3251: "kome",   # ※, ㉑ (W)
+                                   0x4E00: "kanji", 0x2192: "arrow",
+                                   0x2208: "latin"}
+    build.state_of(font).built = {"latin"}
+    was = build.center_ambiguous(font, 600)
+    assert was == {0x203B: "kome"}
+    cmap, hmtx = font.getBestCmap(), font["hmtx"].metrics
+    copy = cmap[0x203B]
+    assert copy != "kome" and hmtx[copy][0] == 600
+    assert cmap[0x3251] == "kome" and hmtx["kome"][0] == 1000
+    assert cmap[0x2208] == "latin" and cmap[0x2192] == "arrow"
+    assert copy not in build.state_of(font).appended
+    pen = BoundsPen(font.getGlyphSet())
+    font.getGlyphSet()[copy].draw(pen)
+    assert pen.bounds[2] - pen.bounds[0] == pytest.approx(100)    # not scaled
+    assert (pen.bounds[0] + pen.bounds[2]) / 2 == pytest.approx(300)
