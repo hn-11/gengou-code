@@ -25,7 +25,7 @@ are kept here, so every build needs those files.
 
 ```sh
 pip install -r requirements.txt
-export SCP_VF_U=... SCP_VF_I=... SS_VF_I=... MONA_VF=... SHS_DIR=... NF_SYMBOLS=...
+export SCP_VF_U=... SCP_VF_I=... SS_VF_I=... MONA_VF=... SHS_DIR=... NF_SYMBOLS=... NF_ICONS=...
 python scripts/build_latin_vf.py              # dist/latin/GengouCode[wght].otf, GengouCode-Italic[wght].otf
 python scripts/build.py                       # dist/GengouCodeJP*.otf, both JP families
 python scripts/build.py "Regular"             # Regular and Regular Italic only, quicker
@@ -41,6 +41,7 @@ python scripts/nerdpatch.py                   # dist/nerd/, NF builds of everyth
 | `MONA_VF` | same | Path to `Monaspace Neon Var.ttf` ([Monaspace releases](https://github.com/githubnext/monaspace/releases)) |
 | `SHS_DIR` | `build.py` | Directory with `SourceHanSansJP-<Weight>.otf` ([Source Han Sans releases](https://github.com/adobe-fonts/source-han-sans/releases)) |
 | `NF_SYMBOLS` | `nerdpatch.py` | Path to `SymbolsNerdFontMono-Regular.ttf` (`NerdFontsSymbolsOnly.zip` from [Nerd Fonts releases](https://github.com/ryanoasis/nerd-fonts/releases)) |
+| `NF_ICONS` | `nerdpatch.py` | Path to `SymbolsNerdFont-Regular.ttf`, from the same zip: the icons, drawn at Nerd Fonts' default size |
 | `GENGOU_VERSION` | builds and checks, optional | Release version, such as `6.0.0`. Unset leaves the upstream revision in the name table |
 | `GENGOU_SKIP_AUTOHINT` | `build.py`, `nerdpatch.py`, optional | `1` skips hinting for quick local builds. The hint checks then fail, which is expected |
 

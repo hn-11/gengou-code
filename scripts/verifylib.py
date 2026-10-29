@@ -269,7 +269,9 @@ def check_nerd_font_icons(tf, check):
     import nerdpatch
     symbols = nerdpatch.symbols_for_checks()
     check(symbols is not None, "NF_SYMBOLS points at the Symbols donor")
-    for ok, msg in nerdpatch.icon_checks(tf, symbols):
+    icons = nerdpatch.symbols_for_checks("NF_ICONS")
+    check(icons is not None, "NF_ICONS points at the icons donor")
+    for ok, msg in nerdpatch.icon_checks(tf, symbols, icons):
         check(ok, msg)
 
 
@@ -1064,6 +1066,25 @@ _LIG_Y = (70, 120)
 _LIG_EDGE = 40               # a ligature's ink past its cells; the deferred `#(` reaches 20 at Bold Italic
 
 
+def nerd_icon_names(cmap):
+    """The glyphs a Nerd Fonts face draws its icons with, which overhang
+    their one-cell advance to the right by design (up to a second cell,
+    nerdpatch.overhang_transform; nerdpatch.icon_checks holds them to
+    exactly that). Empty for a face with no icons (no U+F0001, the
+    supplementary-plane icons only a graft brings) and where NF_SYMBOLS
+    is not at hand -- the icon gates fail on that themselves."""
+    if 0xF0001 not in cmap:
+        return set()
+    # imported here: nerdpatch imports this module
+    import nerdpatch
+    symbols = nerdpatch.symbols_for_checks()
+    if symbols is None:
+        return set()
+    return {cmap[cp] for cp in symbols.getBestCmap()
+            if cp in cmap and cp not in nerdpatch.LINE_BOX
+            and cp not in nerdpatch.TEXT_OVER_ICON}
+
+
 def ink_spill(bounds, advance, cmap, cell):
     """The glyphs whose ink reaches past their advance by more than the
     lean allowed (_LEAN): [(name, advance, xMin, xMax)]. `bounds` maps a drawn
@@ -1076,13 +1097,18 @@ def ink_spill(bounds, advance, cmap, cell):
     a double diacritic gets a whole cell, since half of it is meant
     to hang over the character before -- U+035F draws from -300 at
     Bold Italic (-300.135 before the static rounds it), and a half-cell
-    bound held it with no margin at all."""
+    bound held it with no margin at all. A Nerd Fonts icon gets a whole
+    cell on the right (nerd_icon_names)."""
     double = {cmap[cp] for cp in DOUBLE_SPAN if cp in cmap}
+    icons = nerd_icon_names(cmap)
     spill = []
     for name, box in bounds.items():
         adv = advance(name)
         lean = cell if name in double else _LEAN
-        if adv > 0 and (round(box[0]) < -lean or round(box[2]) > adv + lean):
+        # a Nerd Fonts icon runs on into the next cell, the space a
+        # prompt leaves after it
+        reach = adv + cell if name in icons else adv + lean
+        if adv > 0 and (round(box[0]) < -lean or round(box[2]) > reach):
             spill.append((name, adv, round(box[0]), round(box[2])))
     return spill
 
