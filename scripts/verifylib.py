@@ -2224,9 +2224,9 @@ def check_glyph_placement(tf, check, gs, cell, full, label=""):
                 # side of the cell by design (verify.py holds the Term
                 # face's widening against its JP sibling instead)
                 off[ch] = ("em box", round(box[1]), round(box[3]))
-        elif adv == 0 and cp not in DOUBLE_SPAN and full:
-            if box[0] < -full + _ZERO_ADVANCE_X[0] or box[2] > _ZERO_ADVANCE_X[1]:
-                off[ch] = ("before", round(box[0]), round(box[2]))
+        elif adv == 0 and cp not in DOUBLE_SPAN and full \
+                and (box[0] < -full + _ZERO_ADVANCE_X[0] or box[2] > _ZERO_ADVANCE_X[1]):
+            off[ch] = ("before", round(box[0]), round(box[2]))
     check(n and not off, f"every glyph's ink sits in its cell{label} "
                          f"({n} drawn; off: {dict(list(off.items())[:5])})")
 
