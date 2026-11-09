@@ -32,6 +32,7 @@ import io
 import sys
 from pathlib import Path
 
+from fontTools.cffLib import FDSelect
 from fontTools.cffLib.CFF2ToCFF import convertCFF2ToCFF
 from fontTools.pens.t2CharStringPen import T2CharStringPen
 from fontTools.ttLib import TTFont
@@ -55,7 +56,11 @@ def static_base(scp):
     side bearings measured from the instanced outlines (the instancer
     leaves the VF's default-master bearings in place — vfsource.sync_lsb)."""
     inst = scp
+    td = inst["CFF2"].cff.topDictIndex[0]
+    fd_array = td.FDArray
     convertCFF2ToCFF(inst)
+    if not hasattr(td, "FDArray"):
+        cid_key(td, fd_array)
     inst.recalcBBoxes = False
     buf = io.BytesIO()
     inst.save(buf)
@@ -63,6 +68,30 @@ def static_base(scp):
     base = TTFont(buf)
     vfsource.sync_lsb(base)
     return base
+
+
+def cid_key(td, fd_array):
+    """Undo fontTools 4.67+'s name-keyed output for a single-FontDict
+    CFF2 (Source Code Pro's VF is one): CFF2ToCFF then moves the one
+    Private to the top dict and drops FDArray and FDSelect. Put back the
+    CID-keyed font the older CFF2ToCFF wrote — the same FontDict, every
+    glyph in it, the cidNNNNN charset and Adobe-Identity-0 — which the
+    Latin donors are built as and vfsource.replace_from_mona reads."""
+    fd_array[0].Private = td.Private
+    del td.Private
+    td.rawDict.pop("Private", None)
+    td.FDArray = fd_array
+    td.FDSelect = FDSelect()
+    td.FDSelect.gidArray = [0] * len(td.charset)
+    char_strings = td.CharStrings
+    char_strings.fdArray = fd_array
+    char_strings.fdSelect = td.FDSelect
+    mapping = {name: f"cid{n:05d}" if n else ".notdef"
+               for n, name in enumerate(td.charset)}
+    td.charset = [mapping[name] for name in td.charset]
+    char_strings.charStrings = {mapping[name]: v
+                                for name, v in char_strings.charStrings.items()}
+    td.ROS = ("Adobe", "Identity", 0)
 
 
 def round_outlines(font):
